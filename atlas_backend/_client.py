@@ -26,7 +26,7 @@ class AtlasClient:
             ``Authorization: Bearer <key>`` on every request; never logged,
             never placed in a URL.
         base_url: Base URL of the instance's Backend API. Defaults to
-            ``https://api.atlas.dev``. Trailing slashes are tolerated.
+            ``https://api.atlasauth.net``. Trailing slashes are tolerated.
         timeout: Per-request timeout in seconds.
         http_client: An optional pre-configured :class:`httpx.Client` (for
             connection pooling, proxies, retries). One is created if omitted.
