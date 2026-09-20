@@ -18,7 +18,7 @@ import httpx
 from ._errors import AtlasError, ErrorItem
 
 #: The default BAPI origin, overridable per instance via ``base_url``.
-DEFAULT_BASE_URL = "https://api.atlas.dev"
+DEFAULT_BASE_URL = "https://api.atlasauth.net"
 
 QueryScalar = Union[str, int, float, bool, None]
 QueryParams = Mapping[str, Union[QueryScalar, Sequence[QueryScalar]]]

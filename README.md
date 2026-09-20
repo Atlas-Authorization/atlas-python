@@ -20,7 +20,7 @@ pip install atlas-backend
 ```python
 from atlas_backend import AtlasClient, AtlasError, paginate
 
-atlas = AtlasClient("sk_live_...", base_url="https://api.atlas.dev")
+atlas = AtlasClient("sk_live_...", base_url="https://api.atlasauth.net")
 
 # Create a user (idempotency key optional, forwarded as Idempotency-Key).
 user = atlas.users.create(
@@ -76,7 +76,7 @@ asyncio.run(main())
 | Argument      | Default                   | Notes                                            |
 | ------------- | ------------------------- | ------------------------------------------------ |
 | `secret_key`  | —                         | `sk_...`; sent as `Authorization: Bearer <key>`. |
-| `base_url`    | `https://api.atlas.dev`   | The instance's BAPI origin (`BAPI_ORIGIN`).      |
+| `base_url`    | `https://api.atlasauth.net`   | The instance's BAPI origin (`BAPI_ORIGIN`).      |
 | `timeout`     | `30.0`                    | Per-request timeout, seconds.                    |
 | `http_client` | a new `httpx.Client`      | Pass your own for pooling / proxies / retries.   |
 
