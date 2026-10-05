@@ -695,6 +695,14 @@ class ActorTokens:
 
 
 class SignInTokens:
+    """The ``/v1/sign_in_tokens`` resource.
+
+    .. deprecated::
+        ``POST /v1/sign_in_tokens`` is deprecated (Sunset 2026-04-01). Use
+        ``Sessions.create`` (``POST /v1/sessions``), which mints a real
+        redeemable session in one call.
+    """
+
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
