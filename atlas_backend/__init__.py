@@ -27,6 +27,18 @@ from ._handshake import (
 from ._pagination import acollect, aiterate, collect, paginate
 from ._transport import DEFAULT_BASE_URL
 from ._types import CursorPage, DeletedObject, ListPage, Metadata
+from ._verify import (
+    CLOCK_SKEW_SECONDS,
+    DEFAULT_TTL_MS,
+    REFETCH_INTERVAL_MS,
+    ApiKeyVerification,
+    ApiKeyVerifier,
+    AtlasBackend,
+    AtlasUser,
+    JwksCache,
+    SessionClaims,
+    VerificationError,
+)
 
 __version__ = "0.1.0"
 
@@ -51,5 +63,15 @@ __all__ = [
     "redeem_handshake",
     "aredeem_handshake",
     "read_handshake_params",
+    "AtlasBackend",
+    "SessionClaims",
+    "AtlasUser",
+    "VerificationError",
+    "JwksCache",
+    "ApiKeyVerifier",
+    "ApiKeyVerification",
+    "CLOCK_SKEW_SECONDS",
+    "REFETCH_INTERVAL_MS",
+    "DEFAULT_TTL_MS",
     "__version__",
 ]
