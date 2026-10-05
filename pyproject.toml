@@ -4,22 +4,33 @@ build-backend = "hatchling.build"
 
 [project]
 name = "atlas-backend"
-version = "0.1.0"
+version = "0.2.0"
 description = "Official Python backend SDK for Atlas — a typed client over the sk_ Backend API (BAPI)."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Atlas" }]
 keywords = ["atlas", "auth", "authentication", "backend", "sdk", "bapi"]
-dependencies = ["httpx>=0.23"]
+# Session-JWT verification (RS256) is core SDK surface, so its crypto backend
+# ships in the base install — like the peer SDKs bundle theirs. The optional
+# framework extras below add NO runtime weight unless you opt in.
+dependencies = ["httpx>=0.23", "pyjwt[crypto]>=2.8"]
 
 [project.optional-dependencies]
+django = ["django>=4.2"]
+fastapi = ["fastapi>=0.110", "starlette"]
+flask = ["flask>=3.0"]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "respx>=0.20",
     "mypy>=1.5",
     "ruff>=0.4",
+    "django>=4.2",
+    "djangorestframework>=3.14",
+    "fastapi>=0.110",
+    "starlette",
+    "flask>=3.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -35,6 +46,14 @@ select = ["E", "F", "I", "B", "UP", "W"]
 # internal wiring; importing them across our own modules is intentional.
 ignore = []
 
+[tool.ruff.lint.per-file-ignores]
+# The FastAPI dependency's parameter annotations are evaluated at runtime by
+# FastAPI on Python 3.9, where PEP 604 `X | None` is not yet a runtime
+# expression — so this module deliberately keeps `typing.Optional`.
+"atlas_backend/fastapi/__init__.py" = ["UP045", "UP007"]
+# `= Depends(...)` in a parameter default is the required FastAPI idiom.
+"tests/test_fastapi.py" = ["B008"]
+
 [tool.mypy]
 # Runtime target is 3.9 (see requires-python); mypy itself requires a 3.10+
 # analysis target, and every annotation is guarded by `from __future__ import
@@ -49,6 +68,13 @@ warn_unused_ignores = true
 warn_return_any = false
 strict_equality = true
 files = ["atlas_backend", "tests"]
+
+# Django and Django REST Framework ship no type stubs / py.typed marker; the
+# optional framework integrations that import them are exercised by the test
+# suite, not the type checker.
+[[tool.mypy.overrides]]
+module = ["django.*", "rest_framework.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
