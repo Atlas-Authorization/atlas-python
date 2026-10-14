@@ -499,6 +499,18 @@ class AsyncSessions:
             body=body,
         )
 
+    async def touch(self, session_id: str) -> m.TouchedSession:
+        """Keep a session alive from your backend: slides its inactivity window as if the
+        user had just loaded a page. Never extends past the absolute expiry and never
+        revives an ended session (409 SESSION_REVOKED / SESSION_IDLE_EXPIRED /
+        SESSION_EXPIRED). At most one effective write per minute, so calling it on every
+        request is safe.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/sessions/{session_id}/touch",
+        )
+
     async def create_token(self, session_id: str, template: str) -> m.SessionToken:
         """Mint a named JWT-template token for a session."""
         return await self._t.request(
@@ -1743,11 +1755,33 @@ class AsyncApiKeys:
         )
 
     async def update(self, key_id: str, body: m.UpdateApiKeyBody | None = None) -> m.ApiKey:
-        """Update an end-user API key: name, claims, or expiry."""
+        """Update an end-user API key: name, claims, expiry, scopes, constraints, token
+        lifetime or spend caps (``limits``; ``None`` clears them).
+        """
         return await self._t.request(
             method="PATCH",
             path=f"/v1/api_keys/{key_id}",
             body=body,
+        )
+
+    async def record_usage(self, key_id: str, body: m.RecordApiKeyUsageBody) -> m.ApiKeyUsageDebit:
+        """Meter usage against a key's spend caps, atomically. A debit that fits every cap
+        for its unit is recorded (``allowed`` is ``True``); one that would exceed a cap
+        records nothing and returns ``allowed: False`` with ``code: "LIMIT_EXCEEDED"``
+        (not an exception). Reusing an ``idempotency_key`` with a different unit or amount
+        raises a 409 IDEMPOTENCY_CONFLICT; a revoked or expired key a 409 CONFLICT.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/api_keys/{key_id}/usage",
+            body=body,
+        )
+
+    async def get_usage(self, key_id: str) -> m.ApiKeyUsage:
+        """A key's current-window usage: each cap's state plus every unit's counters."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/api_keys/{key_id}/usage",
         )
 
     async def revoke(self, key_id: str) -> m.ApiKeyRevokeResult:

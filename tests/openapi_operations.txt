@@ -19,6 +19,8 @@ POST /v1/api_keys/verify
 DELETE /v1/api_keys/{id}
 GET /v1/api_keys/{id}
 PATCH /v1/api_keys/{id}
+GET /v1/api_keys/{id}/usage
+POST /v1/api_keys/{id}/usage
 GET /v1/attack_protection
 PATCH /v1/attack_protection
 DELETE /v1/audit_events
@@ -351,6 +353,7 @@ POST /v1/sessions
 GET /v1/sessions/{id}
 POST /v1/sessions/{id}/revoke
 POST /v1/sessions/{id}/tokens/{template}
+POST /v1/sessions/{id}/touch
 POST /v1/sign_in_tokens
 POST /v1/sign_in_tokens/{id}/revoke
 GET /v1/sms_templates

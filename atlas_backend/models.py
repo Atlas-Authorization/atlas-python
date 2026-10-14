@@ -95,6 +95,9 @@ class CreateUserBody(_CreateUserRequired, total=False):
     public_metadata: Metadata
     private_metadata: Metadata
     unsafe_metadata: Metadata
+    #: Whether the create may notify the user. ``False`` (the default) guarantees no
+    #: email, SMS or push is sent as a consequence of the create.
+    notify: bool
 
 
 class UpdateUserBody(TypedDict, total=False):
@@ -245,7 +248,7 @@ class CreateOrgDomainBody(_CreateOrgDomainRequired, total=False):
 # --------------------------------------------------------------------------- #
 
 
-class Session(TypedDict):
+class _SessionRequired(TypedDict):
     object: Literal["session"]
     id: str
     user_id: str
@@ -256,6 +259,21 @@ class Session(TypedDict):
     expire_at: int
     abandon_at: int
     created_at: int
+
+
+class Session(_SessionRequired, total=False):
+    #: Epoch ms the session ends from inactivity unless there is activity first
+    #: (same value as ``abandon_at``).
+    idle_expires_at: int
+
+
+class TouchedSession(_SessionRequired):
+    """The session after a keep-alive ``sessions.touch``."""
+
+    idle_expires_at: int
+    #: ``True`` when this touch moved the inactivity window; ``False`` when a touch
+    #: within the last 60 seconds already had.
+    extended: bool
 
 
 # --------------------------------------------------------------------------- #
@@ -1196,6 +1214,96 @@ class ActionTestResult(_ActionTestResultRequired, total=False):
     error: str | None
 
 
+#: The window a spend cap counts over: ``request`` caps a single debit; ``day`` and
+#: ``month`` are UTC calendar windows; ``total`` never resets.
+ApiKeyLimitPeriod = Literal["request", "day", "month", "total"]
+
+
+class ApiKeyLimit(TypedDict):
+    """A per-key spend cap, metered with ``api_keys.record_usage``."""
+
+    #: App-defined unit, e.g. ``"requests"`` or ``"usd_cents"``.
+    unit: str
+    #: The cap, in ``unit``.
+    amount: int
+    period: ApiKeyLimitPeriod
+
+
+class ApiKeyLimitState(TypedDict):
+    """A spend cap with its current-window usage."""
+
+    unit: str
+    period: ApiKeyLimitPeriod
+    amount: int
+    #: Used in the current window (always 0 for a per-request cap).
+    used: int
+    #: ``amount - used``, never below 0.
+    remaining: int
+    #: Epoch ms the window started; ``None`` for a per-request cap.
+    window_start: int | None
+    #: Epoch ms the window ends; ``None`` for per-request and total caps.
+    resets_at: int | None
+
+
+class ApiKeyUsageCounter(TypedDict):
+    """A raw usage counter for one unit in its current window."""
+
+    unit: str
+    period: Literal["day", "month", "total"]
+    used: int
+    window_start: int
+    #: Epoch ms the window ends; ``None`` for ``total``.
+    resets_at: int | None
+
+
+class _RecordApiKeyUsageBodyRequired(TypedDict):
+    #: How much to debit, in ``unit`` (a positive integer).
+    amount: int
+    #: The unit to debit, matching the unit of the caps it should count against.
+    unit: str
+
+
+class RecordApiKeyUsageBody(_RecordApiKeyUsageBodyRequired, total=False):
+    #: Retry-safe key: the same value returns the first outcome without counting
+    #: again (kept 24 hours).
+    idempotency_key: str
+
+
+class _ApiKeyUsageDebitRequired(TypedDict):
+    object: Literal["api_key_usage_debit"]
+    key_id: str
+    unit: str
+    amount: int
+    #: ``True`` when the debit was recorded; ``False`` when it would exceed a cap
+    #: (nothing was recorded).
+    allowed: bool
+    #: The caps that refused the debit (empty when allowed).
+    exceeded: list[ApiKeyLimitState]
+    #: Every cap on the key after this call.
+    usage: list[ApiKeyLimitState]
+    #: The debited unit's day, month and total counters after this call.
+    counters: list[ApiKeyUsageCounter]
+    #: ``True`` when this is the stored outcome of an earlier call with the same
+    #: idempotency key.
+    idempotent_replay: bool
+
+
+class ApiKeyUsageDebit(_ApiKeyUsageDebitRequired, total=False):
+    #: ``"LIMIT_EXCEEDED"``, present only when ``allowed`` is ``False``.
+    code: Literal["LIMIT_EXCEEDED"]
+
+
+class ApiKeyUsage(TypedDict):
+    """A key's current-window usage."""
+
+    object: Literal["api_key_usage"]
+    key_id: str
+    limits: list[ApiKeyLimit] | None
+    usage: list[ApiKeyLimitState]
+    #: Counters for every unit the key has been debited in, capped or not.
+    counters: list[ApiKeyUsageCounter]
+
+
 class CreateApiKeyBodyImport(TypedDict, total=False):
     secret_hash: str
     hash_algorithm: Literal["sha256", "sha256_hex"]
@@ -1218,6 +1326,7 @@ CreateApiKeyBody = TypedDict(
         "constraints": "dict[str, Any]",
         "max_token_lifetime_seconds": "float | None",
         "public_key": "str | None",
+        "limits": "list[ApiKeyLimit] | None",
         "import": "CreateApiKeyBodyImport",
     },
     total=False,
@@ -1252,6 +1361,10 @@ class ApiKeyCreate(_ApiKeyCreateRequired, total=False):
     public_key: str | None
     #: RFC 7638 JWK thumbprint of public_key — the cnf.jkt minted tokens carry.
     public_key_jkt: str | None
+    #: Per-key spend caps; ``None`` when the key has none.
+    limits: list[ApiKeyLimit] | None
+    #: Each cap with its current-window usage.
+    usage: list[ApiKeyLimitState]
     note: str
 
 
@@ -1312,6 +1425,13 @@ class _ApiKeyVerificationVariant2Required(TypedDict):
 
 
 class ApiKeyVerificationVariant2(_ApiKeyVerificationVariant2Required, total=False):
+    name: str | None
+    scopes: list[str] | None
+    constraints: dict[str, Any]
+    #: The key's spend caps (``None`` when none).
+    limits: list[ApiKeyLimit] | None
+    #: Each cap with its current-window usage.
+    usage: list[ApiKeyLimitState]
     last_used_at: int | None
     expires_at: int | None
 
@@ -1345,6 +1465,10 @@ class ApiKey(_ApiKeyRequired, total=False):
     public_key: str | None
     #: RFC 7638 JWK thumbprint of public_key — the cnf.jkt minted tokens carry.
     public_key_jkt: str | None
+    #: Per-key spend caps; ``None`` when the key has none.
+    limits: list[ApiKeyLimit] | None
+    #: Each cap with its current-window usage (empty when the key has no caps).
+    usage: list[ApiKeyLimitState]
 
 
 class UpdateApiKeyBody(TypedDict, total=False):
@@ -1354,6 +1478,8 @@ class UpdateApiKeyBody(TypedDict, total=False):
     scopes: list[str]
     constraints: dict[str, Any]
     max_token_lifetime_seconds: float | None
+    #: Replace the spend caps; ``None`` clears them (counters are kept).
+    limits: list[ApiKeyLimit] | None
 
 
 class ApiKeyRevokeResult(TypedDict):
@@ -4220,10 +4346,10 @@ class AppTransfer(TypedDict):
 class CreateAtlasIdAppBodyBrandingCopy(TypedDict, total=False):
     """Page text."""
 
-    #: Default "Sign in to continue to {app}".
+    #: Default "Sign in" (the app is named on the "to continue to {app}" line under it).
     sign_in_title: str | None
     sign_in_subtitle: str | None
-    #: Default "Create your account to continue to {app}".
+    #: Default "Create your Atlas Account".
     sign_up_title: str | None
     sign_up_subtitle: str | None
     #: Shown on the consent screen above the list of permissions.
@@ -4790,6 +4916,8 @@ class Usage(_UsageRequired, total=False):
 class CreateUserImportBody(TypedDict, total=False):
     users: list[dict[str, Any]]
     upsert: bool
+    #: Whether the import may notify the imported users. ``False`` (the default) sends nothing.
+    notify: bool
 
 
 class _UsersByEmailsBodyRequired(TypedDict):

@@ -255,6 +255,51 @@ for delivery in ep.list_deliveries(created["id"], limit=20)["data"]:
     ep.redeliver(created["id"], delivery["id"])
 ```
 
+## API key spend caps
+
+Give an end-user API key caps per unit and period (`"request"`, `"day"`, `"month"` or
+`"total"`), then meter what each call costs. A debit that would exceed a cap records
+nothing and comes back with `allowed: False`; it is not raised as an error.
+
+```python
+key = atlas.api_keys.create({
+    "subject_type": "user",
+    "subject_id": "user_123",
+    "limits": [
+        {"unit": "requests", "amount": 1000, "period": "day"},
+        {"unit": "usd_cents", "amount": 5000, "period": "month"},
+    ],
+})
+
+debit = atlas.api_keys.record_usage(
+    key["id"],
+    {"unit": "usd_cents", "amount": 12, "idempotency_key": "req_8f2c"},  # retries count once
+)
+if not debit["allowed"]:
+    ...  # debit["code"] == "LIMIT_EXCEEDED"; debit["exceeded"] lists the caps
+
+print(atlas.api_keys.get_usage(key["id"])["usage"])  # used / remaining / resets_at per cap
+atlas.api_keys.update(key["id"], {"limits": None})  # remove the caps
+```
+
+`api_keys.verify(...)` also returns the key's `name`, `scopes`, `constraints`, `limits`
+and current `usage`.
+
+## Session keep-alive
+
+If your app loads the Atlas frontend SDK only on some pages, time spent on the other
+pages can count as inactivity. Touch the session from your backend to slide its
+inactivity window:
+
+```python
+s = atlas.sessions.touch(session_id)
+# s["idle_expires_at"] is the new deadline; s["extended"] is False when a touch in the last minute already did it
+```
+
+A touch never extends past the session's absolute expiry and never revives an ended
+session (409 `SESSION_REVOKED`, `SESSION_IDLE_EXPIRED` or `SESSION_EXPIRED`). It writes
+at most once a minute, so calling it on every request is safe.
+
 ## Entitlements and organization policy
 
 ```python

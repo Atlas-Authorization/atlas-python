@@ -33,7 +33,16 @@ class ErrorCode:
     UNKNOWN_FIELD = "UNKNOWN_FIELD"
     NOT_FOUND = "NOT_FOUND"
     RATE_LIMITED = "RATE_LIMITED"
+    #: An idempotency key was reused with a different request (e.g. another unit or amount).
     IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+    #: A usage debit would exceed an API key's spend cap. ``api_keys.record_usage``
+    #: reports it as ``code`` on the debit (``allowed`` is ``False``), not as an error.
+    LIMIT_EXCEEDED = "LIMIT_EXCEEDED"
+    #: The session has ended (signed out, timed out from inactivity, or past its
+    #: absolute expiry) and cannot be kept alive.
+    SESSION_REVOKED = "SESSION_REVOKED"
+    SESSION_IDLE_EXPIRED = "SESSION_IDLE_EXPIRED"
+    SESSION_EXPIRED = "SESSION_EXPIRED"
     NOT_CONFIGURED = "NOT_CONFIGURED"
     UNAUTHENTICATED = "UNAUTHENTICATED"
     #: The key is unknown, revoked or malformed.

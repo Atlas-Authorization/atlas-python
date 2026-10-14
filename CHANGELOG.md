@@ -2,6 +2,39 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.4.0
+
+### Added
+
+- **API key spend caps.** `api_keys.create` and `api_keys.update` accept `limits`
+  (a list of `ApiKeyLimit`: `unit`, `amount`, `period` — `"request"`, `"day"`,
+  `"month"` or `"total"`; `None` on update clears them). `ApiKey` and `ApiKeyCreate`
+  gain `limits` and `usage` (a list of `ApiKeyLimitState`: `unit`, `period`, `amount`,
+  `used`, `remaining`, `window_start`, `resets_at`).
+- **Usage metering.** `api_keys.record_usage(key_id, {"amount", "unit",
+  "idempotency_key"?})` returns `ApiKeyUsageDebit` (`key_id`, `unit`, `amount`,
+  `allowed`, `code`, `exceeded`, `usage`, `counters`, `idempotent_replay`). A refusal
+  is returned with `allowed: False` and `code: "LIMIT_EXCEEDED"`, not raised.
+  `api_keys.get_usage(key_id)` returns `ApiKeyUsage` (`key_id`, `limits`, `usage`,
+  `counters`). New types: `ApiKeyLimit`, `ApiKeyLimitPeriod`, `ApiKeyLimitState`,
+  `ApiKeyUsageCounter`, `RecordApiKeyUsageBody`, `ApiKeyUsageDebit`, `ApiKeyUsage`.
+- **Verify.** A valid `ApiKeyVerification` gains `name`, `scopes`, `constraints`,
+  `limits` and `usage`.
+- **Session keep-alive.** `sessions.touch(session_id)` returns `TouchedSession` (the
+  session plus `extended`). `Session` gains `idle_expires_at`.
+- **Users.** `CreateUserBody` and `CreateUserImportBody` accept `notify` (`False`, the
+  default, sends nothing to the user).
+- **Error codes.** `ErrorCode.LIMIT_EXCEEDED`, `SESSION_REVOKED`,
+  `SESSION_IDLE_EXPIRED` and `SESSION_EXPIRED`.
+
+All of these are on both the sync and the async clients. Nothing was removed or
+renamed.
+
+### Changed
+
+- `AtlasIdAppCopy.sign_in_title` / `sign_up_title` comments state the current
+  defaults ("Sign in", "Create your Atlas Account"); no type change.
+
 ## 0.3.0
 
 Full coverage of the Backend API and the Platform API: every operation in the
