@@ -145,13 +145,15 @@ class VerificationError(Exception):
     :attr:`reason` is coarse by design — telling a caller whether the
     signature, issuer, or expiry was wrong helps someone refining a forged
     token more than a developer debugging a real one. Its values are
-    ``"malformed"``, ``"invalid"``, ``"no_keys"``, and ``"unauthorized_party"``.
+    ``"malformed"``, ``"invalid"``, ``"no_keys"``, ``"unauthorized_party"`` and
+    (back-channel logout tokens with a replay guard) ``"replayed"``.
     """
 
     MALFORMED = "malformed"
     INVALID = "invalid"
     NO_KEYS = "no_keys"
     UNAUTHORIZED_PARTY = "unauthorized_party"
+    REPLAYED = "replayed"
 
     def __init__(self, reason: str) -> None:
         self.reason = reason

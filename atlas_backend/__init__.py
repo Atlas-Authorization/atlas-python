@@ -1,7 +1,7 @@
 """atlas-backend — the official Python backend SDK for Atlas.
 
-A typed client over the ``sk_`` Backend API (BAPI), the Python peer of the
-TypeScript ``@atlas/backend`` SDK.
+A typed client over the ``sk_`` Backend API (BAPI) and the ``psk_`` Platform
+API, the Python peer of the TypeScript ``@atlas/backend`` SDK.
 
     from atlas_backend import AtlasClient, AtlasError
 
@@ -13,8 +13,14 @@ TypeScript ``@atlas/backend`` SDK.
 
 from __future__ import annotations
 
-from ._client import AsyncAtlasClient, AtlasClient
-from ._errors import AtlasError, ErrorItem
+from . import models
+from ._client import (
+    AsyncAtlasClient,
+    AsyncAtlasPlatformClient,
+    AtlasClient,
+    AtlasPlatformClient,
+)
+from ._errors import AtlasError, ErrorCode, ErrorItem
 from ._handshake import (
     HandshakeParams,
     HandshakeSession,
@@ -24,8 +30,14 @@ from ._handshake import (
     read_handshake_params,
     redeem_handshake,
 )
+from ._logout import (
+    BACKCHANNEL_LOGOUT_EVENT,
+    LogoutTokenClaims,
+    LogoutTokenVerifier,
+    logout_token_from_form,
+)
 from ._pagination import acollect, aiterate, collect, paginate
-from ._transport import DEFAULT_BASE_URL
+from ._transport import DEFAULT_BASE_URL, UnknownFieldsHook
 from ._types import CursorPage, DeletedObject, ListPage, Metadata
 from ._verify import (
     CLOCK_SKEW_SECONDS,
@@ -40,14 +52,23 @@ from ._verify import (
     VerificationError,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "AtlasClient",
     "AsyncAtlasClient",
+    "AtlasPlatformClient",
+    "AsyncAtlasPlatformClient",
     "AtlasError",
+    "ErrorCode",
     "ErrorItem",
     "DEFAULT_BASE_URL",
+    "UnknownFieldsHook",
+    "models",
+    "LogoutTokenVerifier",
+    "LogoutTokenClaims",
+    "logout_token_from_form",
+    "BACKCHANNEL_LOGOUT_EVENT",
     "paginate",
     "collect",
     "aiterate",

@@ -10,8 +10,9 @@ request-building helpers below.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
-from typing import Any, Union
+from typing import Any, Callable, Union
 
 import httpx
 
@@ -19,6 +20,16 @@ from ._errors import AtlasError, ErrorItem
 
 #: The default BAPI origin, overridable per instance via ``base_url``.
 DEFAULT_BASE_URL = "https://api.atlasauth.net"
+
+#: Called with ``(fields, method, path)`` when a write succeeded but Atlas
+#: ignored body fields the endpoint does not accept (the ``Atlas-Unknown-Fields``
+#: response header). ``fields`` are the ignored names, nested ones as
+#: ``parent.child``.
+UnknownFieldsHook = Callable[[list[str], str, str], None]
+
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+logger = logging.getLogger("atlas_backend")
 
 QueryScalar = Union[str, int, float, bool, None]
 QueryParams = Mapping[str, Union[QueryScalar, Sequence[QueryScalar]]]
@@ -55,6 +66,9 @@ def _build_headers(
     *,
     has_body: bool,
     idempotency_key: str | None,
+    content_type: str | None = None,
+    strict: bool | None = None,
+    method: str = "GET",
 ) -> dict[str, str]:
     """Assemble request headers. The secret is only ever sent as a Bearer token."""
     headers: dict[str, str] = {
@@ -62,10 +76,45 @@ def _build_headers(
         "accept": "application/json",
     }
     if has_body:
-        headers["content-type"] = "application/json"
+        headers["content-type"] = content_type or "application/json"
     if idempotency_key:
         headers["idempotency-key"] = idempotency_key
+    if strict is not None and method.upper() in _WRITE_METHODS:
+        headers["atlas-strict"] = "true" if strict else "false"
     return headers
+
+
+def _report_unknown_fields(
+    response: httpx.Response,
+    method: str,
+    path: str,
+    hook: UnknownFieldsHook | None,
+) -> None:
+    """Surface the ``Atlas-Unknown-Fields`` header through the hook (or a log line)."""
+    header = response.headers.get("atlas-unknown-fields")
+    if not header:
+        return
+    fields = [f.strip() for f in header.split(",") if f.strip()]
+    if not fields:
+        return
+    if hook is not None:
+        hook(fields, method, path)
+    else:
+        logger.warning(
+            "Atlas ignored unknown body field(s) on %s %s: %s",
+            method,
+            path,
+            ", ".join(fields),
+        )
+
+
+def _encode_body(body: Any, content: bytes | None) -> tuple[bytes | str | None, bool]:
+    """Pick the wire payload: raw bytes win over a JSON body."""
+    if content is not None:
+        return content, True
+    if body is None:
+        return None, False
+    return json.dumps(body), True
 
 
 def _parse_success(status_code: int, text: str, *, raw: bool) -> Any:
@@ -96,14 +145,63 @@ def _to_error(status_code: int, text: str) -> AtlasError:
         errors = [
             {
                 "code": "UNKNOWN",
-                "message": message
-                or f"Atlas API request failed with status {status_code}",
+                "message": message or f"Atlas API request failed with status {status_code}",
             }
         ]
     return AtlasError(status_code, errors)
 
 
-class _SyncTransport:
+class _BaseTransport:
+    """Config shared by the sync and async requesters."""
+
+    def __init__(
+        self,
+        secret_key: str,
+        base_url: str,
+        *,
+        strict: bool | None = None,
+        on_unknown_fields: UnknownFieldsHook | None = None,
+    ) -> None:
+        self._secret_key = secret_key
+        self._base_url = base_url
+        self._strict = strict
+        self._on_unknown_fields = on_unknown_fields
+
+    def _prepare(
+        self,
+        method: str,
+        path: str,
+        query: QueryParams | None,
+        body: Any,
+        idempotency_key: str | None,
+        content: bytes | None,
+        content_type: str | None,
+        strict: bool | None,
+    ) -> dict[str, Any]:
+        payload, has_body = _encode_body(body, content)
+        return {
+            "method": method,
+            "url": _join_url(self._base_url, path),
+            "params": _serialize_query(query),
+            "content": payload,
+            "headers": _build_headers(
+                self._secret_key,
+                has_body=has_body,
+                idempotency_key=idempotency_key,
+                content_type=content_type,
+                strict=self._strict if strict is None else strict,
+                method=method,
+            ),
+        }
+
+    def _finish(self, response: httpx.Response, method: str, path: str, raw: bool) -> Any:
+        if not response.is_success:
+            raise _to_error(response.status_code, response.text)
+        _report_unknown_fields(response, method, path, self._on_unknown_fields)
+        return _parse_success(response.status_code, response.text, raw=raw)
+
+
+class _SyncTransport(_BaseTransport):
     """Config-bound synchronous requester handed to every resource namespace."""
 
     def __init__(
@@ -111,10 +209,26 @@ class _SyncTransport:
         secret_key: str,
         base_url: str,
         client: httpx.Client,
+        *,
+        strict: bool | None = None,
+        on_unknown_fields: UnknownFieldsHook | None = None,
     ) -> None:
-        self._secret_key = secret_key
-        self._base_url = base_url
+        super().__init__(secret_key, base_url, strict=strict, on_unknown_fields=on_unknown_fields)
         self._client = client
+
+    def with_options(
+        self,
+        *,
+        strict: bool | None = None,
+        on_unknown_fields: UnknownFieldsHook | None = None,
+    ) -> _SyncTransport:
+        return _SyncTransport(
+            self._secret_key,
+            self._base_url,
+            self._client,
+            strict=self._strict if strict is None else strict,
+            on_unknown_fields=on_unknown_fields or self._on_unknown_fields,
+        )
 
     def request(
         self,
@@ -125,25 +239,19 @@ class _SyncTransport:
         body: Any = None,
         idempotency_key: str | None = None,
         raw: bool = False,
+        content: bytes | None = None,
+        content_type: str | None = None,
+        strict: bool | None = None,
     ) -> Any:
-        content = None if body is None else json.dumps(body)
         response = self._client.request(
-            method,
-            _join_url(self._base_url, path),
-            params=_serialize_query(query),
-            content=content,
-            headers=_build_headers(
-                self._secret_key,
-                has_body=body is not None,
-                idempotency_key=idempotency_key,
-            ),
+            **self._prepare(
+                method, path, query, body, idempotency_key, content, content_type, strict
+            )
         )
-        if not response.is_success:
-            raise _to_error(response.status_code, response.text)
-        return _parse_success(response.status_code, response.text, raw=raw)
+        return self._finish(response, method, path, raw)
 
 
-class _AsyncTransport:
+class _AsyncTransport(_BaseTransport):
     """Config-bound asynchronous requester handed to every async namespace."""
 
     def __init__(
@@ -151,10 +259,26 @@ class _AsyncTransport:
         secret_key: str,
         base_url: str,
         client: httpx.AsyncClient,
+        *,
+        strict: bool | None = None,
+        on_unknown_fields: UnknownFieldsHook | None = None,
     ) -> None:
-        self._secret_key = secret_key
-        self._base_url = base_url
+        super().__init__(secret_key, base_url, strict=strict, on_unknown_fields=on_unknown_fields)
         self._client = client
+
+    def with_options(
+        self,
+        *,
+        strict: bool | None = None,
+        on_unknown_fields: UnknownFieldsHook | None = None,
+    ) -> _AsyncTransport:
+        return _AsyncTransport(
+            self._secret_key,
+            self._base_url,
+            self._client,
+            strict=self._strict if strict is None else strict,
+            on_unknown_fields=on_unknown_fields or self._on_unknown_fields,
+        )
 
     async def request(
         self,
@@ -165,19 +289,13 @@ class _AsyncTransport:
         body: Any = None,
         idempotency_key: str | None = None,
         raw: bool = False,
+        content: bytes | None = None,
+        content_type: str | None = None,
+        strict: bool | None = None,
     ) -> Any:
-        content = None if body is None else json.dumps(body)
         response = await self._client.request(
-            method,
-            _join_url(self._base_url, path),
-            params=_serialize_query(query),
-            content=content,
-            headers=_build_headers(
-                self._secret_key,
-                has_body=body is not None,
-                idempotency_key=idempotency_key,
-            ),
+            **self._prepare(
+                method, path, query, body, idempotency_key, content, content_type, strict
+            )
         )
-        if not response.is_success:
-            raise _to_error(response.status_code, response.text)
-        return _parse_success(response.status_code, response.text, raw=raw)
+        return self._finish(response, method, path, raw)

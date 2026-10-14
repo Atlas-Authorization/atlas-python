@@ -16,6 +16,100 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 
+class ErrorCode:
+    """The stable error codes the API returns in ``errors[].code``.
+
+    Compare against these instead of string literals::
+
+        except AtlasError as err:
+            if err.has_code(ErrorCode.UNKNOWN_FIELD):
+                ...
+
+    New codes may appear over time; treat an unknown code as a generic failure.
+    """
+
+    VALIDATION_FAILED = "VALIDATION_FAILED"
+    #: A strict write named a body field the endpoint does not accept.
+    UNKNOWN_FIELD = "UNKNOWN_FIELD"
+    NOT_FOUND = "NOT_FOUND"
+    RATE_LIMITED = "RATE_LIMITED"
+    IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+    NOT_CONFIGURED = "NOT_CONFIGURED"
+    UNAUTHENTICATED = "UNAUTHENTICATED"
+    #: The key is unknown, revoked or malformed.
+    INVALID_KEY = "INVALID_KEY"
+    #: The key is valid but for another surface (e.g. a platform key on an instance route).
+    WRONG_KEY_SURFACE = "WRONG_KEY_SURFACE"
+    FORBIDDEN = "FORBIDDEN"
+    SCOPE_MISSING = "SCOPE_MISSING"
+    IDENTIFIER_EXISTS = "IDENTIFIER_EXISTS"
+    IDENTIFIER_NOT_FOUND = "IDENTIFIER_NOT_FOUND"
+    VERIFICATION_EXPIRED = "VERIFICATION_EXPIRED"
+    VERIFICATION_FAILED = "VERIFICATION_FAILED"
+    EMAIL_NOT_VERIFIED = "EMAIL_NOT_VERIFIED"
+    TOO_MANY_ATTEMPTS = "TOO_MANY_ATTEMPTS"
+    PASSWORD_BREACHED = "PASSWORD_BREACHED"
+    PASSWORD_POLICY = "PASSWORD_POLICY"
+    PASSWORD_EXPIRED = "PASSWORD_EXPIRED"
+    LOCKED = "LOCKED"
+    BANNED = "BANNED"
+    DELETED = "DELETED"
+    MFA_REQUIRED = "MFA_REQUIRED"
+    MFA_ALREADY_ENROLLED = "MFA_ALREADY_ENROLLED"
+    MFA_NOT_ENROLLED = "MFA_NOT_ENROLLED"
+    STEP_UP_REQUIRED = "STEP_UP_REQUIRED"
+    LAST_EMAIL = "LAST_EMAIL"
+    SESSION_EXPIRED = "SESSION_EXPIRED"
+    TOKEN_REUSE_DETECTED = "TOKEN_REUSE_DETECTED"
+    SESSION_REVOKED = "SESSION_REVOKED"
+    SESSION_IDLE_EXPIRED = "SESSION_IDLE_EXPIRED"
+    REFRESH_REUSE_DETECTED = "REFRESH_REUSE_DETECTED"
+    OAUTH_STATE_INVALID = "OAUTH_STATE_INVALID"
+    PROVIDER_TOKEN_UNAVAILABLE = "PROVIDER_TOKEN_UNAVAILABLE"
+    OAUTH_EXCHANGE_FAILED = "OAUTH_EXCHANGE_FAILED"
+    LAST_AUTH_METHOD = "LAST_AUTH_METHOD"
+    IDENTITY_ALREADY_LINKED = "IDENTITY_ALREADY_LINKED"
+    ACCOUNT_EXISTS = "ACCOUNT_EXISTS"
+    WALLET_GATE_UNMET = "WALLET_GATE_UNMET"
+    LAST_ADMIN = "LAST_ADMIN"
+    ALREADY_MEMBER = "ALREADY_MEMBER"
+    ROLE_IN_USE = "ROLE_IN_USE"
+    #: A billing plan cannot be deleted while subscriptions use it.
+    PLAN_IN_USE = "PLAN_IN_USE"
+    CONFLICT = "CONFLICT"
+    MEMBERSHIP_LIMIT_REACHED = "MEMBERSHIP_LIMIT_REACHED"
+    STRATEGY_DISABLED = "STRATEGY_DISABLED"
+    SIGN_UP_RESTRICTED = "SIGN_UP_RESTRICTED"
+    WAITLISTED = "WAITLISTED"
+    IDENTIFIER_NOT_ALLOWED = "IDENTIFIER_NOT_ALLOWED"
+    DISPOSABLE_EMAIL_BLOCKED = "DISPOSABLE_EMAIL_BLOCKED"
+    SMS_REGION_BLOCKED = "SMS_REGION_BLOCKED"
+    AUTHENTICATOR_NOT_ALLOWED = "AUTHENTICATOR_NOT_ALLOWED"
+    CAPTCHA_REQUIRED = "CAPTCHA_REQUIRED"
+    CAPTCHA_FAILED = "CAPTCHA_FAILED"
+    CHALLENGE_UNAVAILABLE = "CHALLENGE_UNAVAILABLE"
+    READ_ONLY_MODE = "READ_ONLY_MODE"
+    SIGN_UPS_DISABLED = "SIGN_UPS_DISABLED"
+    SIGN_INS_DISABLED = "SIGN_INS_DISABLED"
+    PROVIDER_DISABLED = "PROVIDER_DISABLED"
+    PROVIDER_SIGN_UP_DISABLED = "PROVIDER_SIGN_UP_DISABLED"
+    PROVIDER_SIGN_IN_DISABLED = "PROVIDER_SIGN_IN_DISABLED"
+    IP_NOT_ALLOWED = "IP_NOT_ALLOWED"
+    SSO_REQUIRED = "SSO_REQUIRED"
+    ORG_METHOD_NOT_ALLOWED = "ORG_METHOD_NOT_ALLOWED"
+    SETTINGS_INVALID = "SETTINGS_INVALID"
+    ACTION_BLOCKED = "ACTION_BLOCKED"
+    HIGH_RISK_BLOCKED = "HIGH_RISK_BLOCKED"
+    ENROLMENT_TOKEN_INVALID = "ENROLMENT_TOKEN_INVALID"
+    ENROLMENT_TOKEN_EXPIRED = "ENROLMENT_TOKEN_EXPIRED"
+    ENROLMENT_TOKEN_EXHAUSTED = "ENROLMENT_TOKEN_EXHAUSTED"
+    #: The instance has no working email provider for this send.
+    EMAIL_DELIVERY_NOT_CONFIGURED = "EMAIL_DELIVERY_NOT_CONFIGURED"
+    #: Turning this setting on needs an email provider configured first.
+    EMAIL_PROVIDER_REQUIRED = "EMAIL_PROVIDER_REQUIRED"
+    INTERNAL = "INTERNAL"
+
+
 class ErrorItem(TypedDict, total=False):
     """One entry of the BAPI error envelope."""
 
@@ -43,9 +137,7 @@ class AtlasError(Exception):
     ) -> None:
         first_message = errors[0].get("message") if errors else None
         super().__init__(
-            message
-            or first_message
-            or f"Atlas API request failed with status {status}"
+            message or first_message or f"Atlas API request failed with status {status}"
         )
         self.status = status
         self.errors = errors
