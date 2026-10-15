@@ -202,11 +202,21 @@ atlas.design.update({"design": {"background": {"image": {"assetId": asset["asset
 
 ```python
 atlas.instance.cookie_consent.set(
-    {"script_url": "https://cmp.example/consent.js", "site_id": "site_123"}
+    {
+        "script_url": "https://cmp.example/consent.js",
+        "site_id": "site_123",
+        # Optional "cookie settings" link that reopens the CMP preferences
+        "settings_link": {"label": "Cookie settings", "preset": "cookiebot"},
+    }
 )
 print(atlas.instance.cookie_consent.get()["enabled"])
 atlas.instance.cookie_consent.delete()
 ```
+
+A settings link needs a `preset` (`"cookiemunch"`, `"cookiebot"`, `"onetrust"` or
+`"custom"`) or at least one entry in `attributes` (`data-*`, `aria-*`, `id`, `class`,
+`href`). `None` removes the link. The response's `settings_link.rendered_attributes`
+are the attributes the rendered link carries: yours plus the preset's trigger.
 
 ## Messaging providers
 
@@ -225,6 +235,14 @@ atlas.messaging_providers.set_sms(
     {"transport": "twilio", "config": {"account_sid": "AC...", "auth_token": "..."}}
 )
 atlas.messaging_providers.test("email", {"to": "ops@acme.example"})
+```
+
+Removing the email provider while email-dependent features are on (and nothing else
+would deliver email) raises a 409 `EMAIL_PROVIDER_IN_USE`; the error's
+`meta["features"]` lists them. Pass `force=True` to remove it anyway:
+
+```python
+atlas.messaging_providers.delete("email", force=True)
 ```
 
 ## Social and wallet sign-in providers
@@ -299,6 +317,22 @@ s = atlas.sessions.touch(session_id)
 A touch never extends past the session's absolute expiry and never revives an ended
 session (409 `SESSION_REVOKED`, `SESSION_IDLE_EXPIRED` or `SESSION_EXPIRED`). It writes
 at most once a minute, so calling it on every request is safe.
+
+Every session read (`sessions.get`, `sessions.list`, `users.list_sessions`) carries
+`idle_expires_at` (the same value as `abandon_at`), `last_active_organization_id` and
+`impersonated_by`.
+
+## Skipping the logout confirmation
+
+A first-party OAuth client can set `skip_logout_confirmation=True` on
+`oauth_clients.create` / `update`. Sign-out through `/oauth2/logout` with that
+`client_id` and an exactly registered `post_logout_redirect_uri` then ends the session
+and redirects straight back with `state`, without the confirmation page. A third-party
+client is refused with 422 `VALIDATION_FAILED`.
+
+```python
+atlas.oauth_clients.update(client_id, {"skip_logout_confirmation": True})
+```
 
 ## Entitlements and organization policy
 
@@ -401,7 +435,8 @@ Every non-2xx raises `AtlasError`, carrying:
 `ErrorCode` lists the stable codes, for example `ErrorCode.UNKNOWN_FIELD`,
 `ErrorCode.INVALID_KEY`, `ErrorCode.WRONG_KEY_SURFACE` (a valid key used on the
 wrong API, e.g. a platform key on an instance route), `ErrorCode.PLAN_IN_USE`,
-`ErrorCode.EMAIL_DELIVERY_NOT_CONFIGURED` and `ErrorCode.EMAIL_PROVIDER_REQUIRED`.
+`ErrorCode.EMAIL_DELIVERY_NOT_CONFIGURED`, `ErrorCode.EMAIL_PROVIDER_REQUIRED` and
+`ErrorCode.EMAIL_PROVIDER_IN_USE`.
 
 ## Development
 

@@ -381,7 +381,7 @@ class CreateWebhookEndpointBody(_CreateWebhookEndpointRequired, total=False):
 TokenAuthMethod = Literal["client_secret_basic", "client_secret_post", "none"]
 
 
-class OAuthClient(TypedDict):
+class _OAuthClientRequired(TypedDict):
     object: Literal["oauth_client"]
     id: str
     client_id: str
@@ -396,6 +396,14 @@ class OAuthClient(TypedDict):
     first_party: bool
     created_at: int
     updated_at: int
+
+
+class OAuthClient(_OAuthClientRequired, total=False):
+    #: First-party only. When ``True``, ``/oauth2/logout`` with this client's
+    #: ``client_id`` and an exactly registered ``post_logout_redirect_uri`` ends the
+    #: session and redirects straight back (with ``state``), skipping the
+    #: confirmation page. ``False`` by default.
+    skip_logout_confirmation: bool
 
 
 class ClientGrant(TypedDict):
@@ -427,6 +435,12 @@ class CreateOAuthClientBody(_CreateOAuthClientRequired, total=False):
     #: OIDC Front-Channel Logout: loaded in a hidden iframe on the sign-out page.
     frontchannel_logout_uri: str | None
     frontchannel_logout_session_required: bool
+    #: First-party clients only (a third-party client is refused with 422
+    #: ``VALIDATION_FAILED``, param ``skip_logout_confirmation``). When ``True``,
+    #: RP-initiated logout (``/oauth2/logout``) with this ``client_id`` and an exactly
+    #: registered ``post_logout_redirect_uri`` ends the session and redirects straight
+    #: back with ``state``, without the confirmation page.
+    skip_logout_confirmation: bool
 
 
 class UpdateOAuthClientBody(TypedDict, total=False):
@@ -445,6 +459,12 @@ class UpdateOAuthClientBody(TypedDict, total=False):
     #: OIDC Front-Channel Logout: loaded in a hidden iframe on the sign-out page.
     frontchannel_logout_uri: str | None
     frontchannel_logout_session_required: bool
+    #: First-party clients only (a third-party client is refused with 422
+    #: ``VALIDATION_FAILED``, param ``skip_logout_confirmation``). When ``True``,
+    #: RP-initiated logout (``/oauth2/logout``) with this ``client_id`` and an exactly
+    #: registered ``post_logout_redirect_uri`` ends the session and redirects straight
+    #: back with ``state``, without the confirmation page.
+    skip_logout_confirmation: bool
 
 
 class _CreateGrantRequired(TypedDict):
@@ -2763,6 +2783,42 @@ class InstanceDeleteCaptchaSecretResult(TypedDict):
     deleted: Literal[True]
 
 
+#: A built-in settings-link preset: it adds the attribute the named CMP listens on to
+#: reopen its preferences (``"custom"`` adds none). Responses carry the preset as a
+#: plain ``str`` so a preset added later still decodes.
+CookieConsentSettingsLinkPreset = Literal["cookiemunch", "cookiebot", "onetrust", "custom"]
+
+
+class _CookieConsentSettingsLinkInputRequired(TypedDict):
+    #: The link text, 1-60 characters.
+    label: str
+
+
+class CookieConsentSettingsLinkInput(_CookieConsentSettingsLinkInputRequired, total=False):
+    """A "cookie settings" link on the hosted pages that reopens the CMP preferences.
+
+    Needs a ``preset`` or at least one attribute (400 otherwise).
+    """
+
+    preset: CookieConsentSettingsLinkPreset | None
+    #: Extra attributes for the link: ``data-*``, ``aria-*``, ``id``, ``class`` and
+    #: ``href`` (https or a ``#fragment``). At most 10; values up to 200 characters.
+    attributes: dict[str, str]
+
+
+class CookieConsentSettingsLink(TypedDict):
+    """The configured "cookie settings" link."""
+
+    label: str
+    #: One of :data:`CookieConsentSettingsLinkPreset`, or ``None``; kept a ``str`` so
+    #: unknown presets still decode.
+    preset: str | None
+    #: The attributes you set.
+    attributes: dict[str, str]
+    #: The attributes the rendered link carries: yours plus the preset's trigger.
+    rendered_attributes: dict[str, str]
+
+
 class _CookieConsentRequired(TypedDict):
     object: Literal["cookie_consent"]
     enabled: bool
@@ -2777,6 +2833,8 @@ class CookieConsent(_CookieConsentRequired, total=False):
     site_id: str | None
     blocking_mode: str | None
     extra_origins: list[str]
+    #: The "cookie settings" link, or ``None`` when there is none.
+    settings_link: CookieConsentSettingsLink | None
 
 
 class _SetCookieConsentBodyRequired(TypedDict):
@@ -2793,6 +2851,9 @@ class SetCookieConsentBody(_SetCookieConsentBodyRequired, total=False):
     blocking_mode: str | None
     #: Other https URLs the CMP loads from or calls; each origin is added to the page CSP.
     extra_origins: list[str]
+    #: A "cookie settings" link that reopens the CMP preferences; ``None`` or omitted
+    #: means no link.
+    settings_link: CookieConsentSettingsLinkInput | None
 
 
 class SetKerberosSecretBody(TypedDict, total=False):

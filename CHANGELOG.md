@@ -2,6 +2,36 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.5.0
+
+### Added
+
+- **Skip the logout confirmation.** `CreateOAuthClientBody` and `UpdateOAuthClientBody`
+  accept `skip_logout_confirmation`; `OAuthClient` gains `skip_logout_confirmation`
+  (`False` by default). First-party clients only (a third-party client gets 422
+  `VALIDATION_FAILED`, param `skip_logout_confirmation`). When `True`, `/oauth2/logout`
+  with that `client_id` and an exactly registered `post_logout_redirect_uri` ends the
+  session and redirects straight back with `state`, without the confirmation page.
+- **Cookie settings link.** `SetCookieConsentBody` accepts `settings_link`
+  (`CookieConsentSettingsLinkInput`: `label`, `preset`?, `attributes`?; `None` or
+  omitted means no link). `CookieConsent` gains `settings_link`
+  (`CookieConsentSettingsLink`: `label`, `preset`, `attributes`,
+  `rendered_attributes`, or `None`). New `CookieConsentSettingsLinkPreset`
+  (`"cookiemunch"`, `"cookiebot"`, `"onetrust"`, `"custom"`); responses keep `preset`
+  a plain `str` so new presets still decode.
+- **Force-remove the email provider.** `messaging_providers.delete(channel, force=False)`
+  takes `force`; `force=True` sends `?force=true` and removes the email provider even
+  while email-dependent features are on (otherwise refused with 409
+  `EMAIL_PROVIDER_IN_USE`, with the features in `meta.features`).
+- **Error codes.** `ErrorCode.EMAIL_PROVIDER_IN_USE`.
+- **Sessions.** `sessions.list` and `users.list_sessions` document their items as
+  `Session`, which carries `idle_expires_at`, `last_active_organization_id` and
+  `impersonated_by`.
+
+All of these are on both the sync and the async clients. The changes are backward
+compatible: every new field and parameter is optional, and nothing was removed or
+renamed.
+
 ## 0.4.0
 
 ### Added

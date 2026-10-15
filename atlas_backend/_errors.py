@@ -116,6 +116,10 @@ class ErrorCode:
     EMAIL_DELIVERY_NOT_CONFIGURED = "EMAIL_DELIVERY_NOT_CONFIGURED"
     #: Turning this setting on needs an email provider configured first.
     EMAIL_PROVIDER_REQUIRED = "EMAIL_PROVIDER_REQUIRED"
+    #: Removing the email provider was refused: email-dependent features are on
+    #: (listed in ``meta.features``) and nothing else would deliver email. Retry with
+    #: ``messaging_providers.delete("email", force=True)`` to remove it anyway.
+    EMAIL_PROVIDER_IN_USE = "EMAIL_PROVIDER_IN_USE"
     INTERNAL = "INTERNAL"
 
 

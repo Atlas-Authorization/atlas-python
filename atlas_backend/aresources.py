@@ -117,6 +117,9 @@ class AsyncUsers:
         return await self._t.request(method="DELETE", path=f"/v1/users/{user_id}/mfa/{factor_id}")
 
     async def list_sessions(self, user_id: str) -> ListPage:
+        """List a user's sessions. Each ``data`` item is a :class:`~atlas_backend.models.Session`
+        (with ``idle_expires_at``, ``last_active_organization_id`` and ``impersonated_by``).
+        """
         return await self._t.request(method="GET", path=f"/v1/users/{user_id}/sessions")
 
     async def revoke_sessions(
@@ -481,6 +484,9 @@ class AsyncSessions:
         self._t = transport
 
     async def list(self, *, user_id: str) -> ListPage:
+        """List a user's sessions. Each ``data`` item is a
+        :class:`~atlas_backend.models.Session`.
+        """
         return await self._t.request(method="GET", path="/v1/sessions", query={"user_id": user_id})
 
     async def get(self, session_id: str) -> m.Session:
@@ -3536,11 +3542,19 @@ class AsyncMessagingProviders:
             body=body,
         )
 
-    async def delete(self, channel: str) -> m.MessagingProviderDeleteResult:
-        """Remove the email or sms provider configuration for the instance."""
+    async def delete(self, channel: str, *, force: bool = False) -> m.MessagingProviderDeleteResult:
+        """Remove the email or sms provider configuration for the instance.
+
+        Removing the email provider is refused with 409 ``EMAIL_PROVIDER_IN_USE`` while
+        email-dependent features are on and nothing else would deliver email (the
+        error's ``meta.features`` lists them, e.g. ``"emailCode"``, ``"emailLink"``,
+        ``"emailVerification"``, ``"passwordReset"``). Pass ``force=True`` to remove it
+        anyway.
+        """
         return await self._t.request(
             method="DELETE",
             path=f"/v1/messaging_providers/{channel}",
+            query={"force": True} if force else None,
         )
 
     async def test(
