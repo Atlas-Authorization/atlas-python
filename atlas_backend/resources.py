@@ -2899,11 +2899,25 @@ class Instance:
             body=body,
         )
 
-    def delete_captcha_secret(self) -> m.InstanceDeleteCaptchaSecretResult:
-        """Clear the stored captcha provider secret for the current provider."""
+    def delete_captcha_secret(
+        self, *, provider: str | None = None, force: bool = False
+    ) -> m.InstanceDeleteCaptchaSecretResult:
+        """Clear the stored captcha provider secret (the configured provider unless
+        ``provider`` names another).
+
+        Refused with 409 ``CAPTCHA_IN_USE`` while a captcha flow uses that secret (the
+        error's ``meta.flows`` lists them). Pass ``force=True`` to remove it anyway; those
+        flows are turned off and returned in ``flows_turned_off``.
+        """
+        query: dict[str, object] = {}
+        if provider:
+            query["provider"] = provider
+        if force:
+            query["force"] = True
         return self._t.request(
             method="DELETE",
             path="/v1/instance/captcha_secret",
+            query=query or None,
         )
 
     def set_kerberos_secret(self, body: m.SetKerberosSecretBody | None = None) -> m.KerberosSecret:

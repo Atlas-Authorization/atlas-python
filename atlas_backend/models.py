@@ -2769,6 +2769,9 @@ class UpdateInstanceBody(TypedDict, total=False):
 
 class SetCaptchaSecretBody(TypedDict, total=False):
     secret: str
+    #: The captcha provider the secret belongs to (defaults to the configured one).
+    #: Captcha is bring-your-own-keys: store the secret before turning captcha on.
+    provider: str
 
 
 class CaptchaSecret(TypedDict):
@@ -2777,10 +2780,15 @@ class CaptchaSecret(TypedDict):
     set: Literal[True]
 
 
-class InstanceDeleteCaptchaSecretResult(TypedDict):
+class _InstanceDeleteCaptchaSecretResultBase(TypedDict):
     object: Literal["captcha_secret"]
     provider: str
     deleted: Literal[True]
+
+
+class InstanceDeleteCaptchaSecretResult(_InstanceDeleteCaptchaSecretResultBase, total=False):
+    #: The flows a ``force=True`` delete turned off (absent when none were using it).
+    flows_turned_off: list[str]
 
 
 #: A built-in settings-link preset: it adds the attribute the named CMP listens on to

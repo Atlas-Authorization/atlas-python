@@ -322,3 +322,46 @@ async def test_async_skip_logout_settings_link_force_and_user_sessions() -> None
         assert delete.calls.last.request.url.params["force"] == "true"
         page = await atlas.users.list_sessions("user_1")
         assert page["data"][0]["idle_expires_at"] == 2
+
+
+# --- captcha is bring-your-own-keys ---------------------------------------------
+
+
+@respx.mock
+def test_set_captcha_secret_for_a_provider_before_enabling() -> None:
+    route = respx.put(f"{API_URL}/v1/instance/captcha_secret").mock(
+        return_value=httpx.Response(200, json={"object": "captcha_secret", "provider": "turnstile", "set": True})
+    )
+    out = client().instance.set_captcha_secret({"secret": "s3cret", "provider": "turnstile"})
+    assert json.loads(route.calls.last.request.content) == {"secret": "s3cret", "provider": "turnstile"}
+    assert out["provider"] == "turnstile"
+
+
+@respx.mock
+def test_delete_captcha_secret_force_and_provider() -> None:
+    route = respx.delete(f"{API_URL}/v1/instance/captcha_secret").mock(
+        return_value=httpx.Response(
+            200,
+            json={"object": "captcha_secret", "provider": "hcaptcha", "deleted": True, "flows_turned_off": ["signUp"]},
+        )
+    )
+    out = client().instance.delete_captcha_secret(provider="hcaptcha", force=True)
+    params = route.calls.last.request.url.params
+    assert params["provider"] == "hcaptcha" and params["force"] == "true"
+    assert out["flows_turned_off"] == ["signUp"]
+    client().instance.delete_captcha_secret()
+    assert route.calls.last.request.url.query == b""
+
+
+@respx.mock
+def test_captcha_in_use_and_keys_required_codes() -> None:
+    respx.delete(f"{API_URL}/v1/instance/captcha_secret").mock(
+        return_value=httpx.Response(
+            409, json={"errors": [{"code": "CAPTCHA_IN_USE", "message": "in use", "meta": {"flows": ["signUp"]}}]}
+        )
+    )
+    with pytest.raises(AtlasError) as exc:
+        client().instance.delete_captcha_secret()
+    assert exc.value.has_code(ErrorCode.CAPTCHA_IN_USE)
+    assert exc.value.errors[0]["meta"]["flows"] == ["signUp"]
+    assert ErrorCode.CAPTCHA_KEYS_REQUIRED == "CAPTCHA_KEYS_REQUIRED"

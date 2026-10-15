@@ -120,6 +120,12 @@ class ErrorCode:
     #: (listed in ``meta.features``) and nothing else would deliver email. Retry with
     #: ``messaging_providers.delete("email", force=True)`` to remove it anyway.
     EMAIL_PROVIDER_IN_USE = "EMAIL_PROVIDER_IN_USE"
+    #: Captcha is bring-your-own-keys: turning it on (or switching provider) without a
+    #: stored site key and secret for that provider is refused.
+    CAPTCHA_KEYS_REQUIRED = "CAPTCHA_KEYS_REQUIRED"
+    #: Removing a captcha key a live flow uses was refused (``meta.flows``). Retry with
+    #: ``delete_captcha_secret(force=True)`` to remove it and turn those flows off.
+    CAPTCHA_IN_USE = "CAPTCHA_IN_USE"
     INTERNAL = "INTERNAL"
 
 

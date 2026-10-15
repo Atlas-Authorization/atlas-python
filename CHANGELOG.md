@@ -2,6 +2,17 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.5.1
+
+### Added
+
+- **Captcha is bring-your-own-keys.** `ErrorCode.CAPTCHA_KEYS_REQUIRED` (422: captcha can only be turned
+  on once its own site key and secret are stored) and `ErrorCode.CAPTCHA_IN_USE` (409: removing a key a
+  live flow uses; `meta.flows`).
+- `SetCaptchaSecretBody` accepts `provider`, so the secret can be stored before captcha is turned on.
+- `instance.delete_captcha_secret(provider=..., force=...)`: `force=True` removes a secret a flow uses and
+  turns those flows off; `InstanceDeleteCaptchaSecretResult` gains optional `flows_turned_off`.
+
 ## 0.5.0
 
 ### Added
