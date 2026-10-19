@@ -781,6 +781,23 @@ class OAuthClients:
     def rotate_secret(self, client_id: str) -> JSON:
         return self._t.request(method="POST", path=f"/v1/oauth_clients/{client_id}/rotate_secret")
 
+    def list_backchannel_deliveries(
+        self, client_id: str, *, limit: int | None = None, starting_after: str | None = None
+    ) -> m.BackchannelLogoutDeliveryList:
+        """The client's back-channel logout delivery log, newest first."""
+        return self._t.request(
+            method="GET",
+            path=f"/v1/oauth_clients/{client_id}/backchannel_deliveries",
+            query=_q(limit=limit, starting_after=starting_after),
+        )
+
+    def test_backchannel_logout(self, client_id: str) -> m.BackchannelLogoutTest:
+        """Send a test back-channel logout now and return what the receiver answered."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/oauth_clients/{client_id}/backchannel_logout/test",
+        )
+
     def delete(self, client_id: str) -> JSON:
         return self._t.request(method="DELETE", path=f"/v1/oauth_clients/{client_id}")
 
@@ -2873,6 +2890,7 @@ class Instance:
         self._t = transport
         self.cookie_consent = _InstanceCookieConsent(transport)
         self.security = _InstanceSecurity(transport)
+        self.integrations = _InstanceIntegrations(transport)
 
     def get(self) -> m.Instance:
         """Read instance configuration."""
@@ -2909,7 +2927,7 @@ class Instance:
         error's ``meta.flows`` lists them). Pass ``force=True`` to remove it anyway; those
         flows are turned off and returned in ``flows_turned_off``.
         """
-        query: dict[str, object] = {}
+        query: dict[str, str | bool] = {}
         if provider:
             query["provider"] = provider
         if force:
@@ -2963,6 +2981,79 @@ class Instance:
         return self._t.request(
             method="GET",
             path="/v1/instance/preflight",
+        )
+
+    def move_origin(self, body: m.OriginMoveBody) -> m.OriginMove:
+        """Move every URL that points at one origin to another (a domain move), across the
+        instance, its OAuth clients, webhooks, redirect URLs and Sign in with Atlas apps.
+
+        ``body`` is ``{"from": ..., "to": ..., "dry_run": ...}``; ``dry_run=True`` writes
+        nothing. A repeated run returns an empty ``changes`` list.
+        """
+        return self._t.request(
+            method="POST",
+            path="/v1/instance/move_origin",
+            body=body,
+        )
+
+    def connections(self) -> m.InstanceConnections:
+        """The instance's links to other platforms and their health. Read-only."""
+        return self._t.request(
+            method="GET",
+            path="/v1/instance/connections",
+        )
+
+
+class _InstanceIntegrations:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def get_chatly(self) -> m.ChatlyIntegration:
+        """Read the Chatly connection (``enabled: False`` when none)."""
+        return self._t.request(
+            method="GET",
+            path="/v1/instance/integrations/chatly",
+        )
+
+    def set_chatly(self, body: m.SetChatlyIntegrationBody) -> m.ChatlyIntegration:
+        """Connect a Chatly channel: ``getToken({ template: 'chatly' })`` then mints tokens
+        the channel's identity verification accepts.
+        """
+        return self._t.request(
+            method="PUT",
+            path="/v1/instance/integrations/chatly",
+            body=body,
+        )
+
+    def delete_chatly(self) -> m.ChatlyIntegration:
+        """Remove the Chatly connection."""
+        return self._t.request(
+            method="DELETE",
+            path="/v1/instance/integrations/chatly",
+        )
+
+    def get_forumulate(self) -> m.ForumulateIntegration:
+        """Read the Forumulate connection (``enabled: False`` when none)."""
+        return self._t.request(
+            method="GET",
+            path="/v1/instance/integrations/forumulate",
+        )
+
+    def set_forumulate(self, body: m.SetForumulateIntegrationBody) -> m.ForumulateIntegration:
+        """Connect Forumulate spaces (replaces the whole connection). Store the returned
+        ``reader_auth_provider`` on each space.
+        """
+        return self._t.request(
+            method="PUT",
+            path="/v1/instance/integrations/forumulate",
+            body=body,
+        )
+
+    def delete_forumulate(self) -> m.ForumulateIntegration:
+        """Remove the Forumulate connection."""
+        return self._t.request(
+            method="DELETE",
+            path="/v1/instance/integrations/forumulate",
         )
 
 
@@ -3503,6 +3594,7 @@ class McpConnector:
 class MessagingProviders:
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
+        self.managed_email = _ManagedEmail(transport)
 
     def list(self) -> m.MessagingProviders:
         """Read the instance's BYOK email and SMS provider config: transport, from-address and
@@ -3554,6 +3646,113 @@ class MessagingProviders:
             method="POST",
             path=f"/v1/messaging_providers/{channel}/test",
             body=body,
+        )
+
+
+class _ManagedEmail:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def get(self) -> m.ManagedEmail:
+        """Read the managed sending domain: status, records, limits and usage (404 when none
+        is configured).
+        """
+        return self._t.request(
+            method="GET",
+            path="/v1/messaging_providers/email/managed",
+        )
+
+    def create(self, body: m.CreateManagedEmailBody) -> m.ManagedEmail:
+        """Use Atlas-managed email from your own domain; returns the DNS ``records`` to
+        publish. With ``dns`` Atlas writes them itself (the token is write-only).
+        """
+        return self._t.request(
+            method="POST",
+            path="/v1/messaging_providers/email/managed",
+            body=body,
+        )
+
+    def verify(self) -> m.ManagedEmail:
+        """Re-check the DNS records now; ``verified`` is true once email can be sent."""
+        return self._t.request(
+            method="POST",
+            path="/v1/messaging_providers/email/managed/verify",
+        )
+
+    def delete(self, *, force: bool = False) -> m.ManagedEmailDeleteResult:
+        """Stop using managed email (DNS records are left in place).
+
+        Refused with 409 ``EMAIL_PROVIDER_IN_USE`` while it is the only way the instance can
+        send email; pass ``force=True`` to remove it anyway.
+        """
+        return self._t.request(
+            method="DELETE",
+            path="/v1/messaging_providers/email/managed",
+            query={"force": True} if force else None,
+        )
+
+
+class LogoutNotifyEndpoints:
+    """Logout fan-out endpoints: downstream services that receive the same signed
+    ``logout_token`` as your OIDC apps whenever a session ends.
+    """
+
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def list(self) -> ListPage:
+        return self._t.request(
+            method="GET",
+            path="/v1/logout_notify_endpoints",
+        )
+
+    def create(
+        self, body: m.CreateLogoutNotifyEndpointBody, *, idempotency_key: str | None = None
+    ) -> m.LogoutNotifyEndpoint:
+        """Register an endpoint (public https). With ``oauth_client_id`` it follows one
+        client instead of the whole instance.
+        """
+        return self._t.request(
+            method="POST",
+            path="/v1/logout_notify_endpoints",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    def get(self, endpoint_id: str) -> m.LogoutNotifyEndpoint:
+        return self._t.request(
+            method="GET",
+            path=f"/v1/logout_notify_endpoints/{endpoint_id}",
+        )
+
+    def update(
+        self,
+        endpoint_id: str,
+        body: m.UpdateLogoutNotifyEndpointBody,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.LogoutNotifyEndpoint:
+        return self._t.request(
+            method="PATCH",
+            path=f"/v1/logout_notify_endpoints/{endpoint_id}",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    def delete(self, endpoint_id: str, *, idempotency_key: str | None = None) -> DeletedObject:
+        """Delete an endpoint; its queued deliveries go with it."""
+        return self._t.request(
+            method="DELETE",
+            path=f"/v1/logout_notify_endpoints/{endpoint_id}",
+            idempotency_key=idempotency_key,
+        )
+
+    def list_deliveries(self, endpoint_id: str, *, limit: int | None = None) -> ListPage:
+        """The endpoint's delivery log, newest first."""
+        return self._t.request(
+            method="GET",
+            path=f"/v1/logout_notify_endpoints/{endpoint_id}/deliveries",
+            query=_q(limit=limit),
         )
 
 
@@ -4714,6 +4913,128 @@ class PlatformAtlasIdApps:
         return self._t.request(
             method="POST",
             path=f"/v1/platform/atlas_id_apps/{app_id}/rotate_secret",
+        )
+
+    def list_backchannel_deliveries(
+        self, app_id: str, *, limit: int | None = None, starting_after: str | None = None
+    ) -> m.BackchannelLogoutDeliveryList:
+        """The app's back-channel logout delivery log, newest first."""
+        return self._t.request(
+            method="GET",
+            path=f"/v1/platform/atlas_id_apps/{app_id}/backchannel_deliveries",
+            query=_q(limit=limit, starting_after=starting_after),
+        )
+
+    def test_backchannel_logout(self, app_id: str) -> m.BackchannelLogoutTest:
+        """Send a test back-channel logout to the app now."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/platform/atlas_id_apps/{app_id}/backchannel_logout/test",
+        )
+
+    def preflight(self, app_id: str) -> m.AtlasIdAppPreflight:
+        """Check one app's setup, in the instance preflight's finding shape."""
+        return self._t.request(
+            method="GET",
+            path=f"/v1/platform/atlas_id_apps/{app_id}/preflight",
+        )
+
+    def find_users(self, app_id: str, email: str) -> m.AtlasIdAppUserList:
+        """Privacy requests: is this person one of the app's users? Exact match on a
+        verified email; anyone else gets the same empty list.
+        """
+        return self._t.request(
+            method="GET",
+            path=f"/v1/platform/atlas_id_apps/{app_id}/users",
+            query={"email": email},
+        )
+
+    def revoke_grant(self, app_id: str, grant_id: str) -> m.AtlasIdGrantRevocation:
+        """Revoke one user's grant (``grant_id`` from ``find_users``); the next sign-in shows
+        the consent screen again.
+        """
+        return self._t.request(
+            method="DELETE",
+            path=f"/v1/platform/atlas_id_apps/{app_id}/grants/{grant_id}",
+        )
+
+    def move_origin(self, app_id: str, body: m.OriginMoveBody) -> m.OriginMove:
+        """Move the app's URLs from one origin to another. ``dry_run`` writes nothing."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/platform/atlas_id_apps/{app_id}/move_origin",
+            body=body,
+        )
+
+    def rotate_webhook_secret(self, app_id: str) -> m.AtlasIdApp:
+        """Rotate the app's webhook signing secret (``webhook_secret``, returned once)."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/platform/atlas_id_apps/{app_id}/webhook/rotate_secret",
+        )
+
+
+class PlatformAtlasIdPublisher:
+    """The account's Sign in with Atlas publisher name and DNS-verified domain."""
+
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def get(self) -> m.AtlasIdPublisher:
+        """Read the publisher (404 until claimed)."""
+        return self._t.request(
+            method="GET",
+            path="/v1/platform/atlas_id_publisher",
+        )
+
+    def set(self, body: m.SetAtlasIdPublisherBody) -> m.AtlasIdPublisher:
+        """Claim a publisher name and domain; returns the TXT record to publish."""
+        return self._t.request(
+            method="PUT",
+            path="/v1/platform/atlas_id_publisher",
+            body=body,
+        )
+
+    def update(self, body: m.UpdateAtlasIdPublisherBody) -> m.AtlasIdPublisher:
+        """Turn publisher-wide consent (``skip_consent``) on or off."""
+        return self._t.request(
+            method="PATCH",
+            path="/v1/platform/atlas_id_publisher",
+            body=body,
+        )
+
+    def delete(self) -> m.AtlasIdPublisherDeleteResult:
+        """Remove the publisher claim."""
+        return self._t.request(
+            method="DELETE",
+            path="/v1/platform/atlas_id_publisher",
+        )
+
+    def verify(self) -> m.AtlasIdPublisher:
+        """Look up the TXT record now (``record_found``)."""
+        return self._t.request(
+            method="POST",
+            path="/v1/platform/atlas_id_publisher/verify",
+        )
+
+
+class PlatformConfigChangelog:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def list(
+        self,
+        *,
+        action: str | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
+        since: str | None = None,
+    ) -> CursorPage:
+        """Config change history for the account's Sign in with Atlas apps."""
+        return self._t.request(
+            method="GET",
+            path="/v1/platform/config_changelog",
+            query=_q(action=action, limit=limit, starting_after=starting_after, since=since),
         )
 
 

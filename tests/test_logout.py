@@ -207,3 +207,32 @@ def test_logout_token_from_form() -> None:
     assert logout_token_from_form({"logout_token": "t"}) == "t"
     assert logout_token_from_form({"logout_token": ["t2"]}) == "t2"
     assert logout_token_from_form(b"other=1") == ""
+
+
+def test_unreachable_jwks_is_no_keys_and_retryable() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get(JWKS).mock(side_effect=httpx.ConnectError("unreachable"))
+        v = LogoutTokenVerifier(issuer=ISSUER, client_id=CLIENT_ID)
+        with pytest.raises(VerificationError) as info:
+            v.verify(mint())
+    assert info.value.reason == "no_keys"
+    assert info.value.retryable is True
+
+
+def test_jwks_5xx_is_retryable() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get(JWKS).mock(return_value=httpx.Response(503))
+        v = LogoutTokenVerifier(issuer=ISSUER, client_id=CLIENT_ID)
+        with pytest.raises(VerificationError) as info:
+            v.verify(mint())
+    assert info.value.retryable is True
+
+
+def test_a_bad_token_is_not_retryable(verifier: LogoutTokenVerifier) -> None:
+    with pytest.raises(VerificationError) as info:
+        verifier.verify(mint(claims={"aud": "someone-else"}))
+    assert info.value.reason == "invalid"
+    assert info.value.retryable is False
+    with pytest.raises(VerificationError) as malformed:
+        verifier.verify("not-a-jwt")
+    assert malformed.value.retryable is False

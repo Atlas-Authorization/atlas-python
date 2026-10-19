@@ -121,6 +121,7 @@ class AtlasClient:
         self.legacy_auth_connection = r.LegacyAuthConnection(transport)
         self.localizations = r.Localizations(transport)
         self.log_streams = r.LogStreams(transport)
+        self.logout_notify_endpoints = r.LogoutNotifyEndpoints(transport)
         self.lti_platforms = r.LtiPlatforms(transport)
         self.m2m_tokens = r.M2mTokens(transport)
         self.machine_enrolment_tokens = r.MachineEnrolmentTokens(transport)
@@ -261,6 +262,7 @@ class AsyncAtlasClient:
         self.legacy_auth_connection = ar.AsyncLegacyAuthConnection(transport)
         self.localizations = ar.AsyncLocalizations(transport)
         self.log_streams = ar.AsyncLogStreams(transport)
+        self.logout_notify_endpoints = ar.AsyncLogoutNotifyEndpoints(transport)
         self.lti_platforms = ar.AsyncLtiPlatforms(transport)
         self.m2m_tokens = ar.AsyncM2mTokens(transport)
         self.machine_enrolment_tokens = ar.AsyncMachineEnrolmentTokens(transport)
@@ -360,6 +362,8 @@ class AtlasPlatformClient:
         self.apps = r.PlatformApps(transport)
         self.accountless_apps = r.PlatformAccountlessApps(transport)
         self.atlas_id_apps = r.PlatformAtlasIdApps(transport)
+        self.atlas_id_publisher = r.PlatformAtlasIdPublisher(transport)
+        self.config_changelog = r.PlatformConfigChangelog(transport)
         self.design_assets = r.PlatformDesignAssets(transport)
 
     def with_options(
@@ -426,6 +430,8 @@ class AsyncAtlasPlatformClient:
         self.apps = ar.AsyncPlatformApps(transport)
         self.accountless_apps = ar.AsyncPlatformAccountlessApps(transport)
         self.atlas_id_apps = ar.AsyncPlatformAtlasIdApps(transport)
+        self.atlas_id_publisher = ar.AsyncPlatformAtlasIdPublisher(transport)
+        self.config_changelog = ar.AsyncPlatformConfigChangelog(transport)
         self.design_assets = ar.AsyncPlatformDesignAssets(transport)
 
     def with_options(

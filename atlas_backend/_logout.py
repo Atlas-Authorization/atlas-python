@@ -4,7 +4,8 @@ When a user signs out of Atlas, Atlas POSTs a signed ``logout_token`` (form
 field ``logout_token``) to each app's ``backchannel_logout_uri``. Your endpoint
 verifies it with :class:`LogoutTokenVerifier`, ends the matching local
 session(s) by ``sid`` (or every session of ``sub`` when there is no ``sid``),
-and answers ``200`` with ``Cache-Control: no-store`` (``400`` when invalid).
+and answers ``200`` with ``Cache-Control: no-store`` (``400`` when invalid,
+``503`` with ``Retry-After`` when the error is ``retryable``).
 
     from atlas_backend import LogoutTokenVerifier, logout_token_from_form
 
@@ -12,7 +13,12 @@ and answers ``200`` with ``Cache-Control: no-store`` (``400`` when invalid).
         issuer="https://atlasauth.net",
         client_id="your_client_id",
     )
-    claims = verifier.verify(logout_token_from_form(request_body))
+    try:
+        claims = verifier.verify(logout_token_from_form(request_body))
+    except VerificationError as err:
+        # retryable: Atlas's keys could not be fetched right now. 503 makes
+        # Atlas retry; 400 is final.
+        return (503, {"Retry-After": "30"}) if err.retryable else (400, {})
 
 The checks follow §2.6 of the spec: RS256 signature against the issuer's JWKS
 (the same cached, throttled JWKS fetch the session verifier uses), ``iss``,
@@ -157,6 +163,9 @@ class LogoutTokenVerifier:
             raise VerificationError(VerificationError.NO_KEYS)
         jwk = AtlasBackend._select_jwk(keyset["keys"], kid)
         if jwk is None:
+            # A key Atlas just rotated to, whose refetch failed: temporary.
+            if self.jwks.last_outcome == "failed":
+                raise VerificationError(VerificationError.NO_KEYS)
             raise VerificationError(VerificationError.INVALID)
 
         try:

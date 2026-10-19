@@ -159,6 +159,17 @@ class VerificationError(Exception):
         self.reason = reason
         super().__init__(f"atlas: token verification failed: {reason}")
 
+    @property
+    def retryable(self) -> bool:
+        """True when the failure is temporary and on the verifier's side.
+
+        That is ``no_keys``: the issuer's keys could not be fetched (a network
+        error or a JWKS outage). A back-channel logout endpoint should answer
+        ``503`` with ``Retry-After`` then, so Atlas retries the delivery, and
+        ``400`` for every other reason, which Atlas never retries.
+        """
+        return self.reason == self.NO_KEYS
+
 
 # --------------------------------------------------------------------------- #
 # JWKS cache                                                                  #

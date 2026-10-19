@@ -349,6 +349,26 @@ atlas.organizations.update_policy(
 )
 ```
 
+## Domain moves, logout fan-out and managed email
+
+```python
+# Move every URL from the old origin to the new one. dry_run first shows the diff.
+preview = atlas.instance.move_origin({"from": "https://old.example.com", "to": "https://example.com", "dry_run": True})
+for change in preview["changes"]:
+    print(change["object"], change["field"], change["before"], "->", change["after"])
+
+# Send the same logout_token your OIDC apps get to another service.
+atlas.logout_notify_endpoints.create({"url": "https://api.example.com/atlas/logout"})
+
+# Send email from your own domain through Atlas, then publish the returned DNS records.
+managed = atlas.messaging_providers.managed_email.create({"from_address": "Acme <no-reply@example.com>"})
+print(managed["records"])
+```
+
+On the platform client, `atlas_id_apps.find_users(app_id, email)` answers a privacy request for one app,
+`atlas_id_apps.revoke_grant(app_id, grant_id)` revokes one person's approval, and `atlas_id_publisher` claims and
+verifies the publisher name shown on consent screens.
+
 ## Back-channel logout
 
 When a user signs out of Atlas, Atlas POSTs a signed `logout_token` to your app's

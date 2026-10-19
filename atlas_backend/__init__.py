@@ -52,7 +52,9 @@ from ._verify import (
     VerificationError,
 )
 
-__version__ = "0.5.1"
+from ._webhooks import WebhookVerification, verify_webhook
+
+__version__ = "0.6.0"
 
 __all__ = [
     "AtlasClient",
@@ -94,5 +96,7 @@ __all__ = [
     "CLOCK_SKEW_SECONDS",
     "REFETCH_INTERVAL_MS",
     "DEFAULT_TTL_MS",
+    "verify_webhook",
+    "WebhookVerification",
     "__version__",
 ]

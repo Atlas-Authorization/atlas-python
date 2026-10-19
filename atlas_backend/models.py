@@ -18,7 +18,7 @@ from ._types import Metadata
 # --------------------------------------------------------------------------- #
 
 
-class User(TypedDict):
+class _UserRequired(TypedDict):
     object: Literal["user"]
     id: str
     username: str | None
@@ -32,6 +32,12 @@ class User(TypedDict):
     last_sign_in_at: int | None
     created_at: int
     updated_at: int
+
+
+class User(_UserRequired, total=False):
+    #: Strictly increases with every change to the user; webhook payloads carry the same
+    #: value. Apply an update only if its version is higher than the one you hold.
+    version: int
 
 
 class EmailAddress(TypedDict):
@@ -366,6 +372,40 @@ class WebhookEndpoint(TypedDict):
     created_at: int
 
 
+class WebhookEventCatalogEntry(TypedDict, total=False):
+    """One subscribable event, described (``event_catalog`` on the endpoint list)."""
+
+    name: str
+    description: str
+    #: Who should act on it, e.g. ``rp_sessions``, ``rp_accounts``, ``dsar``.
+    relevant_for: list[str]
+    #: Set on a superseded spelling: subscribe to this event instead.
+    deprecated_alias_of: str
+
+
+class WebhookDelivery(TypedDict, total=False):
+    """One webhook delivery attempt (``webhooks.endpoints.list_deliveries``)."""
+
+    object: Literal["webhook_delivery"]
+    id: str
+    event_id: str
+    event_type: str | None
+    attempt_number: int
+    max_attempts: int
+    payload: Any
+    status: Literal["pending", "success", "failed"]
+    http_status: int | None
+    #: ``webhook_redirect_not_followed`` (see ``location``), ``webhook_http_error``,
+    #: ``webhook_timeout``, ``webhook_network_error`` or ``webhook_url_blocked``.
+    error: str | None
+    #: The absolute ``Location`` of a 3xx answer. Not followed.
+    location: str | None
+    response_snippet: str | None
+    next_retry_at: int | None
+    delivered_at: int | None
+    created_at: int
+
+
 class _CreateWebhookEndpointRequired(TypedDict):
     url: str
 
@@ -628,6 +668,21 @@ class CustomDomain(TypedDict):
     failure_reason: str | None
     certificate_expires_at: int | None
     cookie_domain: str | None
+    #: DNS automation: ``{"provider": "cloudflare", "token_set": True}`` or ``None``.
+    dns: dict[str, Any] | None
+
+
+class _CustomDomainDnsInputRequired(TypedDict):
+    provider: Literal["cloudflare"]
+    #: Write-only; never returned.
+    api_token: str
+
+
+class CustomDomainDnsInput(_CustomDomainDnsInputRequired, total=False):
+    """Let Atlas write the domain's DNS record."""
+
+    #: Replace a conflicting existing record.
+    overwrite: bool
 
 
 class _CreateDomainRequired(TypedDict):
@@ -636,6 +691,7 @@ class _CreateDomainRequired(TypedDict):
 
 class CreateDomainBody(_CreateDomainRequired, total=False):
     role: Literal["fapi", "accounts"]
+    dns: CustomDomainDnsInput
 
 
 # --------------------------------------------------------------------------- #
@@ -839,6 +895,13 @@ class AtlasIdApp(_AtlasIdAppRequired, total=False):
     #: Confidential apps only; returned exactly once (on create and rotate_secret).
     client_secret: str
     note: str
+    #: The per-app webhook URL, or ``None``.
+    webhook_url: str | None
+    webhook_events: list[str]
+    #: ``False`` once auto-disabled after repeated failures; ``None`` without a webhook.
+    webhook_active: bool | None
+    #: The per-app webhook signing secret, returned exactly once (first set or rotated).
+    webhook_secret: str
 
 
 class AtlasIdAppList(TypedDict):
@@ -2827,6 +2890,25 @@ class CookieConsentSettingsLink(TypedDict):
     rendered_attributes: dict[str, str]
 
 
+class DeclaredCookie(TypedDict):
+    """A cookie or browser-storage key Atlas writes (all strictly necessary)."""
+
+    #: The exact name, or ``None`` when ``pattern`` describes a family of keys.
+    name: str | None
+    #: A ``*`` wildcard for keys with an id suffix, e.g. ``atlasid:*``.
+    pattern: str | None
+    store: Literal["cookie", "localStorage", "sessionStorage", "indexedDB"]
+    domain: str
+    #: Seconds; ``None`` = browser session (cookie) or until cleared (storage).
+    lifetime_seconds: int | None
+    lifetime: str
+    http_only: bool
+    category: Literal["necessary"]
+    purpose: str
+    written_when: str
+    set_by: Literal["atlas_frontend_api", "atlas_sdk"]
+
+
 class _CookieConsentRequired(TypedDict):
     object: Literal["cookie_consent"]
     enabled: bool
@@ -2843,6 +2925,10 @@ class CookieConsent(_CookieConsentRequired, total=False):
     extra_origins: list[str]
     #: The "cookie settings" link, or ``None`` when there is none.
     settings_link: CookieConsentSettingsLink | None
+    #: ``page`` (default): the CMP tag carries the page language; ``browser``: no attribute.
+    culture: Literal["page", "browser"]
+    #: Every cookie and browser-storage key Atlas writes for this instance.
+    declared_cookies: list[DeclaredCookie]
 
 
 class _SetCookieConsentBodyRequired(TypedDict):
@@ -2862,6 +2948,8 @@ class SetCookieConsentBody(_SetCookieConsentBodyRequired, total=False):
     #: A "cookie settings" link that reopens the CMP preferences; ``None`` or omitted
     #: means no link.
     settings_link: CookieConsentSettingsLinkInput | None
+    #: ``page`` (default) or ``browser``.
+    culture: Literal["page", "browser"] | None
 
 
 class SetKerberosSecretBody(TypedDict, total=False):
@@ -2909,7 +2997,30 @@ class PreflightFindingsItem(_PreflightFindingsItemRequired, total=False):
     subject: dict[str, str]
 
 
-class Preflight(TypedDict):
+class SdkAdvisory(TypedDict):
+    object: Literal["sdk_advisory"]
+    #: e.g. ``@atlasauth/react``.
+    package: str
+    #: The affected range, e.g. ``<0.8.1``.
+    affected: str
+    fixed_in: str
+    #: Stable code, e.g. ``email_code_sign_in``.
+    reason: str
+    severity: Literal["critical", "high", "medium", "low"]
+    summary: str
+    #: ISO date.
+    published_at: str
+
+
+class SdkVersionSeen(TypedDict):
+    package: str
+    version: str
+    #: Epoch ms.
+    last_seen_at: int
+    advisories: list[SdkAdvisory]
+
+
+class _PreflightRequired(TypedDict):
     object: Literal["preflight"]
     #: True when there are no error-severity findings.
     ok: bool
@@ -2917,6 +3028,11 @@ class Preflight(TypedDict):
     checked_at: int
     #: Ordered error, then warning, then info.
     findings: list[PreflightFindingsItem]
+
+
+class Preflight(_PreflightRequired, total=False):
+    #: Atlas browser SDK versions seen in the last 7 days, with their advisories.
+    sdk_versions_seen: list[SdkVersionSeen]
 
 
 class _InstanceSecurityRequired(TypedDict):
@@ -3386,10 +3502,16 @@ class MessagingProvider(TypedDict):
     updated_at: int
 
 
-class MessagingProviders(TypedDict):
+class _MessagingProvidersRequired(TypedDict):
     object: Literal["messaging_providers"]
     email: MessagingProvider | None
     sms: MessagingProvider | None
+
+
+class MessagingProviders(_MessagingProvidersRequired, total=False):
+    #: The Atlas-managed sending domain summary (``object``, ``from_address``, ``domain``,
+    #: ``status``, ``verified``), or ``None``.
+    managed_email: dict[str, Any] | None
 
 
 class EmailProviderResendConfig(TypedDict, total=False):
@@ -4491,6 +4613,9 @@ class UpdateAtlasIdAppBody(TypedDict, total=False):
     allowed_scopes: list[str]
     #: How the Sign in with Atlas page and consent screen look for this app.
     branding: CreateAtlasIdAppBodyBranding | None
+    #: Per-app webhook (public https): user.updated, user.deleted and grant.revoked for this
+    #: app's users. The first set returns ``webhook_secret`` once; ``None`` removes it.
+    webhook_url: str | None
 
 
 class CreateRadiusClientBody(TypedDict, total=False):
@@ -5342,3 +5467,398 @@ class _WebhookSecretRotationRequired(TypedDict):
 
 class WebhookSecretRotation(_WebhookSecretRotationRequired, total=False):
     warning: str
+
+
+# --------------------------------------------------------------------------- #
+# Origin moves, connections, integrations, logout fan-out, managed email,      #
+# back-channel deliveries, Sign in with Atlas publisher                        #
+# --------------------------------------------------------------------------- #
+
+#: ``instance.move_origin`` / ``atlas_id_apps.move_origin`` body. ``from`` is a Python
+#: keyword, so this TypedDict uses the functional form: ``{"from": ..., "to": ...}``.
+#: ``from`` / ``to`` are ``scheme://host[:port]`` origins; ``dry_run: True`` writes nothing.
+_OriginMoveBodyRequired = TypedDict("_OriginMoveBodyRequired", {"from": str, "to": str})
+
+
+class OriginMoveBody(_OriginMoveBodyRequired, total=False):
+    dry_run: bool
+
+
+class OriginMoveChange(TypedDict):
+    object: Literal["instance", "oauth_client", "atlas_id_app", "webhook_endpoint", "redirect_url"]
+    id: str
+    #: e.g. ``allowed_origins``, ``redirect_uris``, ``homepage_url``.
+    field: str
+    before: str | list[str] | None
+    after: str | list[str] | None
+
+
+class OriginMoveProblem(TypedDict, total=False):
+    object: str
+    id: str
+    field: str
+    url: str
+    message: str
+
+
+_OriginMoveRequired = TypedDict(
+    "_OriginMoveRequired",
+    {
+        "object": Literal["origin_move"],
+        "from": str,
+        "to": str,
+        "dry_run": bool,
+        "applied": bool,
+        "changes": "list[OriginMoveChange]",
+        "problems": "list[OriginMoveProblem]",
+    },
+)
+
+
+class OriginMove(_OriginMoveRequired, total=False):
+    """The before → after diff of an origin move. A repeated run returns no changes."""
+
+    #: Platform app twin only: the app after the move.
+    app: dict[str, Any]
+
+
+class InstanceConnection(TypedDict):
+    """One link from this instance to another platform, and its health."""
+
+    object: Literal["connection"]
+    kind: Literal["privacy_webhook", "cmp", "atlas_id_app", "jwt_template"]
+    #: What was checked, e.g. ``privacy_webhook_delivery`` or ``cmp_site``.
+    check: str
+    ok: bool
+    severity: Literal["error", "warning", "info"]
+    subject: dict[str, str]
+    #: What to do when ``ok`` is false.
+    fix_hint: str | None
+    last_checked_at: int
+    #: Kind-specific facts.
+    details: dict[str, Any]
+
+
+class InstanceConnections(TypedDict):
+    object: Literal["instance_connections"]
+    #: False when any warning- or error-severity row is not ok.
+    ok: bool
+    checked_at: int
+    data: list[InstanceConnection]
+
+
+class _ChatlyIntegrationRequired(TypedDict):
+    object: Literal["chatly_integration"]
+    enabled: bool
+
+
+class ChatlyIntegration(_ChatlyIntegrationRequired, total=False):
+    """The Chatly connection (``enabled: False`` and nothing else when none is set)."""
+
+    channel: str
+    #: The template name to pass to ``getToken({ template: 'chatly' })``.
+    template: Literal["chatly"]
+    #: ``chatly:<channel>``.
+    audience: str
+    issuer: str
+    jwks_url: str
+    token_ttl_seconds: int
+    identity_verification: dict[str, str]
+
+
+class SetChatlyIntegrationBody(TypedDict):
+    #: The chat channel public id (letters, digits, ``_`` and ``-``).
+    channel: str
+
+
+class ForumulateSpace(TypedDict):
+    id: str
+    #: Where the reader's browser redeems the token.
+    redeem_url: str
+
+
+class _ForumulateIntegrationRequired(TypedDict):
+    object: Literal["forumulate_integration"]
+    enabled: bool
+
+
+class ForumulateIntegration(_ForumulateIntegrationRequired, total=False):
+    """The Forumulate connection (``enabled: False`` and nothing else when none is set)."""
+
+    org_id: str
+    spaces: list[ForumulateSpace]
+    audience: str
+    issuer: str
+    jwks_url: str
+    token_ttl_seconds: int
+    #: The external_jwt provider to store on each space.
+    reader_auth_provider: dict[str, Any]
+
+
+class _SetForumulateIntegrationBodyRequired(TypedDict):
+    org_id: str
+    #: 1-50 space ids, or ``{"id": ..., "redeem_url": ...}``.
+    spaces: list[str | dict[str, Any]]
+
+
+class SetForumulateIntegrationBody(_SetForumulateIntegrationBodyRequired, total=False):
+    #: The token ``aud``. Default ``forumulate:<org_id>``.
+    audience: str | None
+
+
+class LogoutNotifyEndpoint(TypedDict, total=False):
+    """A logout fan-out endpoint: gets the same ``logout_token`` as your OIDC apps."""
+
+    object: Literal["logout_notify_endpoint"]
+    id: str
+    url: str
+    #: The client_id this endpoint follows; ``None`` = instance-wide.
+    oauth_client_id: str | None
+    #: The ``aud`` its logout_tokens carry.
+    audience: str
+    description: str | None
+    created_at: int
+    updated_at: int
+
+
+class _CreateLogoutNotifyEndpointBodyRequired(TypedDict):
+    #: Public https endpoint.
+    url: str
+
+
+class CreateLogoutNotifyEndpointBody(_CreateLogoutNotifyEndpointBodyRequired, total=False):
+    #: A client_id of this instance to follow; omit for instance-wide.
+    oauth_client_id: str | None
+    #: Default: the client_id when following a client, else the instance id.
+    audience: str | None
+    description: str | None
+
+
+class UpdateLogoutNotifyEndpointBody(TypedDict, total=False):
+    url: str
+    audience: str | None
+    description: str | None
+
+
+class LogoutNotifyDelivery(TypedDict, total=False):
+    object: Literal["logout_notify_delivery"]
+    id: str
+    sub: str
+    #: ``None`` = a subject-wide logout (ban / deletion).
+    sid: str | None
+    status: Literal["pending", "success", "failed"]
+    attempt_number: int
+    http_status: int | None
+    response_snippet: str | None
+    next_retry_at: int | None
+    delivered_at: int | None
+    created_at: int
+
+
+class ManagedEmailRecord(TypedDict, total=False):
+    purpose: Literal["dkim", "spf", "return_path", "other"]
+    type: Literal["TXT", "MX", "CNAME"]
+    #: Fully-qualified record name.
+    name: str
+    value: str
+    priority: int
+    status: str
+
+
+class _ManagedEmailRequired(TypedDict):
+    object: Literal["managed_email"]
+    id: str
+    from_address: str
+    domain: str
+    provider: str
+    region: str | None
+    #: ``not_started`` | ``pending`` | ``verified`` | ``failed`` | ``temporary_failure``.
+    status: str
+    verified: bool
+    records: list[ManagedEmailRecord]
+    #: ``{"hourly": int, "daily": int}``.
+    limits: dict[str, int]
+    #: ``sent``, ``bounces``, ``complaints``, ``last_bounce_at``, ``last_complaint_at``.
+    usage: dict[str, Any]
+    reputation: Literal["shared_platform_account"]
+    #: ``{"provider": str, "token_set": bool}`` or ``None``; the token is never returned.
+    dns: dict[str, Any] | None
+    failure_reason: str | None
+    last_checked_at: int | None
+    verified_at: int | None
+    created_at: int
+    updated_at: int
+
+
+class ManagedEmail(_ManagedEmailRequired, total=False):
+    """Atlas-managed email: your own sending domain on Atlas's email account."""
+
+    #: Create only, with ``dns``: the zone and the records Atlas wrote.
+    dns_result: dict[str, Any]
+    next_step: str
+
+
+class _ManagedEmailDnsInputRequired(TypedDict):
+    provider: Literal["cloudflare"]
+    #: A DNS API token with Zone Read and DNS Edit. Write-only.
+    api_token: str
+
+
+class ManagedEmailDnsInput(_ManagedEmailDnsInputRequired, total=False):
+    #: Replace a conflicting existing record.
+    overwrite: bool
+
+
+class _CreateManagedEmailBodyRequired(TypedDict):
+    #: Bare or ``"Name <address>"``; its domain becomes the sending domain.
+    from_address: str
+
+
+class CreateManagedEmailBody(_CreateManagedEmailBodyRequired, total=False):
+    region: Literal["us-east-1", "eu-west-1", "sa-east-1", "ap-northeast-1"]
+    dns: ManagedEmailDnsInput
+
+
+class ManagedEmailDeleteResult(TypedDict):
+    object: Literal["managed_email"]
+    domain: str
+    deleted: Literal[True]
+
+
+class BackchannelLogoutDelivery(TypedDict, total=False):
+    """One back-channel logout attempt. Atlas never follows redirects."""
+
+    object: Literal["backchannel_logout_delivery"]
+    id: str
+    oauth_client_id: str | None
+    #: The ended session (``sid_test_…`` for a test); ``None`` for "sign out everywhere".
+    sid: str | None
+    #: Sent by the test call; never retried.
+    test: bool
+    status: Literal["pending", "success", "failed"]
+    attempt_number: int
+    max_attempts: int
+    http_status: int | None
+    latency_ms: int | None
+    #: ``backchannel_redirect_not_followed``, ``backchannel_http_error``,
+    #: ``backchannel_timeout``, ``backchannel_network_error`` or ``backchannel_url_blocked``.
+    error: str | None
+    #: The absolute ``Location`` of a 3xx answer. Not followed.
+    location: str | None
+    response_snippet: str | None
+    next_retry_at: int | None
+    attempted_at: int | None
+    delivered_at: int | None
+    created_at: int
+
+
+class BackchannelLogoutDeliveryList(TypedDict):
+    object: Literal["list"]
+    #: Newest first.
+    data: list[BackchannelLogoutDelivery]
+    has_more: bool
+    #: Pass as ``starting_after`` for the next page.
+    next_cursor: str | None
+
+
+class BackchannelLogoutTest(TypedDict):
+    """A test back-channel logout, sent now and recorded with ``test: True``."""
+
+    object: Literal["backchannel_logout_test"]
+    delivery_id: str
+    #: True when the receiver answered 2xx.
+    ok: bool
+    sid: str
+    status: int | None
+    latency_ms: int | None
+    error: str | None
+    location: str | None
+    #: Set when nothing was sent (private, loopback or non-https address).
+    blocked_reason: str | None
+    body_excerpt: str | None
+
+
+class AtlasIdAppPreflight(TypedDict):
+    object: Literal["preflight"]
+    app_id: str
+    #: True when there are no error-severity findings.
+    ok: bool
+    checked_at: int
+    #: People who have approved the app.
+    user_count: int
+    findings: list[PreflightFindingsItem]
+
+
+class AtlasIdAppUser(TypedDict):
+    """A person who has approved a Sign in with Atlas app."""
+
+    object: Literal["atlas_id_user"]
+    atlas_id_user: Literal[True]
+    #: The user id as this app sees it (the id_token ``sub``).
+    sub: str
+    grant_id: str
+    scopes: list[str]
+    granted_at: int
+
+
+class AtlasIdAppUserList(TypedDict):
+    object: Literal["list"]
+    data: list[AtlasIdAppUser]
+
+
+class _AtlasIdGrantRevocationRequired(TypedDict):
+    object: Literal["atlas_id_grant"]
+    id: str
+    sub: str
+    revoked: Literal[True]
+
+
+class AtlasIdGrantRevocation(_AtlasIdGrantRevocationRequired, total=False):
+    tokens_revoked: int
+    backchannel_logouts: int
+
+
+class AtlasIdPublisherVerification(TypedDict):
+    record_name: str
+    record_type: Literal["TXT"]
+    record_value: str
+
+
+class _AtlasIdPublisherRequired(TypedDict):
+    object: Literal["atlas_id_publisher"]
+    name: str
+    domain: str
+    verified: bool
+    skip_consent: bool
+    verification: AtlasIdPublisherVerification
+
+
+class AtlasIdPublisher(_AtlasIdPublisherRequired, total=False):
+    """The account's Sign in with Atlas publisher (name + DNS-verified domain)."""
+
+    verified_at: int | None
+    last_checked_at: int | None
+    created_at: int
+    updated_at: int
+    #: On ``verify`` only: whether the TXT record matched.
+    record_found: bool
+
+
+class _SetAtlasIdPublisherBodyRequired(TypedDict):
+    #: Shown on consent screens once verified (up to 100 characters).
+    name: str
+    #: The host your apps' homepage_url lives on, e.g. ``example.com``.
+    domain: str
+
+
+class SetAtlasIdPublisherBody(_SetAtlasIdPublisherBodyRequired, total=False):
+    skip_consent: bool
+
+
+class UpdateAtlasIdPublisherBody(TypedDict):
+    skip_consent: bool
+
+
+class AtlasIdPublisherDeleteResult(TypedDict):
+    object: Literal["atlas_id_publisher"]
+    deleted: Literal[True]

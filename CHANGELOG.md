@@ -2,6 +2,42 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.6.0
+
+### Added
+
+- **Back-channel logout, retryable failures.** `VerificationError.retryable` (bool) is `True` for
+  `no_keys`: the issuer's keys could not be fetched (a network error, a JWKS outage, or a
+  just-rotated key whose refetch failed). Answer `503` with `Retry-After` then, so Atlas retries the
+  delivery, and `400` otherwise. A token whose `kid` is unknown after a failed JWKS refetch is now
+  `no_keys` (was `invalid`).
+- **Webhook verification.** `verify_webhook(body, headers, secret, *, now_ms=None, tolerance_ms=300000)`
+  returns `WebhookVerification` (`verified`, `reason`, `event`, `delivery_id`, `timestamp`). `delivery_id`
+  is the signed `atlas-id` header, the same on every retry of one event: deduplicate on it.
+- **Domain moves.** `instance.move_origin({"from": ..., "to": ..., "dry_run": ...})` rewrites every URL on one
+  origin to another across the instance, its OAuth clients, webhooks, redirect URLs and Sign in with Atlas apps
+  (`OriginMove`: `changes`, `problems`, `applied`). The platform client's `atlas_id_apps.move_origin(app_id, body)`
+  does the same for one app.
+- **Connections and integrations.** `instance.connections()` (`InstanceConnections`) and
+  `instance.integrations.get_chatly / set_chatly / delete_chatly / get_forumulate / set_forumulate /
+  delete_forumulate` (`ChatlyIntegration`, `ForumulateIntegration`).
+- **Logout fan-out.** New `logout_notify_endpoints` namespace: `list`, `create`, `get`, `update`, `delete`,
+  `list_deliveries` (`LogoutNotifyEndpoint`, `LogoutNotifyDelivery`).
+- **Managed email.** `messaging_providers.managed_email.get / create / verify / delete(force=...)`
+  (`ManagedEmail`, `CreateManagedEmailBody`). `MessagingProviders` gains `managed_email`.
+- **Back-channel logout logs.** `oauth_clients.list_backchannel_deliveries(client_id, limit=, starting_after=)` and
+  `oauth_clients.test_backchannel_logout(client_id)`, plus the same two on `atlas_id_apps`
+  (`BackchannelLogoutDeliveryList`, `BackchannelLogoutTest`).
+- **Sign in with Atlas apps.** `atlas_id_apps.preflight(app_id)` (`AtlasIdAppPreflight`), `find_users(app_id, email)`,
+  `revoke_grant(app_id, grant_id)` and `rotate_webhook_secret(app_id)`. `AtlasIdApp` gains `webhook_url`,
+  `webhook_events`, `webhook_active` and `webhook_secret`; `UpdateAtlasIdAppBody` accepts `webhook_url`.
+- **Publisher.** The platform client's new `atlas_id_publisher` namespace: `get`, `set`, `update`, `delete`,
+  `verify` (`AtlasIdPublisher`), and `config_changelog.list(...)` for the account's config history.
+- **More fields.** `User.version`; `CookieConsent.culture` and `declared_cookies` (`DeclaredCookie`);
+  `SetCookieConsentBody.culture`; `Preflight.sdk_versions_seen` (`SdkVersionSeen`, `SdkAdvisory`);
+  `WebhookDelivery` (`error`, `location`) and `WebhookEventCatalogEntry`; `CustomDomain.dns` and
+  `CreateDomainBody.dns` (`CustomDomainDnsInput`).
+
 ## 0.5.1
 
 ### Added
