@@ -54,7 +54,7 @@ from ._verify import (
 
 from ._webhooks import WebhookVerification, verify_webhook
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = [
     "AtlasClient",

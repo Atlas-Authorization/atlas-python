@@ -40,13 +40,32 @@ class User(_UserRequired, total=False):
     version: int
 
 
-class EmailAddress(TypedDict):
+class _EmailAddressVerificationRequired(TypedDict):
+    status: Literal["verified", "unverified"]
+
+
+class EmailAddressVerification(_EmailAddressVerificationRequired, total=False):
+    """How (and whether) an address was proven."""
+
+    #: ``email_code``, ``email_link``, ``oauth``, ``admin``, ``import``, ``scim``, ``lti``;
+    #: ``skipped`` for an address held for sign-in but never proven; ``None`` when not verified.
+    strategy: str | None
+
+
+class _EmailAddressRequired(TypedDict):
     object: Literal["email_address"]
     id: str
     email_address: str
+    #: True only when the address was proven. An address that signed up while
+    #: ``requireEmailVerification`` was false reads ``False``.
     verified: bool
     primary: bool
     created_at: int
+
+
+class EmailAddress(_EmailAddressRequired, total=False):
+    #: ``status`` mirrors ``verified``; ``strategy`` says how it was verified.
+    verification: EmailAddressVerification
 
 
 class OAuthAccessToken(TypedDict):
@@ -439,10 +458,35 @@ class _OAuthClientRequired(TypedDict):
 
 
 class OAuthClient(_OAuthClientRequired, total=False):
+    #: After a rotation with overlap: when the previous secret stops working (epoch ms).
+    #: ``None`` when only the current secret is accepted.
+    previous_secret_expires_at: int | None
     #: First-party only. When ``True``, ``/oauth2/logout`` with this client's
     #: ``client_id`` and an exactly registered ``post_logout_redirect_uri`` ends the
     #: session and redirects straight back (with ``state``), skipping the
     #: confirmation page. ``False`` by default.
+    skip_logout_confirmation: bool
+
+
+class RotateOAuthClientSecretBody(TypedDict, total=False):
+    #: How long the previous secret keeps working, in seconds. Default 86400 (24 hours);
+    #: 0 revokes it now; at most 604800 (7 days).
+    overlap_seconds: int
+
+
+class _OAuthClientSecretRotationRequired(_OAuthClientRequired):
+    #: The new client secret. Returned exactly once.
+    client_secret: str
+    #: The overlap applied, in seconds.
+    overlap_seconds: int
+    #: When the previous secret stops working (epoch ms), or ``None`` when it already has.
+    previous_secret_expires_at: int | None
+
+
+class OAuthClientSecretRotation(_OAuthClientSecretRotationRequired, total=False):
+    """The rotate response: the client, its new secret (shown once) and the overlap."""
+
+    note: str
     skip_logout_confirmation: bool
 
 
@@ -1792,6 +1836,24 @@ class Branding(TypedDict):
     resolved: dict[str, Any]
 
 
+class BrandingAudience(TypedDict, total=False):
+    """The hosted-page branding for one audience hint (``branding.audiences[hint]``).
+
+    Write it with ``branding.update({"audiences": {"partners": {...}}})``; ``None`` for a hint
+    deletes it, ``"audiences": None`` removes them all. Start a hosted sign-in with
+    ``audience_hint=<hint>`` to use it. ``resolved["audiences"]`` echoes what the page reads.
+    """
+
+    #: Replaces the card heading (up to 120 characters).
+    heading: str
+    #: Replaces the line under the heading (up to 240 characters).
+    subheading: str
+    #: Replaces the logo (https).
+    logoUrl: str
+    #: Replaces the primary colour (hex, rgb() or a CSS colour name).
+    primaryColor: str
+
+
 class HostedPagePreview(TypedDict):
     object: Literal["hosted_page_preview"]
     html: str
@@ -2290,9 +2352,22 @@ class DesignPreview(TypedDict):
 
 LoginReadinessChecksItem = TypedDict(
     "LoginReadinessChecksItem",
-    {"name": "str", "pass": "bool", "observed": "Any", "detail": "str"},
+    {"name": "str", "pass": "bool", "applies": "bool", "observed": "Any", "detail": "str"},
     total=False,
 )
+"""One check. ``applies`` is ``False`` when it does not matter for the assumed integration
+(it then never makes ``ready`` false)."""
+
+
+class LoginReadinessIntegration(TypedDict):
+    """The integration the checks assumed for the origin, and why."""
+
+    #: ``redirect``: hosted-redirect OIDC, so the ``cors`` and ``session_cookie`` checks do
+    #: not apply.
+    assumed: Literal["redirect", "embedded"]
+    source: Literal["declared", "embedded_traffic", "redirect_clients", "default"]
+    #: A plain sentence saying why.
+    reason: str
 
 
 class _LoginReadinessRequired(TypedDict):
@@ -2305,6 +2380,7 @@ class _LoginReadinessRequired(TypedDict):
 
 class LoginReadiness(_LoginReadinessRequired, total=False):
     data_region: str | None
+    integration: LoginReadinessIntegration
 
 
 class RequestInspectionFindingsItem(TypedDict, total=False):
@@ -2799,7 +2875,20 @@ class InstanceAuthConfigResolved(TypedDict, total=False):
     mfaPolicy: Literal["off", "optional", "required"]
     #: public: anyone may sign up.
     signUpMode: Literal["public", "waitlist", "restricted"]
+    #: Whether a password sign-up must prove the address before it completes. When false the
+    #: address stays unverified until the user proves it later.
     requireEmailVerification: bool
+    #: DANGEROUS. Report addresses that skipped proof as verified again (the old behaviour).
+    dangerouslyReportSkippedEmailsAsVerified: bool
+    #: Refuse unknown body fields on every Backend API write (422 ``UNKNOWN_FIELD``). True for
+    #: instances created from 2026-10 on.
+    strictRequestBodies: bool
+    #: The declared integration per allowed origin (``redirect`` | ``embedded``). Set it with
+    #: ``allowed_origins`` entries ``{"origin", "integration"}``.
+    originIntegrations: dict[str, Literal["redirect", "embedded"]]
+    #: Per-audience hosted-page branding (``{"audiences": {hint: BrandingAudience | None}}``).
+    #: Only ``branding.audiences`` is applied on ``PATCH /v1/instance``.
+    branding: dict[str, Any]
     #: Atlas AS a SAML IdP — "Sign in with Atlas" over SAML for a downstream Service Provider
     #: (direct SAML; no OIDC/atlas_byo needed).
     samlIdp: InstanceAuthConfigResolvedSamlIdp
@@ -2814,7 +2903,16 @@ class Instance(TypedDict, total=False):
     environment: Literal["development", "production"]
     publishable_key: str
     frontend_api_host: str | None
+    #: The ``iss`` the session tokens carry. Changes when a custom domain goes active, so
+    #: read it rather than hard-coding it.
+    issuer: str
+    #: The OpenID discovery document whose ``issuer`` equals ``issuer``.
+    discovery_url: str
+    #: The JWKS holding the instance's signing keys.
+    jwks_uri: str
     allowed_origins: list[str]
+    #: The declared integration per allowed origin (``redirect`` | ``embedded``).
+    allowed_origin_integrations: dict[str, Literal["redirect", "embedded"]]
     #: The raw stored patch (often {} = defaults).
     auth_config: dict[str, Any]
     #: Instance auth configuration.
@@ -2823,9 +2921,25 @@ class Instance(TypedDict, total=False):
     created_at: int
 
 
+class _AllowedOriginEntryRequired(TypedDict):
+    origin: str
+
+
+class AllowedOriginEntry(_AllowedOriginEntryRequired, total=False):
+    """An ``allowed_origins`` entry that also says how the origin signs in."""
+
+    #: ``redirect`` (hosted-redirect OIDC), ``embedded`` (the sign-in components run on the
+    #: origin), or ``auto`` / ``None`` (clear the hint; Atlas infers it).
+    integration: Literal["redirect", "embedded", "auto"] | None
+
+
+#: An origin string (keeps the origin's current hint), or an :class:`AllowedOriginEntry`.
+AllowedOriginInput = Union[str, AllowedOriginEntry]
+
+
 class UpdateInstanceBody(TypedDict, total=False):
-    #: Bare origins, no wildcards.
-    allowed_origins: list[str]
+    #: Bare origins, no wildcards. Strings or ``{"origin", "integration"}`` entries.
+    allowed_origins: list[AllowedOriginInput]
     #: Instance auth configuration.
     auth_config: InstanceAuthConfigResolved
 
@@ -3490,7 +3604,7 @@ class SetMcpConnectorBody(TypedDict, total=False):
     allowed_redirect_hosts: list[str]
 
 
-class MessagingProvider(TypedDict):
+class _MessagingProviderRequired(TypedDict):
     object: Literal["messaging_provider"]
     channel: str
     transport: str
@@ -3500,6 +3614,13 @@ class MessagingProvider(TypedDict):
     secrets_set: dict[str, bool]
     #: Last updated (epoch ms).
     updated_at: int
+
+
+class MessagingProvider(_MessagingProviderRequired, total=False):
+    #: The provider id: pass it as ``provider_id`` to managed email or the development sender.
+    id: str
+    #: How the provider sends.
+    mode: Literal["standard", "development", "managed_domain"]
 
 
 class _MessagingProvidersRequired(TypedDict):
@@ -3512,6 +3633,9 @@ class MessagingProviders(_MessagingProvidersRequired, total=False):
     #: The Atlas-managed sending domain summary (``object``, ``from_address``, ``domain``,
     #: ``status``, ``verified``), or ``None``.
     managed_email: dict[str, Any] | None
+    #: The email provider in development mode (``object``, ``enabled``, ``from_address``), or
+    #: ``None``.
+    development_email: dict[str, Any] | None
 
 
 class EmailProviderResendConfig(TypedDict, total=False):
@@ -3528,6 +3652,9 @@ class _EmailProviderResendRequired(TypedDict):
 class EmailProviderResend(_EmailProviderResendRequired, total=False):
     #: The From address, e.g. "Acme <no-reply@acme.com>".
     from_address: str
+    #: ``development``: a development instance sends without a verified domain (Atlas sign-in
+    #: templates only, capped); 409 on a production instance. Omitted: the stored mode is kept.
+    mode: Literal["standard", "development"]
     #: Provider settings.
     config: EmailProviderResendConfig
 
@@ -3552,6 +3679,9 @@ class _EmailProviderSesRequired(TypedDict):
 class EmailProviderSes(_EmailProviderSesRequired, total=False):
     #: The From address, e.g. "Acme <no-reply@acme.com>".
     from_address: str
+    #: ``development``: a development instance sends without a verified domain (Atlas sign-in
+    #: templates only, capped); 409 on a production instance. Omitted: the stored mode is kept.
+    mode: Literal["standard", "development"]
     #: Provider settings.
     config: EmailProviderSesConfig
 
@@ -3578,6 +3708,9 @@ class _EmailProviderSmtpRequired(TypedDict):
 class EmailProviderSmtp(_EmailProviderSmtpRequired, total=False):
     #: The From address, e.g. "Acme <no-reply@acme.com>".
     from_address: str
+    #: ``development``: a development instance sends without a verified domain (Atlas sign-in
+    #: templates only, capped); 409 on a production instance. Omitted: the stored mode is kept.
+    mode: Literal["standard", "development"]
     #: Provider settings.
     config: EmailProviderSmtpConfig
 
@@ -3596,6 +3729,9 @@ class _EmailProviderBrevoRequired(TypedDict):
 class EmailProviderBrevo(_EmailProviderBrevoRequired, total=False):
     #: The From address, e.g. "Acme <no-reply@acme.com>".
     from_address: str
+    #: ``development``: a development instance sends without a verified domain (Atlas sign-in
+    #: templates only, capped); 409 on a production instance. Omitted: the stored mode is kept.
+    mode: Literal["standard", "development"]
     #: Provider settings.
     config: EmailProviderBrevoConfig
 
@@ -3618,6 +3754,9 @@ class _EmailProviderMailgunRequired(TypedDict):
 class EmailProviderMailgun(_EmailProviderMailgunRequired, total=False):
     #: The From address, e.g. "Acme <no-reply@acme.com>".
     from_address: str
+    #: ``development``: a development instance sends without a verified domain (Atlas sign-in
+    #: templates only, capped); 409 on a production instance. Omitted: the stored mode is kept.
+    mode: Literal["standard", "development"]
     #: Provider settings.
     config: EmailProviderMailgunConfig
 
@@ -4383,6 +4522,7 @@ class UpdatePermissionBody(TypedDict, total=False):
 class CreateAccountlessAppBody(TypedDict, total=False):
     name: str
     environment: str
+    #: Origin strings or ``{"origin", "integration"}`` entries.
     allowed_origins: Any
 
 
@@ -4411,6 +4551,14 @@ class _PlatformAppWithSecretRequired(TypedDict):
     name: str
     environment: Literal["production", "development"]
     publishable_key: str
+    #: The Frontend API host: the default per-app host, or the custom domain once it is active.
+    frontend_api_host: str | None
+    #: The ``iss`` the app's session tokens carry. Changes when a custom domain goes active.
+    issuer: str
+    #: The OpenID discovery document whose ``issuer`` equals ``issuer``.
+    discovery_url: str
+    #: The JWKS holding the app's signing keys.
+    jwks_uri: str
     allowed_origins: list[str]
     #: X8 housekeeping labels (≤20, each ≤40 chars).
     tags: list[str]
@@ -4429,6 +4577,8 @@ class _PlatformAppWithSecretRequired(TypedDict):
 
 class PlatformAppWithSecret(_PlatformAppWithSecretRequired, total=False):
     note: str
+    #: The declared integration per allowed origin (``redirect`` | ``embedded``).
+    allowed_origin_integrations: dict[str, Literal["redirect", "embedded"]]
 
 
 class PlatformAppProvisioned(TypedDict, total=False):
@@ -4470,14 +4620,21 @@ class App(TypedDict):
     note: str
 
 
-class PlatformApp(TypedDict):
-    """An app (instance) a platform owns."""
+class _PlatformAppRequired(TypedDict):
 
     object: Literal["app"]
     id: str
     name: str
     environment: Literal["production", "development"]
     publishable_key: str
+    #: The Frontend API host: the default per-app host, or the custom domain once it is active.
+    frontend_api_host: str | None
+    #: The ``iss`` the app's session tokens carry. Changes when a custom domain goes active.
+    issuer: str
+    #: The OpenID discovery document whose ``issuer`` equals ``issuer``.
+    discovery_url: str
+    #: The JWKS holding the app's signing keys.
+    jwks_uri: str
     allowed_origins: list[str]
     #: X8 housekeeping labels (≤20, each ≤40 chars).
     tags: list[str]
@@ -4490,6 +4647,14 @@ class PlatformApp(TypedDict):
     created_at: int
     #: Last updated (epoch ms).
     updated_at: int
+
+
+class PlatformApp(_PlatformAppRequired, total=False):
+    """An app (instance) a platform owns."""
+
+    #: The declared integration per allowed origin (``redirect`` | ``embedded``). Write
+    #: ``allowed_origins`` entries as ``{"origin", "integration"}`` to set one.
+    allowed_origin_integrations: dict[str, Literal["redirect", "embedded"]]
 
 
 class UpdatePlatformAppBody(TypedDict, total=False):
@@ -5656,7 +5821,7 @@ class LogoutNotifyDelivery(TypedDict, total=False):
 
 
 class ManagedEmailRecord(TypedDict, total=False):
-    purpose: Literal["dkim", "spf", "return_path", "other"]
+    purpose: Literal["dkim", "spf", "return_path", "ownership", "dmarc", "other"]
     type: Literal["TXT", "MX", "CNAME"]
     #: Fully-qualified record name.
     name: str
@@ -5676,11 +5841,13 @@ class _ManagedEmailRequired(TypedDict):
     status: str
     verified: bool
     records: list[ManagedEmailRecord]
-    #: ``{"hourly": int, "daily": int}``.
-    limits: dict[str, int]
+    #: Always ``None``: no Atlas sending limits apply; your provider account's own do.
+    #: (Servers before 2026-10 sent ``{"hourly": int, "daily": int}``.)
+    limits: dict[str, int] | None
     #: ``sent``, ``bounces``, ``complaints``, ``last_bounce_at``, ``last_complaint_at``.
     usage: dict[str, Any]
-    reputation: Literal["shared_platform_account"]
+    #: ``your_provider_account`` (``shared_platform_account`` from servers before 2026-10).
+    reputation: str
     #: ``{"provider": str, "token_set": bool}`` or ``None``; the token is never returned.
     dns: dict[str, Any] | None
     failure_reason: str | None
@@ -5691,7 +5858,14 @@ class _ManagedEmailRequired(TypedDict):
 
 
 class ManagedEmail(_ManagedEmailRequired, total=False):
-    """Atlas-managed email: your own sending domain on Atlas's email account."""
+    """Managed email: Atlas sets your sending domain up on your own Resend or Brevo account."""
+
+    #: The email service the domain lives on (your own account there).
+    backend: Literal["resend", "brevo"]
+    #: Your email provider (mode ``managed_domain``) that holds the API key.
+    provider_id: str | None
+    #: Brevo, on create: whether the bounce / complaint webhook was registered on your account.
+    feedback_webhook: Literal["registered", "not_registered"]
 
     #: Create only, with ``dns``: the zone and the records Atlas wrote.
     dns_result: dict[str, Any]
@@ -5714,15 +5888,84 @@ class _CreateManagedEmailBodyRequired(TypedDict):
     from_address: str
 
 
+class ManagedEmailProviderKey(TypedDict):
+    #: Your Resend (re_…) or Brevo (xkeysib-…) API key, with domain permissions. Write-only.
+    api_key: str
+
+
 class CreateManagedEmailBody(_CreateManagedEmailBodyRequired, total=False):
+    #: Your own provider account Atlas sets the domain up on. With ``config``, unless
+    #: ``provider_id`` is given.
+    transport: Literal["resend", "brevo"]
+    config: ManagedEmailProviderKey
+    #: Instead of ``transport`` + ``config``: your configured Resend or Brevo email provider.
+    provider_id: str
+    #: Resend only.
     region: Literal["us-east-1", "eu-west-1", "sa-east-1", "ap-northeast-1"]
     dns: ManagedEmailDnsInput
 
 
-class ManagedEmailDeleteResult(TypedDict):
+class _ManagedEmailDeleteResultRequired(TypedDict):
     object: Literal["managed_email"]
     domain: str
     deleted: Literal[True]
+
+
+class ManagedEmailDeleteResult(_ManagedEmailDeleteResultRequired, total=False):
+    #: Whether the email provider that held the key (mode ``managed_domain``) was removed too.
+    provider_removed: bool
+
+
+class DevelopmentEmailLimits(TypedDict):
+    daily: int
+    per_recipient_hourly: int
+
+
+class _DevelopmentEmailRequired(TypedDict):
+    object: Literal["development_email"]
+    #: Your email provider, in development mode.
+    provider_id: str
+    enabled: Literal[True]
+    #: Whether mail goes out through it now. Always ``False`` on a production instance.
+    active: bool
+    #: ``resend``, ``ses``, ``smtp``, ``brevo`` or ``mailgun``.
+    transport: str
+    from_address: str | None
+    #: Added to every subject: ``"[Atlas test] "``.
+    subject_prefix: str
+    #: The line added to the end of every message.
+    footer: str
+    #: The only emails it sends: Atlas's own sign-in templates.
+    templates: list[str]
+    limits: DevelopmentEmailLimits
+    updated_at: int
+
+
+class DevelopmentEmail(_DevelopmentEmailRequired, total=False):
+    """Your own email provider in development mode (a development instance, no verified domain)."""
+
+    #: Present for ``onboarding@resend.dev``: Resend delivers it only to your account address.
+    note: str
+    next_step: str
+
+
+class EnableDevelopmentEmailBody(TypedDict, total=False):
+    """``{"provider_id"}``, or ``transport`` + ``config`` exactly as ``set_email`` takes them."""
+
+    #: The id of your configured email provider.
+    provider_id: str
+    transport: Literal["resend", "ses", "smtp", "brevo", "mailgun"]
+    #: A sender your provider accepts without a verified domain. Default for Resend:
+    #: ``onboarding@resend.dev``.
+    from_address: str
+    config: dict[str, Any]
+
+
+class DevelopmentEmailDeleteResult(TypedDict):
+    object: Literal["development_email"]
+    deleted: Literal[True]
+    provider_id: str
+    mode: Literal["standard"]
 
 
 class BackchannelLogoutDelivery(TypedDict, total=False):

@@ -189,6 +189,9 @@ GET /v1/mcp_connector
 PUT /v1/mcp_connector
 GET /v1/messaging_providers
 PUT /v1/messaging_providers/email
+DELETE /v1/messaging_providers/email/development
+GET /v1/messaging_providers/email/development
+POST /v1/messaging_providers/email/development
 DELETE /v1/messaging_providers/email/managed
 GET /v1/messaging_providers/email/managed
 POST /v1/messaging_providers/email/managed

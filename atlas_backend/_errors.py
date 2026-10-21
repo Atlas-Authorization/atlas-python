@@ -31,6 +31,9 @@ class ErrorCode:
     VALIDATION_FAILED = "VALIDATION_FAILED"
     #: A strict write named a body field the endpoint does not accept.
     UNKNOWN_FIELD = "UNKNOWN_FIELD"
+    #: The body set a field that is not writable on this endpoint (``param`` names it; the
+    #: message names the call that changes it).
+    READ_ONLY_FIELD = "READ_ONLY_FIELD"
     NOT_FOUND = "NOT_FOUND"
     RATE_LIMITED = "RATE_LIMITED"
     #: An idempotency key was reused with a different request (e.g. another unit or amount).
@@ -126,6 +129,15 @@ class ErrorCode:
     #: Removing a captcha key a live flow uses was refused (``meta.flows``). Retry with
     #: ``delete_captcha_secret(force=True)`` to remove it and turn those flows off.
     CAPTCHA_IN_USE = "CAPTCHA_IN_USE"
+    #: The development email sender is not available on a production instance (409).
+    DEVELOPMENT_EMAIL_NOT_ALLOWED = "DEVELOPMENT_EMAIL_NOT_ALLOWED"
+    #: The development email sender is not available on this deployment (503).
+    DEVELOPMENT_EMAIL_UNAVAILABLE = "DEVELOPMENT_EMAIL_UNAVAILABLE"
+    #: The development sender's daily or per-recipient hourly cap is spent (429;
+    #: ``meta.window``, ``meta.retry_after_seconds``).
+    DEVELOPMENT_EMAIL_LIMIT_REACHED = "DEVELOPMENT_EMAIL_LIMIT_REACHED"
+    #: The development sender sends only Atlas's own sign-in emails (422).
+    DEVELOPMENT_EMAIL_TEMPLATE_NOT_ALLOWED = "DEVELOPMENT_EMAIL_TEMPLATE_NOT_ALLOWED"
     INTERNAL = "INTERNAL"
 
 

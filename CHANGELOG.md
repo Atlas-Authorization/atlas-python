@@ -2,6 +2,52 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.7.0
+
+### Added
+
+- **OAuth client secret rotation with overlap.** `oauth_clients.rotate_secret(client_id, body=None,
+  *, idempotency_key=None)` takes `{"overlap_seconds": int}` (default 86400, `0` revokes the old
+  secret now, at most 604800) and returns `OAuthClientSecretRotation` (`client_secret`,
+  `overlap_seconds`, `previous_secret_expires_at`). `OAuthClient` gains `previous_secret_expires_at`.
+  New type `RotateOAuthClientSecretBody`.
+- **Issuer and verification endpoints.** `Instance` gains `issuer`, `discovery_url`, `jwks_uri`
+  and `allowed_origin_integrations`; `PlatformApp` / `PlatformAppWithSecret` gain
+  `frontend_api_host`, `issuer`, `discovery_url`, `jwks_uri` and `allowed_origin_integrations`.
+- **Allowed origins with an integration.** `allowed_origins` entries may be
+  `{"origin": ..., "integration": "redirect" | "embedded" | "auto" | None}` on `instance.update`
+  and the platform app, instance and accountless-app bodies (`AllowedOriginEntry`,
+  `AllowedOriginInput`).
+- **Login readiness.** `LoginReadiness` gains `integration` (`LoginReadinessIntegration`:
+  `assumed`, `source`, `reason`); each check gains `applies`.
+- **Branding audiences.** `BrandingAudience` documents `branding.audiences` (hint →
+  `heading`, `subheading`, `logoUrl`, `primaryColor`; `None` deletes one).
+- **Auth config.** `InstanceAuthConfigResolved` gains `strictRequestBodies`,
+  `dangerouslyReportSkippedEmailsAsVerified`, `originIntegrations` and `branding`.
+- **Email verification.** `EmailAddress` gains `verification` (`EmailAddressVerification`:
+  `status`, `strategy`).
+- **Development email sender.** New `messaging_providers.development_email.get / enable / disable`
+  (`DevelopmentEmail`, `EnableDevelopmentEmailBody`, `DevelopmentEmailDeleteResult`).
+  `MessagingProviders` gains `development_email`.
+- **Managed email on your own provider account.** `CreateManagedEmailBody` gains `transport`
+  (`resend` | `brevo`), `config.api_key` and `provider_id`. `ManagedEmail` gains `backend`,
+  `provider_id` and `feedback_webhook`; `limits` is now `None` and `reputation` is
+  `your_provider_account`. `ManagedEmailDeleteResult` gains `provider_removed`;
+  `ManagedEmailRecord.purpose` adds `ownership` and `dmarc`.
+- **Provider mode.** Email provider bodies accept `mode` (`standard` | `development`);
+  `MessagingProvider` gains `id` and `mode` (`standard` | `development` | `managed_domain`).
+- **Error codes.** `ErrorCode` adds `READ_ONLY_FIELD`, `DEVELOPMENT_EMAIL_NOT_ALLOWED`,
+  `DEVELOPMENT_EMAIL_UNAVAILABLE`, `DEVELOPMENT_EMAIL_LIMIT_REACHED` and
+  `DEVELOPMENT_EMAIL_TEMPLATE_NOT_ALLOWED`.
+- **Webhooks, several signatures.** `verify_webhook` accepts an `atlas-signature` header with
+  several space-separated `v1,<signature>` entries and verifies when any one matches (each
+  compared in constant time). A single signature works as before.
+
+### Changed
+
+- `oauth_clients.rotate_secret` is typed `OAuthClientSecretRotation` (was a plain dict); calls
+  without a body behave as before.
+
 ## 0.6.0
 
 ### Added

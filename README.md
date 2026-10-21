@@ -273,6 +273,33 @@ for delivery in ep.list_deliveries(created["id"], limit=20)["data"]:
     ep.redeliver(created["id"], delivery["id"])
 ```
 
+`verify_webhook` accepts an `atlas-signature` header that carries several signatures separated
+by spaces (`v1,<sig> v1,<sig>`). While an endpoint secret rotates, Atlas may sign each delivery
+with the old and the new secret; the delivery verifies when any one signature matches.
+
+## OAuth client secret rotation
+
+The previous secret keeps working for `overlap_seconds` (default 24 hours, at most 7 days), so
+you can deploy the new one without downtime. Pass `0` to revoke it now, for example after a leak.
+
+```python
+rotated = atlas.oauth_clients.rotate_secret(client_id, {"overlap_seconds": 3600})
+rotated["client_secret"]               # shown once
+rotated["previous_secret_expires_at"]  # epoch ms, or None when the old secret already stopped
+```
+
+## Development email
+
+A development instance can send Atlas's sign-in emails through your own provider without a
+verified domain. Subjects start with `[Atlas test] ` and sends are capped.
+
+```python
+dev = atlas.messaging_providers.development_email
+dev.enable({"provider_id": "mp_123"})  # or {"transport": "resend", "config": {"api_key": "re_..."}}
+dev.get()
+dev.disable()  # back to standard mode; the provider stays
+```
+
 ## API key spend caps
 
 Give an end-user API key caps per unit and period (`"request"`, `"day"`, `"month"` or

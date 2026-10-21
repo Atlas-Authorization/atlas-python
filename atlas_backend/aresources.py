@@ -763,9 +763,22 @@ class AsyncOAuthClients:
             method="PATCH", path=f"/v1/oauth_clients/{client_id}", body=body
         )
 
-    async def rotate_secret(self, client_id: str) -> JSON:
+    async def rotate_secret(
+        self,
+        client_id: str,
+        body: m.RotateOAuthClientSecretBody | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.OAuthClientSecretRotation:
+        """Mint a new secret (shown once). The previous one keeps working for
+        ``overlap_seconds`` (default 86400 = 24 hours, at most 604800 = 7 days; ``0`` revokes
+        it now). ``previous_secret_expires_at`` says when it stops working.
+        """
         return await self._t.request(
-            method="POST", path=f"/v1/oauth_clients/{client_id}/rotate_secret"
+            method="POST",
+            path=f"/v1/oauth_clients/{client_id}/rotate_secret",
+            body=body,
+            idempotency_key=idempotency_key,
         )
 
     async def list_backchannel_deliveries(
@@ -3622,6 +3635,7 @@ class AsyncMessagingProviders:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
         self.managed_email = _AsyncManagedEmail(transport)
+        self.development_email = _AsyncDevelopmentEmail(transport)
 
     async def list(self) -> m.MessagingProviders:
         """Read the instance's BYOK email and SMS provider config: transport, from-address and
@@ -3690,8 +3704,10 @@ class _AsyncManagedEmail:
         )
 
     async def create(self, body: m.CreateManagedEmailBody) -> m.ManagedEmail:
-        """Use Atlas-managed email from your own domain; returns the DNS ``records`` to
-        publish. With ``dns`` Atlas writes them itself (the token is write-only).
+        """Set your sending domain up on your own Resend or Brevo account: pass ``transport``
+        with ``config.api_key``, or ``provider_id`` of your configured provider. Returns the
+        DNS ``records`` to publish. With ``dns`` Atlas writes them itself (the token is
+        write-only).
         """
         return await self._t.request(
             method="POST",
@@ -3716,6 +3732,41 @@ class _AsyncManagedEmail:
             method="DELETE",
             path="/v1/messaging_providers/email/managed",
             query={"force": True} if force else None,
+        )
+
+
+class _AsyncDevelopmentEmail:
+    """Your own email provider in development mode: a development instance sends Atlas's
+    sign-in emails without a verified domain (``[Atlas test]`` subjects, capped).
+    """
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self) -> m.DevelopmentEmail:
+        """Read the email provider in development mode (404 when it is not in development
+        mode).
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/messaging_providers/email/development",
+        )
+
+    async def enable(self, body: m.EnableDevelopmentEmailBody) -> m.DevelopmentEmail:
+        """Put your email provider in development mode. 409 ``DEVELOPMENT_EMAIL_NOT_ALLOWED``
+        on a production instance.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/messaging_providers/email/development",
+            body=body,
+        )
+
+    async def disable(self) -> m.DevelopmentEmailDeleteResult:
+        """Put the email provider back in standard mode (the provider and its key stay)."""
+        return await self._t.request(
+            method="DELETE",
+            path="/v1/messaging_providers/email/development",
         )
 
 

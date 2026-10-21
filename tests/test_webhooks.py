@@ -53,3 +53,18 @@ def test_rejects_a_wrong_secret_and_bad_headers() -> None:
     assert verify_webhook(BODY, {}, SECRET, now_ms=NOW).reason == "missing_headers"
     bad = {**sign("evt_1", NOW, BODY), "Atlas-Signature": "v2,abc"}
     assert verify_webhook(BODY, bad, SECRET, now_ms=NOW).reason == "malformed_signature"
+
+
+def test_accepts_several_signatures_when_one_matches() -> None:
+    stale = sign("evt_1", NOW, BODY, secret="whsec_old_secret")["Atlas-Signature"]
+    headers = sign("evt_1", NOW, BODY)
+    fresh = headers["Atlas-Signature"]
+    for value in (f"{stale} {fresh}", f"{fresh} {stale}", f"v2,abc {fresh}"):
+        result = verify_webhook(BODY, {**headers, "Atlas-Signature": value}, SECRET, now_ms=NOW)
+        assert result.verified, value
+    both_stale = {**headers, "Atlas-Signature": f"{stale} {stale}"}
+    only_stale = verify_webhook(BODY, both_stale, SECRET, now_ms=NOW)
+    assert not only_stale.verified and only_stale.reason == "signature_mismatch"
+    other_versions = {**headers, "Atlas-Signature": "v2,abc v0,def"}
+    no_v1 = verify_webhook(BODY, other_versions, SECRET, now_ms=NOW)
+    assert no_v1.reason == "malformed_signature"

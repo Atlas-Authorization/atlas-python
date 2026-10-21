@@ -4,7 +4,10 @@ Atlas signs every delivery: ``atlas-signature: v1,<base64>`` is HMAC-SHA256 over
 ``<id>.<timestamp>.<raw body>`` keyed with the endpoint secret (``whsec_...``),
 with ``atlas-id`` and ``atlas-timestamp`` (epoch ms) headers. A delivery more
 than five minutes from now, in either direction, is refused so a captured
-request cannot be replayed. Matches ``verifyWebhook`` in ``@atlasauth/backend``.
+request cannot be replayed. The header may carry several space-separated
+``v1,<base64>`` entries (one per secret while a secret rotates with an overlap);
+the delivery verifies when any one matches. Matches ``verifyWebhook`` in
+``@atlasauth/backend``.
 
 Verify over the RAW request body, before any JSON parse: re-serializing
 reorders keys and breaks the MAC.
@@ -62,6 +65,21 @@ def _header(headers: Mapping[str, Any], name: str) -> Optional[str]:
     return None
 
 
+def _signatures(header: str) -> list[str]:
+    """The ``v1`` signatures in an ``atlas-signature`` header.
+
+    The header carries one ``v1,<base64>`` entry, or several separated by spaces (while an
+    endpoint secret rotates, Atlas signs with the old and the new secret). Entries of another
+    version are skipped.
+    """
+    out = []
+    for entry in header.split():
+        version, _, value = entry.partition(",")
+        if version == "v1" and value:
+            out.append(value)
+    return out
+
+
 def verify_webhook(
     body: Union[bytes, str],
     headers: Mapping[str, Any],
@@ -78,8 +96,8 @@ def verify_webhook(
     if not delivery_id or not ts_raw or not signature:
         return WebhookVerification(False, "missing_headers")
 
-    version, _, provided = signature.partition(",")
-    if version != "v1" or not provided:
+    provided = _signatures(signature)
+    if not provided:
         return WebhookVerification(False, "malformed_signature")
 
     try:
@@ -92,7 +110,12 @@ def verify_webhook(
 
     signed = f"{delivery_id}.{timestamp}.".encode("utf-8") + raw
     expected = base64.b64encode(hmac.new(secret.encode("utf-8"), signed, hashlib.sha256).digest())
-    if not hmac.compare_digest(expected, provided.encode("utf-8")):
+    # Compare every entry (no early exit), each in constant time.
+    matched = False
+    for candidate in provided:
+        if hmac.compare_digest(expected, candidate.encode("utf-8")):
+            matched = True
+    if not matched:
         return WebhookVerification(False, "signature_mismatch")
 
     try:
