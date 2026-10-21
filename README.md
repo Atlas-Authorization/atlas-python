@@ -277,6 +277,15 @@ for delivery in ep.list_deliveries(created["id"], limit=20)["data"]:
 by spaces (`v1,<sig> v1,<sig>`). While an endpoint secret rotates, Atlas may sign each delivery
 with the old and the new secret; the delivery verifies when any one signature matches.
 
+By default a rotation stops the old secret at once. Pass `overlap_seconds` (at most 7 days) to
+keep it signing each delivery next to the new one while you deploy the new secret. Choose an
+overlap only once every receiver verifies with a verifier that accepts several signatures.
+
+```python
+rotated = ep.rotate_secret(created["id"], {"overlap_seconds": 3600})
+rotated["previous_secret_expires_at"]  # epoch ms, or None when the old secret already stopped
+```
+
 ## OAuth client secret rotation
 
 The previous secret keeps working for `overlap_seconds` (default 24 hours, at most 7 days), so
@@ -286,6 +295,28 @@ you can deploy the new one without downtime. Pass `0` to revoke it now, for exam
 rotated = atlas.oauth_clients.rotate_secret(client_id, {"overlap_seconds": 3600})
 rotated["client_secret"]               # shown once
 rotated["previous_secret_expires_at"]  # epoch ms, or None when the old secret already stopped
+```
+
+## Trusted reverse proxy
+
+If a reverse proxy serves the Frontend API from your own origin, give it a proxy secret. It
+sends the secret in `X-Atlas-Proxy-Secret` and the browser's IP in `X-Atlas-Client-IP`; Atlas
+then uses that IP for rate limits, lockout, risk signals and audit logs.
+
+```python
+created = atlas.instance.create_proxy_secret()
+created["secret"]                      # shown once; store it in your proxy's environment
+atlas.instance.get_proxy_secret()      # set, created_at, previous_expires_at (never the secret)
+atlas.instance.create_proxy_secret({"overlap_seconds": 3600})  # rotate; the old one works 1 hour
+atlas.instance.delete_proxy_secret()
+```
+
+## Rotation overlaps on the platform
+
+```python
+platform.apps.rotate_instance_secret(app_id, instance_id, {"overlap_seconds": 0})  # default 72 hours
+platform.atlas_id_apps.rotate_secret(app["id"], {"overlap_seconds": 3600})        # default 24 hours
+platform.atlas_id_apps.rotate_webhook_secret(app["id"], {"overlap_seconds": 3600}) # default 0
 ```
 
 ## Development email

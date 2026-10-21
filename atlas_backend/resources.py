@@ -701,11 +701,17 @@ class _WebhookEndpoints:
             path=f"/v1/webhook_endpoints/{endpoint_id}/reveal_secret",
         )
 
-    def rotate_secret(self, endpoint_id: str) -> m.WebhookSecretRotation:
-        """Rotate the endpoint signing secret."""
+    def rotate_secret(
+        self, endpoint_id: str, body: m.RotateWebhookSecretBody | None = None
+    ) -> m.WebhookSecretRotation:
+        """Rotate the endpoint signing secret; the new one is revealed exactly once. By
+        default the old secret stops signing at once. With ``overlap_seconds`` (at most
+        604800) every delivery is signed with both, so a verifier holding either passes.
+        """
         return self._t.request(
             method="POST",
             path=f"/v1/webhook_endpoints/{endpoint_id}/rotate_secret",
+            body=body,
         )
 
     def test(self, endpoint_id: str) -> m.WebhookDeliveryAttempt:
@@ -2970,6 +2976,35 @@ class Instance:
             path="/v1/instance/kerberos_secret",
         )
 
+    def get_proxy_secret(self) -> m.ProxySecret:
+        """Whether a trusted reverse proxy secret is set, and since when (never the
+        secret).
+        """
+        return self._t.request(
+            method="GET",
+            path="/v1/instance/proxy_secret",
+        )
+
+    def create_proxy_secret(
+        self, body: m.CreateProxySecretBody | None = None
+    ) -> m.ProxySecretCreated:
+        """Create, or rotate, the trusted reverse proxy secret; it is returned once. On a
+        rotation the replaced secret keeps working for ``overlap_seconds`` (default 86400,
+        ``0`` = stop now, at most 604800).
+        """
+        return self._t.request(
+            method="POST",
+            path="/v1/instance/proxy_secret",
+            body=body,
+        )
+
+    def delete_proxy_secret(self) -> m.InstanceDeleteProxySecretResult:
+        """Remove the trusted reverse proxy secret: ``X-Atlas-Client-IP`` is ignored again."""
+        return self._t.request(
+            method="DELETE",
+            path="/v1/instance/proxy_secret",
+        )
+
     def set_ldap_bind_password(
         self, connection_id: str, body: m.SetLdapBindPasswordBody | None = None
     ) -> m.LdapBindPassword:
@@ -4821,14 +4856,21 @@ class PlatformApps:
         )
 
     def rotate_instance_secret(
-        self, app_id: str, instance_id: str, *, idempotency_key: str | None = None
-    ) -> m.AppSecret:
-        """Rotate one specific instance's secret under an owned app: revoke its prior keys and
-        mint a new one, revealed once.
+        self,
+        app_id: str,
+        instance_id: str,
+        body: m.RotatePlatformSecretBody | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.PlatformInstanceSecretRotation:
+        """Mint a new secret key for one instance under an owned app, revealed once. The
+        prior keys stay valid for ``overlap_seconds`` (default 259200 = 72 hours, at most
+        604800; ``0`` revokes them now), like ``rotate_secret``.
         """
         return self._t.request(
             method="POST",
             path=f"/v1/platform/apps/{app_id}/instances/{instance_id}/rotate_secret",
+            body=body,
             idempotency_key=idempotency_key,
         )
 
@@ -4961,11 +5003,16 @@ class PlatformAtlasIdApps:
             body=body,
         )
 
-    def rotate_secret(self, app_id: str) -> m.AtlasIdApp:
-        """Rotate a confidential app's client_secret."""
+    def rotate_secret(
+        self, app_id: str, body: m.RotateAtlasIdAppSecretBody | None = None
+    ) -> m.AtlasIdApp:
+        """Rotate a confidential app's client_secret (returned once). The previous one keeps
+        working for ``overlap_seconds`` (default 86400 = 24 hours; ``0`` revokes it now).
+        """
         return self._t.request(
             method="POST",
             path=f"/v1/platform/atlas_id_apps/{app_id}/rotate_secret",
+            body=body,
         )
 
     def list_backchannel_deliveries(
@@ -5019,11 +5066,17 @@ class PlatformAtlasIdApps:
             body=body,
         )
 
-    def rotate_webhook_secret(self, app_id: str) -> m.AtlasIdApp:
-        """Rotate the app's webhook signing secret (``webhook_secret``, returned once)."""
+    def rotate_webhook_secret(
+        self, app_id: str, body: m.RotateAtlasIdAppSecretBody | None = None
+    ) -> m.AtlasIdApp:
+        """Rotate the app's webhook signing secret (``webhook_secret``, returned once). By
+        default the previous secret stops signing at once; with ``overlap_seconds`` it signs
+        each delivery too until ``webhook_previous_secret_expires_at``.
+        """
         return self._t.request(
             method="POST",
             path=f"/v1/platform/atlas_id_apps/{app_id}/webhook/rotate_secret",
+            body=body,
         )
 
 

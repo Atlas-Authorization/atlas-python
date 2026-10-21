@@ -381,7 +381,7 @@ class CreatePermissionBody(_CreatePermissionRequired, total=False):
 # --------------------------------------------------------------------------- #
 
 
-class WebhookEndpoint(TypedDict):
+class _WebhookEndpointRequired(TypedDict):
     object: Literal["webhook_endpoint"]
     id: str
     url: str
@@ -389,6 +389,24 @@ class WebhookEndpoint(TypedDict):
     active: bool
     disabled_at: int | None
     created_at: int
+
+
+class WebhookEndpoint(_WebhookEndpointRequired, total=False):
+    #: Start of the current failure streak (epoch ms), or ``None`` when the last delivery
+    #: succeeded.
+    failing_since: int | None
+    #: While a secret rotation overlap is open: when the previous secret stops signing
+    #: deliveries (epoch ms). Until then every delivery carries two signatures. ``None``
+    #: otherwise.
+    previous_secret_expires_at: int | None
+
+
+class RotateWebhookSecretBody(TypedDict, total=False):
+    #: How long the previous secret keeps signing deliveries (as a second
+    #: ``atlas-signature`` entry), in seconds. Default 0: it stops at once. At most 604800
+    #: (7 days). Set it only once every receiver verifies with a verifier that accepts
+    #: several signatures (this package 0.7.0+).
+    overlap_seconds: int
 
 
 class WebhookEventCatalogEntry(TypedDict, total=False):
@@ -946,6 +964,23 @@ class AtlasIdApp(_AtlasIdAppRequired, total=False):
     webhook_active: bool | None
     #: The per-app webhook signing secret, returned exactly once (first set or rotated).
     webhook_secret: str
+    #: While a webhook secret rotation overlap is open: when the previous secret stops
+    #: signing deliveries (epoch ms); else ``None``.
+    webhook_previous_secret_expires_at: int | None
+    #: After a client secret rotation with an overlap: when the previous secret stops
+    #: working (epoch ms); else ``None``.
+    previous_secret_expires_at: int | None
+    #: When the current client secret was issued (epoch ms); ``None`` for a public app.
+    secret_issued_at: int | None
+    #: On a rotation: the overlap applied, in seconds.
+    overlap_seconds: int
+
+
+class RotateAtlasIdAppSecretBody(TypedDict, total=False):
+    #: How long the previous secret keeps working, in seconds; at most 604800 (7 days).
+    #: Default for the client secret: 86400 (24 hours). Default for the webhook secret: 0
+    #: (it stops signing at once). ``0`` stops it now.
+    overlap_seconds: int
 
 
 class AtlasIdAppList(TypedDict):
@@ -3080,6 +3115,44 @@ class InstanceDeleteKerberosSecretResult(TypedDict):
     deleted: Literal[True]
 
 
+class ProxySecret(TypedDict):
+    """The trusted reverse proxy secret: whether one is set (never the secret itself).
+
+    A proxy that serves the Frontend API from your own origin sends the secret in
+    ``X-Atlas-Proxy-Secret`` and the browser's IP in ``X-Atlas-Client-IP``; Atlas then uses
+    that IP for rate limits, lockout, risk signals, geo, audit logs and session metadata.
+    """
+
+    object: Literal["proxy_secret"]
+    set: bool
+    #: When the current secret was created (epoch ms), or ``None``.
+    created_at: int | None
+    #: After a rotation: when the replaced secret stops working (epoch ms), or ``None``.
+    previous_expires_at: int | None
+    secret_header: Literal["X-Atlas-Proxy-Secret"]
+    client_ip_header: Literal["X-Atlas-Client-IP"]
+
+
+class ProxySecretCreated(ProxySecret):
+    """Create / rotate result: the secret, shown only here."""
+
+    #: ``aps_...``. Store it in your proxy's environment; Atlas keeps only a hash.
+    secret: str
+    #: ``True`` when an existing secret was replaced.
+    rotated: bool
+
+
+class CreateProxySecretBody(TypedDict, total=False):
+    #: On rotation: seconds the replaced secret keeps working. Default 86400, ``0`` stops it
+    #: now, at most 604800.
+    overlap_seconds: int | None
+
+
+class InstanceDeleteProxySecretResult(TypedDict):
+    object: Literal["proxy_secret"]
+    deleted: Literal[True]
+
+
 class SetLdapBindPasswordBody(TypedDict, total=False):
     bind_password: str
 
@@ -4676,7 +4749,30 @@ class AppSecret(TypedDict):
 
 
 class RotatePlatformAppSecretBody(TypedDict, total=False):
+    #: How long the prior keys keep working, in seconds. Default 259200 (72 hours); ``0``
+    #: revokes them now; at most 604800 (7 days).
     overlap_seconds: float
+
+
+#: Body of ``apps.rotate_instance_secret`` (the same shape as the app-level rotate).
+RotatePlatformSecretBody = RotatePlatformAppSecretBody
+
+
+class _PlatformInstanceSecretRotationRequired(TypedDict):
+    object: Literal["app_secret"]
+    app_id: str
+    instance_id: str
+    #: The new secret key, revealed exactly once.
+    secret: str
+    #: The overlap applied, in seconds.
+    overlap_seconds: int
+    #: When the prior keys stop working (epoch ms); ``None`` on a hard cut.
+    previous_keys_expire_at: int | None
+    note: str
+
+
+class PlatformInstanceSecretRotation(_PlatformInstanceSecretRotationRequired, total=False):
+    """``apps.rotate_instance_secret`` response."""
 
 
 class _PlatformAppRotateSecretResultRequired(TypedDict):
@@ -5632,6 +5728,11 @@ class _WebhookSecretRotationRequired(TypedDict):
 
 class WebhookSecretRotation(_WebhookSecretRotationRequired, total=False):
     warning: str
+    #: The overlap applied, in seconds.
+    overlap_seconds: int
+    #: When the previous secret stops signing deliveries (epoch ms), or ``None`` when it
+    #: already has.
+    previous_secret_expires_at: int | None
 
 
 # --------------------------------------------------------------------------- #

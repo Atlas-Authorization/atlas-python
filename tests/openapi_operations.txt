@@ -123,6 +123,9 @@ DELETE /v1/instance/ldap_connections/{connectionId}/bind_password
 PUT /v1/instance/ldap_connections/{connectionId}/bind_password
 POST /v1/instance/move_origin
 GET /v1/instance/preflight
+DELETE /v1/instance/proxy_secret
+GET /v1/instance/proxy_secret
+POST /v1/instance/proxy_secret
 GET /v1/instance/security
 PATCH /v1/instance/security
 GET /v1/invitations

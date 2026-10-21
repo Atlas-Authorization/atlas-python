@@ -2,6 +2,36 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.8.0
+
+### Added
+
+- **Trusted reverse proxy secret.** `instance.get_proxy_secret()` (`ProxySecret`: `set`,
+  `created_at`, `previous_expires_at`, `secret_header`, `client_ip_header`),
+  `instance.create_proxy_secret(body=None)` (`CreateProxySecretBody`: `overlap_seconds`;
+  returns `ProxySecretCreated` with `secret`, shown once, and `rotated`) and
+  `instance.delete_proxy_secret()` (`InstanceDeleteProxySecretResult`).
+- **Webhook secret rotation with an overlap.** `webhooks.endpoints.rotate_secret(endpoint_id,
+  body=None)` takes `RotateWebhookSecretBody` (`overlap_seconds`, default 0, at most 604800).
+  `WebhookSecretRotation` gains `overlap_seconds` and `previous_secret_expires_at`;
+  `WebhookEndpoint` gains `previous_secret_expires_at` (and `failing_since`).
+- **Per-instance platform rotation with an overlap.** `apps.rotate_instance_secret(app_id,
+  instance_id, body=None, *, idempotency_key=None)` takes `RotatePlatformSecretBody`
+  (`overlap_seconds`, default 259200, `0` revokes the prior keys now) and returns
+  `PlatformInstanceSecretRotation` (`app_id`, `instance_id`, `secret`, `overlap_seconds`,
+  `previous_keys_expire_at`).
+- **Sign in with Atlas apps.** `atlas_id_apps.rotate_secret(app_id, body=None)` (default 24
+  hours, `0` = now) and `atlas_id_apps.rotate_webhook_secret(app_id, body=None)` (default 0)
+  take `RotateAtlasIdAppSecretBody`. `AtlasIdApp` gains `previous_secret_expires_at`,
+  `secret_issued_at`, `webhook_previous_secret_expires_at` and `overlap_seconds`.
+
+### Changed
+
+- `apps.rotate_instance_secret` is typed `PlatformInstanceSecretRotation` (was `AppSecret`,
+  whose `id` the API never sent). Calls without a body keep working; note that the server now
+  keeps the prior keys for 72 hours by default. Pass `{"overlap_seconds": 0}` to revoke them at
+  once, as before.
+
 ## 0.7.0
 
 ### Added
