@@ -138,6 +138,11 @@ class ErrorCode:
     DEVELOPMENT_EMAIL_LIMIT_REACHED = "DEVELOPMENT_EMAIL_LIMIT_REACHED"
     #: The development sender sends only Atlas's own sign-in emails (422).
     DEVELOPMENT_EMAIL_TEMPLATE_NOT_ALLOWED = "DEVELOPMENT_EMAIL_TEMPLATE_NOT_ALLOWED"
+    #: Referrals cannot be enabled until the provider's needs are set (422; ``meta``
+    #: names what is missing).
+    REFERRALS_NOT_CONFIGURED = "REFERRALS_NOT_CONFIGURED"
+    #: Another user on the instance already holds that referral code (409).
+    REFERRAL_CODE_TAKEN = "REFERRAL_CODE_TAKEN"
     INTERNAL = "INTERNAL"
 
 

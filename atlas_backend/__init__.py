@@ -52,9 +52,27 @@ from ._verify import (
     VerificationError,
 )
 
+from ._referrals import (
+    REFERRAL_CONNECTION_TEST_REF,
+    REFERRAL_OP_ENDPOINTS,
+    REFERRAL_PROTOCOL_USER_AGENT,
+    REFERRAL_SIGNAL_TYPES,
+    ReferralContext,
+    ReferralErasePayload,
+    ReferralExportPayload,
+    ReferralOp,
+    ReferralPartnerPayload,
+    ReferralRiskVerdict,
+    ReferralSignalPayload,
+    ReferralSignupPayload,
+    ReferralSignupResponse,
+    ReferralVerification,
+    referral_op_for_path,
+    verify_referral_request,
+)
 from ._webhooks import WebhookVerification, verify_webhook
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 __all__ = [
     "AtlasClient",
@@ -98,5 +116,21 @@ __all__ = [
     "DEFAULT_TTL_MS",
     "verify_webhook",
     "WebhookVerification",
+    "verify_referral_request",
+    "referral_op_for_path",
+    "ReferralOp",
+    "ReferralExportPayload",
+    "REFERRAL_OP_ENDPOINTS",
+    "ReferralVerification",
+    "ReferralContext",
+    "ReferralRiskVerdict",
+    "ReferralSignupPayload",
+    "ReferralSignupResponse",
+    "ReferralErasePayload",
+    "ReferralPartnerPayload",
+    "ReferralSignalPayload",
+    "REFERRAL_CONNECTION_TEST_REF",
+    "REFERRAL_PROTOCOL_USER_AGENT",
+    "REFERRAL_SIGNAL_TYPES",
     "__version__",
 ]

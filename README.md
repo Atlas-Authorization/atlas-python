@@ -427,6 +427,52 @@ On the platform client, `atlas_id_apps.find_users(app_id, email)` answers a priv
 `atlas_id_apps.revoke_grant(app_id, grant_id)` revokes one person's approval, and `atlas_id_publisher` claims and
 verifies the publisher name shown on consent screens.
 
+## Referral attribution
+
+With referral attribution on, Atlas reports every interactive sign-up to your referral platform
+before `user.created` is sent. The user gains `referral` (who referred them, or `None`),
+`referral_code` and `referral_link`.
+
+```python
+atlas.instance.referrals.update({
+    "enabled": True,
+    "provider": "webhook",  # the Atlas referral protocol; or a built-in vendor adapter
+    "endpoint_url": "https://referrals.example.com/atlas",
+    "signing_secret": os.environ["REFERRAL_SIGNING_SECRET"],
+    "auto_enroll_users": True,
+    "security": {"on_high_risk": "hold"},
+})
+print(atlas.instance.referrals.test())            # {"ok": True, "http_status": 404, ...}
+failed = atlas.instance.referrals.list_calls(status="failed", limit=20)
+atlas.instance.referrals.retry_call(failed["data"][0]["id"])
+
+atlas.users.update("user_123", {"referral_code": "ada-1"})   # 409 REFERRAL_CODE_TAKEN if held
+atlas.users.flag_referral("user_123", reason="self-referral")
+```
+
+Enabling without what the provider needs is `422 REFERRALS_NOT_CONFIGURED`. A late answer from
+the platform arrives as the `user.referral_attributed` webhook (`UserReferralAttributedEvent`).
+
+A referral platform that implements the Atlas referral protocol verifies Atlas's calls with
+`verify_referral_request`. Every call is a POST signed like a webhook, and its JSON body says which
+operation it is (`op`: `signup`, `erase`, `export`, `partner`, `signal`). Pass the path the call arrived
+on: a signed body whose `op` does not match the endpoint is refused (`op_mismatch`).
+
+```python
+from atlas_backend import verify_referral_request
+
+result = verify_referral_request(raw_body, headers, secret, path=request.path)
+if not result.verified:
+    return 401
+if result.op == "signup":
+    return {"referral": match(result.payload), "partner": None}
+if result.op == "export":
+    return 404 if result.test else export_for(result.customer_ref)
+```
+
+A retry of one call keeps its `delivery_id`; sign-ups are idempotent on `customerRef`, so answer a
+retry the same way.
+
 ## Back-channel logout
 
 When a user signs out of Atlas, Atlas POSTs a signed `logout_token` to your app's

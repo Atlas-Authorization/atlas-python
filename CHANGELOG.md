@@ -2,6 +2,42 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.9.0
+
+### Added
+
+- **Referral attribution settings.** `instance.referrals.get()` and
+  `instance.referrals.update(body=None, *, idempotency_key=None)` (`GET`/`PATCH
+  /v1/instance/referrals`; `ReferralSettings`, `UpdateReferralSettingsBody` with nested
+  `security`: `ReferralSecuritySettings`), `instance.referrals.test()`
+  (`ReferralConnectionTest`), `instance.referrals.list_calls(*, limit, status, kind, user_id)`
+  (`ReferralCall`) and `instance.referrals.retry_call(call_id, *, idempotency_key=None)`.
+  Also `ReferralProvider`, `ReferralProviderCapabilities`, `ReferralConnectionStatus`,
+  `ReferralRisk`.
+- **Users.** `User` gains `referral` (`UserReferral`: `partner_id`, `referrer_external_id`,
+  `referrer_user_id`, `matched_via`, `status`, `risk_level`, `flagged`), `referral_code` and
+  `referral_link`. `CreateUserBody` accepts `referral` (`CreateUserReferral`: `code`,
+  `click_id`, `anon_id`) and `referral_code`; `UpdateUserBody` accepts `referral_code` (`None`
+  clears). New `users.flag_referral(user_id, *, reason=None, idempotency_key=None)`
+  (`UserReferralFlag`).
+- **Webhooks.** `UserReferralAttributedEvent` types the `data` of the new
+  `user.referral_attributed` event.
+- **Error codes.** `ErrorCode.REFERRALS_NOT_CONFIGURED` (422) and
+  `ErrorCode.REFERRAL_CODE_TAKEN` (409). Preflight can report `referrals_enabled_unverified`
+  and `referrals_without_bot_protection`.
+- **Referral protocol receiver.** `verify_referral_request(body, headers, secret, *, path=None,
+  expected_op=None, now_ms=None, tolerance_ms=...)` verifies a call from Atlas to a referral platform
+  (the webhook signature scheme; every call is a POST whose signed body carries `op` and
+  `customerRef`) and returns `ReferralVerification` (`op`: `signup`, `erase`, `export`, `partner`,
+  `signal`; `payload`, `customer_ref`, `test`, `delivery_id`, `timestamp`, `idempotency_key`). It
+  refuses a body that is not an object (`malformed_body`), a missing or unknown `op`, a path that is
+  not a protocol endpoint (`unknown_endpoint`) and an `op` that does not match the path or
+  `expected_op` (`op_mismatch`). Payload types `ReferralSignupPayload`, `ReferralSignupResponse`,
+  `ReferralErasePayload`, `ReferralExportPayload`, `ReferralPartnerPayload`,
+  `ReferralSignalPayload`, `ReferralContext`, `ReferralRiskVerdict`, `ReferralOp`;
+  `referral_op_for_path`; constants `REFERRAL_OP_ENDPOINTS`, `REFERRAL_CONNECTION_TEST_REF`,
+  `REFERRAL_PROTOCOL_USER_AGENT`, `REFERRAL_SIGNAL_TYPES`.
+
 ## 0.8.0
 
 ### Added

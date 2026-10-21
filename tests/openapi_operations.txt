@@ -126,6 +126,11 @@ GET /v1/instance/preflight
 DELETE /v1/instance/proxy_secret
 GET /v1/instance/proxy_secret
 POST /v1/instance/proxy_secret
+GET /v1/instance/referrals
+PATCH /v1/instance/referrals
+GET /v1/instance/referrals/calls
+POST /v1/instance/referrals/calls/{id}/retry
+POST /v1/instance/referrals/test
 GET /v1/instance/security
 PATCH /v1/instance/security
 GET /v1/invitations
@@ -465,6 +470,7 @@ DELETE /v1/users/{id}/phone_numbers/{pid}
 POST /v1/users/{id}/phone_numbers/{pid}/verify
 DELETE /v1/users/{id}/profile_image
 POST /v1/users/{id}/progression/events
+POST /v1/users/{id}/referral/flag
 POST /v1/users/{id}/reset_mfa
 GET /v1/users/{id}/resolved
 GET /v1/users/{id}/sessions

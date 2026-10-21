@@ -34,10 +34,68 @@ class _UserRequired(TypedDict):
     updated_at: int
 
 
+class UserReferral(TypedDict, total=False):
+    """The inbound referral the referral platform matched for a user."""
+
+    #: The platform's id for the referring partner.
+    partner_id: str | None
+    #: The referrer as the platform knows them (your ``external_id`` for that user, or
+    #: their Atlas id).
+    referrer_external_id: str | None
+    #: The referrer's Atlas user id, when they are a user of this instance.
+    referrer_user_id: str | None
+    #: How the platform matched the referral, e.g. ``code``, ``click``, ``coupon``.
+    matched_via: str | None
+    #: The platform's own status for the referral.
+    status: str | None
+    #: The risk level Atlas assessed at sign-up, when one was.
+    risk_level: Literal["low", "medium", "high"] | None
+    #: An admin marked the referral fraudulent (``users.flag_referral``).
+    flagged: bool
+
+
 class User(_UserRequired, total=False):
     #: Strictly increases with every change to the user; webhook payloads carry the same
     #: value. Apply an update only if its version is higher than the one you hold.
     version: int
+    #: How the user arrived through a referral program (referral attribution on), or
+    #: ``None`` when not referred, not answered yet, or referrals are off.
+    referral: UserReferral | None
+    #: The user's own referral code, when they are a referrer.
+    referral_code: str | None
+    #: The user's own referral link, when they are a referrer.
+    referral_link: str | None
+
+
+class UserReferralFlag(TypedDict):
+    """A user's referral after ``users.flag_referral``."""
+
+    object: Literal["user_referral"]
+    user_id: str
+    #: ``flagged`` after the call.
+    status: str
+    flagged: bool
+    flag_reason: str | None
+    #: Epoch ms.
+    flagged_at: int | None
+    risk_level: Literal["low", "medium", "high"] | None
+
+
+class UserReferralAttributedEvent(TypedDict):
+    """The ``data`` of a ``user.referral_attributed`` webhook: the referral platform
+    answered after ``user.created`` was sent.
+    """
+
+    object: Literal["user_referral"]
+    user_id: str
+    #: ``attributed``, ``not_referred`` (the platform found no referrer), ``failed``, ...
+    attribution_status: str
+    referral: UserReferral | None
+    referral_code: str | None
+    referral_link: str | None
+    #: Epoch ms.
+    signed_up_at: int
+    updated_at: int
 
 
 class _EmailAddressVerificationRequired(TypedDict):
@@ -105,6 +163,16 @@ class ImportedMfa(TypedDict, total=False):
     backup_codes: list[str]
 
 
+class CreateUserReferral(TypedDict, total=False):
+    """An imported referral on ``users.create``. Each id is 3-64 characters of
+    ``A-Z a-z 0-9 _ -``.
+    """
+
+    code: str
+    click_id: str
+    anon_id: str
+
+
 class CreateUserBody(_CreateUserRequired, total=False):
     password: str
     #: A password hash migrated from another system (bcrypt, argon2, ...).
@@ -123,9 +191,17 @@ class CreateUserBody(_CreateUserRequired, total=False):
     #: Whether the create may notify the user. ``False`` (the default) guarantees no
     #: email, SMS or push is sent as a consequence of the create.
     notify: bool
+    #: Import a referral (how the user arrived). With referral attribution on, the user
+    #: is reported to the referral platform.
+    referral: CreateUserReferral
+    #: The user's own referral code; unique per instance (409 ``REFERRAL_CODE_TAKEN``).
+    referral_code: str
 
 
 class UpdateUserBody(TypedDict, total=False):
+    #: The user's own referral code; ``None`` clears it. Unique per instance
+    #: (409 ``REFERRAL_CODE_TAKEN``).
+    referral_code: str | None
     first_name: str
     last_name: str
     #: Your own id for this user; ``None`` or ``""`` clears it.
@@ -3153,6 +3229,180 @@ class InstanceDeleteProxySecretResult(TypedDict):
     deleted: Literal[True]
 
 
+# --------------------------------------------------------------------------- #
+# Referral attribution                                                         #
+# --------------------------------------------------------------------------- #
+
+
+class ReferralProviderCapabilities(TypedDict):
+    signup: bool
+    erase: bool
+    export: bool
+    partner: bool
+    auto_enroll: bool
+    signal: bool
+
+
+class ReferralProvider(TypedDict):
+    """A referral provider Atlas supports."""
+
+    #: ``webhook`` (the Atlas referral protocol) or a vendor adapter id.
+    id: str
+    name: str
+    capabilities: ReferralProviderCapabilities
+    #: What must be set before ``enabled`` can be true: ``endpoint_url``,
+    #: ``signing_secret``, ``api_key``, ``connection_id``.
+    needs: list[str]
+    default_context_cookie: str | None
+    docs_url: str | None
+
+
+class ReferralSecuritySettings(TypedDict, total=False):
+    """Fraud and bot protection for referred sign-ups (``security`` on the settings).
+    On a PATCH only the fields sent change.
+    """
+
+    #: ``always`` (default): a sign-up carrying a referral code must pass the bot
+    #: challenge. ``inherit``: the instance captcha policy decides.
+    challenge_referred_signups: Literal["always", "inherit"]
+    #: ``flag`` (default): report with the risk. ``strip``: report as not referred.
+    #: ``hold``: report nothing until the email is proven, then re-assess.
+    on_high_risk: Literal["flag", "strip", "hold"]
+    #: Hold every referred sign-up until the email is proven. Default ``False``.
+    hold_until_email_verified: bool
+    #: Referred sign-ups per code from one IP network or device per hour before a
+    #: velocity signal (1-1000, default 5).
+    max_referred_signups_per_ip_hour: int
+
+
+class ReferralLastTest(TypedDict):
+    ok: bool
+    #: Epoch ms.
+    at: int
+    http_status: int | None
+    error: str | None
+
+
+class ReferralConnectionStatus(TypedDict):
+    last_test: ReferralLastTest | None
+    #: Calls that failed permanently in the last 7 days.
+    failed_calls_7d: int
+    #: Calls waiting for a retry.
+    retrying_calls: int
+    last_success_at: int | None
+
+
+class _ReferralSettingsRequired(TypedDict):
+    object: Literal["referral_settings"]
+    enabled: bool
+    provider: str
+    signing_secret_set: bool
+    api_key_set: bool
+    url_params: list[str]
+    providers: list[ReferralProvider]
+
+
+class ReferralSettings(_ReferralSettingsRequired, total=False):
+    """``GET /v1/instance/referrals``. Secrets are never returned, only ``*_set``."""
+
+    endpoint_url: str | None
+    program_id: str | None
+    connection_id: str | None
+    context_cookie: str | None
+    consent_category: str
+    consent_fallback_category: str | None
+    auto_enroll_users: bool
+    link_template: str | None
+    timeout_ms: int
+    security: ReferralSecuritySettings
+    #: What the chosen provider still needs before referrals can be enabled.
+    missing: list[str]
+    connection: ReferralConnectionStatus | None
+    updated_at: int | None
+
+
+class UpdateReferralSettingsBody(TypedDict, total=False):
+    """``PATCH /v1/instance/referrals``: only the fields sent change, ``None`` clears.
+    Enabling without what the provider needs is 422 ``REFERRALS_NOT_CONFIGURED``.
+    """
+
+    enabled: bool
+    provider: str
+    #: https only (http only for localhost on a development instance).
+    endpoint_url: str | None
+    program_id: str | None
+    connection_id: str | None
+    #: Write-only, 16-512 characters.
+    signing_secret: str | None
+    #: Write-only vendor API key.
+    api_key: str | None
+    url_params: list[str]
+    context_cookie: str | None
+    consent_category: str
+    consent_fallback_category: str | None
+    auto_enroll_users: bool
+    #: An https URL containing ``{code}``.
+    link_template: str | None
+    #: 100-5000.
+    timeout_ms: int
+    security: ReferralSecuritySettings
+
+
+class ReferralTestError(TypedDict):
+    #: e.g. ``signature_rejected`` (401/403), ``timeout``, ``network_error``,
+    #: ``url_blocked``, ``http_500``.
+    code: str
+    message: str
+
+
+class _ReferralConnectionTestRequired(TypedDict):
+    ok: bool
+
+
+class ReferralConnectionTest(_ReferralConnectionTestRequired, total=False):
+    http_status: int | None
+    latency_ms: int | None
+    error: ReferralTestError
+
+
+class ReferralRisk(TypedDict):
+    """The risk verdict sent with a sign-up (camelCase, as on the referral protocol)."""
+
+    level: Literal["low", "medium", "high"]
+    #: 0-100.
+    score: int
+    signals: list[str]
+    captcha: Literal["passed", "not_required", "not_configured"]
+    emailVerified: bool
+
+
+class _ReferralCallRequired(TypedDict):
+    object: Literal["referral_call"]
+    #: Also the signed ``atlas-id`` header of every attempt.
+    id: str
+    kind: Literal["signup", "erase", "export", "partner", "signal", "test"]
+    status: Literal["pending", "succeeded", "retrying", "failed", "held", "skipped"]
+    customer_ref: str
+    attempts: int
+    created_at: int
+
+
+class ReferralCall(_ReferralCallRequired, total=False):
+    """One call in the referral call log."""
+
+    #: Sign-up calls: ``referred``, ``not_referred`` or ``stripped``.
+    outcome: str | None
+    user_id: str | None
+    http_status: int | None
+    last_error: str | None
+    #: Epoch ms of the next retry, while pending or retrying.
+    next_attempt_at: int | None
+    risk: ReferralRisk | None
+    #: What was sent (never secrets).
+    payload: dict[str, Any]
+    updated_at: int
+
+
 class SetLdapBindPasswordBody(TypedDict, total=False):
     bind_password: str
 
@@ -4694,7 +4944,6 @@ class App(TypedDict):
 
 
 class _PlatformAppRequired(TypedDict):
-
     object: Literal["app"]
     id: str
     name: str

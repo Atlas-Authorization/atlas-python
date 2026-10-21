@@ -84,6 +84,25 @@ class AsyncUsers:
     async def unlock(self, user_id: str) -> m.User:
         return await self._t.request(method="POST", path=f"/v1/users/{user_id}/unlock")
 
+    async def flag_referral(
+        self,
+        user_id: str,
+        *,
+        reason: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> m.UserReferralFlag:
+        """Mark the user's referral fraudulent. The referral reads ``flagged``, the
+        referral platform is sent a ``fraud_confirmed`` signal (when referrals are on) and
+        the action is audited; the account is not changed. 404 when the user has no
+        referral. ``reason`` (at most 500 characters) is sent to the platform.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/users/{user_id}/referral/flag",
+            body=_q(reason=reason),
+            idempotency_key=idempotency_key,
+        )
+
     async def delete(
         self,
         user_id: str,
@@ -2927,6 +2946,7 @@ class AsyncInstance:
         self.cookie_consent = _AsyncInstanceCookieConsent(transport)
         self.security = _AsyncInstanceSecurity(transport)
         self.integrations = _AsyncInstanceIntegrations(transport)
+        self.referrals = _AsyncInstanceReferrals(transport)
 
     async def get(self) -> m.Instance:
         """Read instance configuration."""
@@ -3154,6 +3174,76 @@ class _AsyncInstanceCookieConsent:
         return await self._t.request(
             method="DELETE",
             path="/v1/instance/cookie_consent",
+        )
+
+
+class _AsyncInstanceReferrals:
+    """Referral attribution: the instance's connection to a referral platform.
+
+    With referrals on, every interactive sign-up is reported to the platform before
+    ``user.created`` is sent; the answer lands on the user (``referral``,
+    ``referral_code``, ``referral_link``). ``signing_secret`` and ``api_key`` are
+    write-only.
+    """
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self) -> m.ReferralSettings:
+        """Read the referral settings, the connection status and the supported providers."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/instance/referrals",
+        )
+
+    async def update(
+        self,
+        body: m.UpdateReferralSettingsBody | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.ReferralSettings:
+        """Update the referral settings; only the fields sent change, ``None`` clears.
+        Enabling without what the provider needs is 422 ``REFERRALS_NOT_CONFIGURED``.
+        """
+        return await self._t.request(
+            method="PATCH",
+            path="/v1/instance/referrals",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def test(self) -> m.ReferralConnectionTest:
+        """Send a signed probe to the platform. ``ok`` on 2xx or 404; ``error.code``
+        ``signature_rejected`` on 401/403.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/instance/referrals/test",
+        )
+
+    async def list_calls(
+        self,
+        *,
+        limit: int | None = None,
+        status: str | None = None,
+        kind: str | None = None,
+        user_id: str | None = None,
+    ) -> ListPage:
+        """The referral call log, newest first (``limit`` 1-200, default 50)."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/instance/referrals/calls",
+            query=_q(limit=limit, status=status, kind=kind, user_id=user_id),
+        )
+
+    async def retry_call(
+        self, call_id: str, *, idempotency_key: str | None = None
+    ) -> m.ReferralCall:
+        """Retry a failed, retrying or skipped call now (not a connection test)."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/instance/referrals/calls/{call_id}/retry",
+            idempotency_key=idempotency_key,
         )
 
 
