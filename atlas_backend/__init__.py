@@ -59,6 +59,7 @@ from ._referrals import (
     REFERRAL_PROTOCOL_VERSION,
     REFERRAL_PROTOCOL_VERSION_HEADER,
     REFERRAL_SIGNAL_TYPES,
+    REFERRAL_UPDATED_EVENT,
     ReferralAliasPayload,
     ReferralContext,
     ReferralErasePayload,
@@ -71,14 +72,17 @@ from ._referrals import (
     ReferralSignalPayload,
     ReferralSignupPayload,
     ReferralSignupResponse,
+    ReferralUpdatedEvent,
     ReferralUserPayload,
     ReferralVerification,
+    SignedReferralEvent,
     referral_op_for_path,
+    sign_referral_updated_event,
     verify_referral_request,
 )
 from ._webhooks import WebhookVerification, verify_webhook
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 __all__ = [
     "AtlasClient",
@@ -144,5 +148,9 @@ __all__ = [
     "ReferralUserPayload",
     "ReferralPingPayload",
     "ReferralPingResponse",
+    "REFERRAL_UPDATED_EVENT",
+    "ReferralUpdatedEvent",
+    "SignedReferralEvent",
+    "sign_referral_updated_event",
     "__version__",
 ]

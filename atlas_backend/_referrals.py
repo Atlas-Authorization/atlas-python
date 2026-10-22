@@ -41,8 +41,15 @@ so a captured call cannot be replayed against another endpoint. Matches
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import secrets
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Literal, TypedDict
 from urllib.parse import urlsplit
 
@@ -321,3 +328,86 @@ def verify_referral_request(
         idempotency_key=_header(headers, "idempotency-key"),
         protocol_version=_header(headers, REFERRAL_PROTOCOL_VERSION_HEADER),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Two-way sync: events from the platform to Atlas                              #
+# --------------------------------------------------------------------------- #
+
+#: The type of the event a platform sends to an Atlas instance's inbound URL when a
+#: referral changed after sign-up.
+REFERRAL_UPDATED_EVENT = "referral.updated"
+
+
+class ReferralUpdatedEvent(TypedDict, total=False):
+    """The fields of a ``referral.updated`` event. ``customerRef`` or ``referralId``
+    names the referral; absent fields stay unchanged on the Atlas side."""
+
+    #: The user's ``customerRef``, as Atlas sent it on sign-up.
+    customerRef: str
+    #: The platform's referral id.
+    referralId: str
+    programId: str
+    #: The referral's status on the platform (e.g. ``qualified``).
+    status: str
+    partnerId: str
+    #: The referrer's ``customerRef``, when the referrer is an Atlas user.
+    referrerExternalRef: str
+    matchedVia: str
+
+
+@dataclass(frozen=True)
+class SignedReferralEvent:
+    """A ready-to-send signed event: POST ``body`` to ``url`` with ``headers``."""
+
+    url: str
+    headers: dict[str, str]
+    #: The exact signed body.
+    body: str
+
+
+def _iso_ms(ms: int) -> str:
+    whole = datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return f"{whole}.{ms % 1000:03d}Z"
+
+
+def sign_referral_updated_event(
+    inbound_url: str,
+    secret: str,
+    event: ReferralUpdatedEvent,
+    *,
+    occurred_at: str | int | None = None,
+    event_id: str | None = None,
+    now_ms: int | None = None,
+) -> SignedReferralEvent:
+    """Build a ``referral.updated`` event for an Atlas instance's inbound URL
+    (``inbound.url`` on the referral settings), signed like an Atlas webhook:
+    ``atlas-id``, ``atlas-timestamp`` (ms) and ``atlas-signature: v1,<base64
+    HMAC-SHA256 of "{id}.{ts}.{body}">``.
+
+    ``secret`` is the inbound secret, or the connection's signing secret when no
+    inbound secret is set. ``occurred_at`` (ISO 8601 or epoch ms, default now) is
+    when the change happened: Atlas ignores an event older than the last one
+    applied. ``event_id`` (the ``atlas-id``) stays the same on every retry.
+    """
+    if not event.get("customerRef") and not event.get("referralId"):
+        raise ValueError("sign_referral_updated_event: the event needs customerRef or referralId.")
+    ts = now_ms if now_ms is not None else int(time.time() * 1000)
+    eid = event_id or f"rfe_{secrets.token_hex(8)}"
+    occurred = ts if occurred_at is None else occurred_at
+    payload: dict[str, Any] = {
+        "type": REFERRAL_UPDATED_EVENT,
+        "occurredAt": _iso_ms(occurred) if isinstance(occurred, int) else occurred,
+    }
+    payload.update(event)
+    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    mac = hmac.new(secret.encode(), f"{eid}.{ts}.{body}".encode(), hashlib.sha256).digest()
+    headers = {
+        "content-type": "application/json",
+        "atlas-id": eid,
+        "atlas-timestamp": str(ts),
+        "atlas-signature": "v1," + base64.b64encode(mac).decode(),
+        "user-agent": REFERRAL_PROTOCOL_USER_AGENT,
+        REFERRAL_PROTOCOL_VERSION_HEADER: REFERRAL_PROTOCOL_VERSION,
+    }
+    return SignedReferralEvent(url=inbound_url, headers=headers, body=body)

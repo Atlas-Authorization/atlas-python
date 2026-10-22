@@ -29,7 +29,9 @@ from atlas_backend import (
     ReferralOp,
     ReferralVerification,
     referral_op_for_path,
+    sign_referral_updated_event,
     verify_referral_request,
+    verify_webhook,
 )
 
 API_URL = "https://api.example.test"
@@ -790,3 +792,90 @@ def test_verify_alias_user_ping_and_version_header() -> None:
         "user",
         "ping",
     }
+
+
+INBOUND_URL = f"{API_URL}/v1/webhooks/referrals/ins_1"
+
+
+@respx.mock
+def test_inbound_settings_fields() -> None:
+    settings = {
+        **SETTINGS,
+        "inbound": {
+            "url": INBOUND_URL,
+            "secret_set": True,
+            "endpoint_id": "we_1",
+            "last_event": {
+                "at": 1_700_000_000_000,
+                "type": "referral.updated",
+                "outcome": "applied",
+            },
+        },
+        "providers": [
+            {
+                **SETTINGS["providers"][0],  # type: ignore[index]
+                "capabilities": {**SETTINGS["providers"][0]["capabilities"], "inbound": True},  # type: ignore[index]
+            }
+        ],
+    }
+    respx.get(REFERRALS).mock(return_value=httpx.Response(200, json=settings))
+    patch = respx.patch(REFERRALS).mock(return_value=httpx.Response(200, json=settings))
+    referrals = client().instance.referrals
+
+    view = referrals.get()
+    inbound = view["inbound"]
+    assert inbound["url"] == INBOUND_URL and inbound["secret_set"] is True
+    assert inbound["endpoint_id"] == "we_1"
+    assert inbound["last_event"] is not None and inbound["last_event"]["outcome"] == "applied"
+    assert view["providers"][0]["capabilities"]["inbound"] is True
+
+    referrals.update({"inbound_secret": "whsec_" + "y" * 32, "inbound_endpoint_id": "we_1"})
+    assert body_of(patch) == {"inbound_secret": "whsec_" + "y" * 32, "inbound_endpoint_id": "we_1"}
+    referrals.update({"inbound_secret": None, "inbound_endpoint_id": None})
+    assert body_of(patch) == {"inbound_secret": None, "inbound_endpoint_id": None}
+
+
+def test_sign_referral_updated_event() -> None:
+    event = sign_referral_updated_event(
+        INBOUND_URL,
+        SECRET,
+        {
+            "customerRef": "user_1",
+            "referralId": "ref_1",
+            "status": "qualified",
+            "partnerId": "pn_2",
+        },
+        occurred_at=NOW - 1000,
+        event_id="rfe_1",
+        now_ms=NOW,
+    )
+    assert event.url == INBOUND_URL
+    assert json.loads(event.body) == {
+        "type": "referral.updated",
+        "occurredAt": "2026-10-21T11:59:59.000Z",
+        "customerRef": "user_1",
+        "referralId": "ref_1",
+        "status": "qualified",
+        "partnerId": "pn_2",
+    }
+    assert event.headers["atlas-id"] == "rfe_1"
+    assert event.headers["atlas-timestamp"] == str(NOW)
+    assert event.headers["atlas-signature"] == signed("rfe_1", event.body)["atlas-signature"]
+    result = verify_webhook(event.body, event.headers, SECRET, now_ms=NOW)
+    assert result.verified and result.delivery_id == "rfe_1"
+    wrong = verify_webhook(event.body, event.headers, "wrong_secret_wrong_secret", now_ms=NOW)
+    assert not wrong.verified
+
+    other = sign_referral_updated_event(
+        INBOUND_URL, SECRET, {"referralId": "ref_1"}, occurred_at="2026-10-20T00:00:00Z", now_ms=NOW
+    )
+    assert json.loads(other.body)["occurredAt"] == "2026-10-20T00:00:00Z"
+    assert other.headers["atlas-id"].startswith("rfe_")
+    default = sign_referral_updated_event(INBOUND_URL, SECRET, {"customerRef": "u"}, now_ms=NOW)
+    assert json.loads(default.body)["occurredAt"] == "2026-10-21T12:00:00.000Z"
+    try:
+        sign_referral_updated_event(INBOUND_URL, SECRET, {"status": "qualified"})
+    except ValueError as e:
+        assert "customerRef or referralId" in str(e)
+    else:
+        raise AssertionError("expected ValueError")

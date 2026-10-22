@@ -2,6 +2,13 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.11.0
+
+### Added
+
+- **Two-way referral sync.** Referral settings carry two-way sync: `inbound` (`url`, `secret_set`, `endpoint_id`, `last_event`) on reads, write-only `inbound_secret` and `inbound_endpoint_id` on updates (null clears), and provider capability `inbound`.
+- `sign_referral_updated_event(...)`: builds and signs a `referral.updated` event (atlas-id / atlas-timestamp / atlas-signature) for a referral platform reporting changes to `POST /v1/webhooks/referrals/{instance_id}`.
+
 ## 0.10.0
 
 ### Added

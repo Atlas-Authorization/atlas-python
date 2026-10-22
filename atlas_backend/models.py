@@ -3304,6 +3304,8 @@ class ReferralProviderCapabilities(_ReferralProviderCapabilitiesRequired, total=
     user: bool
     #: Answers a ping for the connection test (org, program, clock).
     ping: bool
+    #: Sends referral changes made after sign-up to Atlas (two-way sync).
+    inbound: bool
 
 
 class ReferralProvider(TypedDict):
@@ -3404,6 +3406,33 @@ class ReferralConnectionStatus(_ReferralConnectionStatusRequired, total=False):
     alert: ReferralAlert | None
 
 
+ReferralInboundOutcome = Literal[
+    "applied", "unchanged", "stale", "unknown_customer", "other_program", "ignored"
+]
+
+
+class ReferralInboundEvent(TypedDict):
+    """The latest event a platform sent to the inbound URL."""
+
+    #: When Atlas received it (epoch ms).
+    at: int
+    type: str
+    outcome: ReferralInboundOutcome
+
+
+class ReferralInboundStatus(TypedDict):
+    """Two-way sync: where the platform sends referral changes made after sign-up."""
+
+    #: Give this URL to the platform; ``None`` when the provider sends no events.
+    url: str | None
+    #: Whether an inbound secret is stored (the value is never returned).
+    secret_set: bool
+    #: The platform's id for Atlas's event subscription, kept for reference.
+    endpoint_id: str | None
+    #: The latest event received, or ``None``.
+    last_event: ReferralInboundEvent | None
+
+
 class _ReferralSettingsRequired(TypedDict):
     object: Literal["referral_settings"]
     enabled: bool
@@ -3445,6 +3474,9 @@ class ReferralSettings(_ReferralSettingsRequired, total=False):
     #: What the chosen provider still needs before referrals can be enabled.
     missing: list[str]
     connection: ReferralConnectionStatus | None
+    #: Two-way sync: the URL the platform sends referral changes to, and the latest
+    #: one received.
+    inbound: ReferralInboundStatus
     updated_at: int | None
 
 
@@ -3463,6 +3495,12 @@ class UpdateReferralSettingsBody(TypedDict, total=False):
     signing_secret: str | None
     #: Write-only vendor API key.
     api_key: str | None
+    #: Write-only, 16-512 characters: verifies the platform's events to
+    #: ``inbound.url``. Optional for the Atlas referral protocol (the signing
+    #: secret is used when unset).
+    inbound_secret: str | None
+    #: The platform's id for Atlas's event subscription, kept for reference.
+    inbound_endpoint_id: str | None
     url_params: list[str]
     context_cookie: str | None
     consent_category: str

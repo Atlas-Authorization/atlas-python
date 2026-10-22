@@ -516,6 +516,25 @@ if result.op == "ping":
 A retry of one call keeps its `delivery_id`; sign-ups are idempotent on `customerRef`, so answer a
 retry the same way.
 
+### Two-way sync
+
+A provider with the `inbound` capability can send referral changes made after sign-up back to
+Atlas. The settings report `inbound` (`url` to give the platform, `secret_set`, `endpoint_id` and
+`last_event` with `at`, `type`, `outcome`). Store the platform's event secret with `inbound_secret`
+(write-only, 16-512 characters) and its subscription id with `inbound_endpoint_id`; `None` clears.
+
+A platform on the Atlas referral protocol sends a `referral.updated` event to `inbound.url`, signed
+like an Atlas webhook with the inbound secret (or the connection's signing secret when none is set):
+
+```python
+from atlas_backend import sign_referral_updated_event
+
+event = sign_referral_updated_event(
+    inbound_url, secret, {"customerRef": "user_123", "referralId": "ref_1", "status": "qualified"}
+)
+httpx.post(event.url, content=event.body, headers=event.headers)
+```
+
 ## Back-channel logout
 
 When a user signs out of Atlas, Atlas POSTs a signed `logout_token` to your app's
