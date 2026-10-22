@@ -835,6 +835,29 @@ def test_inbound_settings_fields() -> None:
     assert body_of(patch) == {"inbound_secret": None, "inbound_endpoint_id": None}
 
 
+@respx.mock
+def test_browser_capture_settings_fields() -> None:
+    settings = {
+        **SETTINGS,
+        "browser_sources": ["rewardful", "dub"],
+        "browser_sources_default": False,
+        "consent_provider": "onetrust",
+    }
+    respx.get(REFERRALS).mock(return_value=httpx.Response(200, json=settings))
+    patch = respx.patch(REFERRALS).mock(return_value=httpx.Response(200, json=settings))
+    referrals = client().instance.referrals
+
+    view = referrals.get()
+    assert view["browser_sources"] == ["rewardful", "dub"]
+    assert view["browser_sources_default"] is False
+    assert view["consent_provider"] == "onetrust"
+
+    referrals.update({"browser_sources": ["rewardful", "dub"], "consent_provider": "app"})
+    assert body_of(patch) == {"browser_sources": ["rewardful", "dub"], "consent_provider": "app"}
+    referrals.update({"browser_sources": None})
+    assert body_of(patch) == {"browser_sources": None}
+
+
 def test_sign_referral_updated_event() -> None:
     event = sign_referral_updated_event(
         INBOUND_URL,

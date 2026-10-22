@@ -3433,6 +3433,30 @@ class ReferralInboundStatus(TypedDict):
     last_event: ReferralInboundEvent | None
 
 
+#: A referral program whose script or cookie the browser reads.
+ReferralBrowserSource = Literal[
+    "referally", "rewardful", "tolt", "promotekit", "firstpromoter", "partnerstack", "dub"
+]
+
+#: Which consent manager decides on the tracking cookie's ids: ``auto`` (any common
+#: one), one manager, or ``app`` (only the app's own decision).
+ReferralConsentProvider = Literal[
+    "auto",
+    "cookiemunch",
+    "onetrust",
+    "cookiebot",
+    "didomi",
+    "usercentrics",
+    "osano",
+    "cookieyes",
+    "complianz",
+    "klaro",
+    "tcf",
+    "consent_mode",
+    "app",
+]
+
+
 class _ReferralSettingsRequired(TypedDict):
     object: Literal["referral_settings"]
     enabled: bool
@@ -3464,6 +3488,13 @@ class ReferralSettings(_ReferralSettingsRequired, total=False):
     code_lookup_url: str | None
     #: Show an optional "Referral code" field on hosted sign-up (default ``False``).
     signup_code_field: bool
+    #: The referral programs whose script or cookie the browser reads, in order (the
+    #: provider's default unless set).
+    browser_sources: list[ReferralBrowserSource]
+    #: Whether ``browser_sources`` is the provider's default.
+    browser_sources_default: bool
+    #: Which consent manager decides on the tracking cookie's ids (default ``auto``).
+    consent_provider: ReferralConsentProvider
     #: Forward email, name and suspension changes to the platform (default ``True``).
     forward_lifecycle: bool
     #: Mirror the result into ``public_metadata.referral`` (default ``False``).
@@ -3516,6 +3547,9 @@ class UpdateReferralSettingsBody(TypedDict, total=False):
     #: An https URL template containing ``{code}``.
     code_lookup_url: str | None
     signup_code_field: bool
+    #: The programs to read, in order; ``None`` goes back to the provider's default.
+    browser_sources: list[ReferralBrowserSource] | None
+    consent_provider: ReferralConsentProvider
     forward_lifecycle: bool
     mirror_to_public_metadata: bool
     include_referral_claims: bool

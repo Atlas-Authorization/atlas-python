@@ -516,6 +516,10 @@ if result.op == "ping":
 A retry of one call keeps its `delivery_id`; sign-ups are idempotent on `customerRef`, so answer a
 retry the same way.
 
+Browser capture: `browser_sources` lists the referral programs whose script or cookie the browser
+reads (`None` on update goes back to the provider's default, reported by `browser_sources_default`),
+and `consent_provider` picks the consent manager that decides (`auto`, one manager, or `app`).
+
 ### Two-way sync
 
 A provider with the `inbound` capability can send referral changes made after sign-up back to

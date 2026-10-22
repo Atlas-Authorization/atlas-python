@@ -82,7 +82,7 @@ from ._referrals import (
 )
 from ._webhooks import WebhookVerification, verify_webhook
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 __all__ = [
     "AtlasClient",

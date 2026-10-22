@@ -2,6 +2,12 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.12.0
+
+### Added
+
+- Referral settings carry browser capture: `browser_sources` (the referral programs whose script or cookie the browser reads; null on update resets to the provider's default), `browser_sources_default`, and `consent_provider` (`auto`, one consent manager, or `app`).
+
 ## 0.11.0
 
 ### Added
