@@ -111,6 +111,9 @@ GET /v1/instance/design
 PATCH /v1/instance/design
 PUT /v1/instance/design
 POST /v1/instance/design/preview
+GET /v1/instance/hooks/before_user_create
+PATCH /v1/instance/hooks/before_user_create
+POST /v1/instance/hooks/before_user_create/test
 DELETE /v1/instance/integrations/chatly
 GET /v1/instance/integrations/chatly
 PUT /v1/instance/integrations/chatly
@@ -128,8 +131,12 @@ GET /v1/instance/proxy_secret
 POST /v1/instance/proxy_secret
 GET /v1/instance/referrals
 PATCH /v1/instance/referrals
+POST /v1/instance/referrals/backfill
+GET /v1/instance/referrals/backfill/{id}
 GET /v1/instance/referrals/calls
+POST /v1/instance/referrals/calls/retry_failed
 POST /v1/instance/referrals/calls/{id}/retry
+POST /v1/instance/referrals/simulate
 POST /v1/instance/referrals/test
 GET /v1/instance/security
 PATCH /v1/instance/security
@@ -470,6 +477,7 @@ DELETE /v1/users/{id}/phone_numbers/{pid}
 POST /v1/users/{id}/phone_numbers/{pid}/verify
 DELETE /v1/users/{id}/profile_image
 POST /v1/users/{id}/progression/events
+GET /v1/users/{id}/referral
 POST /v1/users/{id}/referral/flag
 POST /v1/users/{id}/reset_mfa
 GET /v1/users/{id}/resolved

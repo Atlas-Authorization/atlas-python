@@ -430,13 +430,15 @@ verifies the publisher name shown on consent screens.
 ## Referral attribution
 
 With referral attribution on, Atlas reports every interactive sign-up to your referral platform
-before `user.created` is sent. The user gains `referral` (who referred them, or `None`),
-`referral_code` and `referral_link`.
+before `user.created` is sent. The user gains `referral` (where attribution stands and, once
+attributed, who referred them; `None` when the user was never reported), `referral_code` and
+`referral_link`. `referral["status"]` is `pending`, `attributed`, `none`, `failed`, `held` or
+`flagged`; the platform's own status is `referral["referral_status"]`.
 
 ```python
 atlas.instance.referrals.update({
     "enabled": True,
-    "provider": "webhook",  # the Atlas referral protocol; or a built-in vendor adapter
+    "provider": "webhook",  # the Atlas referral protocol; or "referally" or another built-in adapter
     "endpoint_url": "https://referrals.example.com/atlas",
     "signing_secret": os.environ["REFERRAL_SIGNING_SECRET"],
     "auto_enroll_users": True,
@@ -450,12 +452,47 @@ atlas.users.update("user_123", {"referral_code": "ada-1"})   # 409 REFERRAL_CODE
 atlas.users.flag_referral("user_123", reason="self-referral")
 ```
 
-Enabling without what the provider needs is `422 REFERRALS_NOT_CONFIGURED`. A late answer from
-the platform arrives as the `user.referral_attributed` webhook (`UserReferralAttributedEvent`).
+More tools for the connection:
+
+```python
+referrals = atlas.instance.referrals
+referrals.update({"forward_lifecycle": True, "include_referral_claims": True,
+                  "signup_code_field": True})
+referrals.simulate(code="ACME10")             # a sign-up call for a made-up user; nothing is stored
+referrals.retry_failed(error_code="signature_rejected")   # after pasting the new secret
+page = referrals.list_calls(limit=1000, error_code="timeout")
+while page["has_more"]:
+    page = referrals.list_calls(limit=1000, starting_after=page["data"][-1]["id"])
+job = referrals.backfill({"since": "2026-01-01", "code_metadata_path": "public_metadata.referral_code"})
+referrals.get_backfill(job["id"])             # running, then completed
+referrals.get_for_user("user_123")            # the stored result, no call to the platform
+
+atlas.users.set_external_id("user_123", "cust_42")   # forwarded to the platform as an alias
+```
+
+To give each user your own id before the first referral call, turn on the `before_user_create`
+hook. Atlas then sends your endpoint a signed `POST` (verify it with `verify_webhook`) of type
+`user.before_create` for every self-service sign-up, and stamps the `external_id` and metadata you
+answer:
+
+```python
+atlas.instance.hooks.update_before_user_create({
+    "enabled": True,
+    "url": "https://app.example.com/hooks/before-create",
+    "signing_secret": os.environ["BEFORE_CREATE_SECRET"],
+})
+atlas.instance.hooks.test_before_user_create()   # {"ok": True, "answer": {...}}
+```
+
+Enabling without what the provider needs is `422 REFERRALS_NOT_CONFIGURED`. When the platform has
+not answered by the time `user.created` is sent, `referral["status"]` is `pending` and the
+`user.referral_resolved` webhook follows with the final user (`attributed`, `none` or `failed`).
+`user.referral_attributed` (`UserReferralAttributedEvent`) still fires for a late attribution.
 
 A referral platform that implements the Atlas referral protocol verifies Atlas's calls with
 `verify_referral_request`. Every call is a POST signed like a webhook, and its JSON body says which
-operation it is (`op`: `signup`, `erase`, `export`, `partner`, `signal`). Pass the path the call arrived
+operation it is (`op`: `signup`, `erase`, `export`, `partner`, `signal`, `alias`, `user`, `ping`).
+Pass the path the call arrived
 on: a signed body whose `op` does not match the endpoint is refused (`op_mismatch`).
 
 ```python
@@ -468,7 +505,13 @@ if result.op == "signup":
     return {"referral": match(result.payload), "partner": None}
 if result.op == "export":
     return 404 if result.test else export_for(result.customer_ref)
+if result.op == "alias":       # the user's external_id changed: re-key the customer
+    rekey(result.payload["fromCustomerRef"], result.payload["toCustomerRef"])
+if result.op == "ping":
+    return {"ok": True, "serverTime": datetime.now(timezone.utc).isoformat()}
 ```
+
+`result.protocol_version` is the `Atlas-Referrals-Version` header (`2026-10-21`).
 
 A retry of one call keeps its `delivery_id`; sign-ups are idempotent on `customerRef`, so answer a
 retry the same way.

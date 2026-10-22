@@ -53,6 +53,18 @@ class AsyncUsers:
     async def update(self, user_id: str, body: m.UpdateUserBody) -> m.User:
         return await self._t.request(method="PATCH", path=f"/v1/users/{user_id}", body=body)
 
+    async def set_external_id(self, user_id: str, external_id: str | None) -> m.User:
+        """Set (or clear with ``None``) the user's ``external_id``. With referral
+        attribution on, Atlas forwards the change to the referral platform as an alias
+        (old id, or the Atlas user id, to the new one), so later events under your id
+        still match.
+        """
+        return await self._t.request(
+            method="PATCH",
+            path=f"/v1/users/{user_id}",
+            body={"external_id": external_id},
+        )
+
     async def replace_metadata(self, user_id: str, body: m.ReplaceUserMetadataBody) -> m.User:
         return await self._t.request(method="PUT", path=f"/v1/users/{user_id}/metadata", body=body)
 
@@ -2947,6 +2959,7 @@ class AsyncInstance:
         self.security = _AsyncInstanceSecurity(transport)
         self.integrations = _AsyncInstanceIntegrations(transport)
         self.referrals = _AsyncInstanceReferrals(transport)
+        self.hooks = _AsyncInstanceHooks(transport)
 
     async def get(self) -> m.Instance:
         """Read instance configuration."""
@@ -3213,7 +3226,9 @@ class _AsyncInstanceReferrals:
         )
 
     async def test(self) -> m.ReferralConnectionTest:
-        """Send a signed probe to the platform. ``ok`` on 2xx or 404; ``error.code``
+        """Test the connection: a ping where the provider answers one (``method``
+        ``ping``, with ``ping`` and ``warnings`` such as clock skew), else a signed probe
+        (``method`` ``probe``: ``ok`` on 2xx or 404). ``error.code``
         ``signature_rejected`` on 401/403.
         """
         return await self._t.request(
@@ -3228,12 +3243,25 @@ class _AsyncInstanceReferrals:
         status: str | None = None,
         kind: str | None = None,
         user_id: str | None = None,
+        error_code: str | None = None,
+        starting_after: str | None = None,
     ) -> ListPage:
-        """The referral call log, newest first (``limit`` 1-200, default 50)."""
+        """The referral call log, newest first (``limit`` 1-1000, default 50; servers
+        before referral attribution v2 take at most 200). Page with ``starting_after``
+        (the id of the last call of the previous page) while ``has_more``; filter on
+        ``error_code`` (e.g. ``signature_rejected``).
+        """
         return await self._t.request(
             method="GET",
             path="/v1/instance/referrals/calls",
-            query=_q(limit=limit, status=status, kind=kind, user_id=user_id),
+            query=_q(
+                limit=limit,
+                status=status,
+                kind=kind,
+                user_id=user_id,
+                error_code=error_code,
+                starting_after=starting_after,
+            ),
         )
 
     async def retry_call(
@@ -3244,6 +3272,109 @@ class _AsyncInstanceReferrals:
             method="POST",
             path=f"/v1/instance/referrals/calls/{call_id}/retry",
             idempotency_key=idempotency_key,
+        )
+
+    async def retry_failed(
+        self,
+        *,
+        kind: str | None = None,
+        error_code: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> m.ReferralRetryFailedResult:
+        """Re-queue every failed call (not tests) to send now, optionally only one
+        ``kind`` or one ``error_code`` (e.g. ``signature_rejected`` after replacing the
+        secret).
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/instance/referrals/calls/retry_failed",
+            body=_q(kind=kind, error_code=error_code),
+            idempotency_key=idempotency_key,
+        )
+
+    async def simulate(self, *, code: str | None = None) -> m.ReferralSimulateResult:
+        """Send a sign-up call for a made-up user (``atlas_test_<random>``, no user is
+        created) with an optional ``code``, and return what the platform answered.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/instance/referrals/simulate",
+            body=_q(code=code),
+        )
+
+    async def backfill(
+        self,
+        body: m.ReferralBackfillBody,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.ReferralBackfillJob:
+        """Queue sign-up calls for existing users created at or after ``since``, with
+        their real sign-up time. AsyncUsers already reported are skipped. Referrals must be on
+        (422 ``REFERRALS_NOT_CONFIGURED`` otherwise). Poll :meth:`get_backfill`.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/instance/referrals/backfill",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_backfill(self, backfill_id: str) -> m.ReferralBackfillJob:
+        """Read a backfill job: how many calls it queued and where they stand."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/instance/referrals/backfill/{backfill_id}",
+        )
+
+    async def get_for_user(self, user_id: str) -> m.UserReferralResult:
+        """The stored referral result for one user (who referred them, how, their own
+        code), with no call to the platform. 404 when the user was never reported.
+        """
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/users/{user_id}/referral",
+        )
+
+
+class _AsyncInstanceHooks:
+    """The ``before_user_create`` hook: just before Atlas creates a user from a
+    self-service sign-up, it sends your endpoint a signed ``POST`` (the webhook headers;
+    verify it with :func:`verify_webhook`) of type ``user.before_create`` and stamps the
+    ``external_id`` and metadata you answer. A slow or failing hook never blocks a
+    sign-up. ``signing_secret`` is write-only.
+    """
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get_before_user_create(self) -> m.BeforeUserCreateHook:
+        """Read the hook settings and its last call."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/instance/hooks/before_user_create",
+        )
+
+    async def update_before_user_create(
+        self,
+        body: m.UpdateBeforeUserCreateHookBody,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.BeforeUserCreateHook:
+        """Update the hook; only the fields sent change, ``None`` clears. Turning it on
+        needs ``url`` and ``signing_secret``.
+        """
+        return await self._t.request(
+            method="PATCH",
+            path="/v1/instance/hooks/before_user_create",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def test_before_user_create(self) -> m.BeforeUserCreateHookTest:
+        """Send the hook a sample draft and return its answer; nothing is stored."""
+        return await self._t.request(
+            method="POST",
+            path="/v1/instance/hooks/before_user_create/test",
         )
 
 

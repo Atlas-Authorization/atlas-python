@@ -35,7 +35,9 @@ class _UserRequired(TypedDict):
 
 
 class UserReferral(TypedDict, total=False):
-    """The inbound referral the referral platform matched for a user."""
+    """Where a user's inbound referral stands and, once attributed, who referred them.
+    Present for every user reported to the referral platform.
+    """
 
     #: The platform's id for the referring partner.
     partner_id: str | None
@@ -46,8 +48,17 @@ class UserReferral(TypedDict, total=False):
     referrer_user_id: str | None
     #: How the platform matched the referral, e.g. ``code``, ``click``, ``coupon``.
     matched_via: str | None
-    #: The platform's own status for the referral.
+    #: Where attribution stands: ``pending`` (the platform has not answered yet),
+    #: ``attributed``, ``none``, ``failed``, ``held`` or ``flagged``. Servers before
+    #: referral attribution v2 sent the platform's own status here; that is now
+    #: ``referral_status``.
     status: str | None
+    #: The referrer as the platform knows them. Same value as ``referrer_external_id``.
+    partner_external_ref: str | None
+    #: The platform's own status for the referral, e.g. ``active``.
+    referral_status: str | None
+    #: The platform's reasoning notes (why it matched, or why not).
+    notes: list[str]
     #: The risk level Atlas assessed at sign-up, when one was.
     risk_level: Literal["low", "medium", "high"] | None
     #: An admin marked the referral fraudulent (``users.flag_referral``).
@@ -58,8 +69,8 @@ class User(_UserRequired, total=False):
     #: Strictly increases with every change to the user; webhook payloads carry the same
     #: value. Apply an update only if its version is higher than the one you hold.
     version: int
-    #: How the user arrived through a referral program (referral attribution on), or
-    #: ``None`` when not referred, not answered yet, or referrals are off.
+    #: Where the user's referral stands (referral attribution on), or ``None`` when the
+    #: user was never reported to the referral platform.
     referral: UserReferral | None
     #: The user's own referral code, when they are a referrer.
     referral_code: str | None
@@ -96,6 +107,49 @@ class UserReferralAttributedEvent(TypedDict):
     #: Epoch ms.
     signed_up_at: int
     updated_at: int
+
+
+#: The ``data`` of a ``user.referral_resolved`` webhook: the full user, sent when a
+#: referral that was still ``pending`` at ``user.created`` reaches its final state.
+#: ``referral.status`` is then ``attributed``, ``none`` or ``failed``.
+UserReferralResolvedEvent = User
+
+
+class _UserReferralResultRequired(TypedDict):
+    object: Literal["user_referral"]
+    user_id: str
+    #: ``pending``, ``attributed``, ``none``, ``failed``, ``held`` or ``flagged``.
+    status: Literal["pending", "attributed", "none", "failed", "held", "flagged"]
+    #: The id the referral platform knows the user by: their ``external_id``, else the
+    #: Atlas user id.
+    customer_ref: str
+    #: The platform's reasoning notes.
+    notes: list[str]
+    #: Epoch ms.
+    signed_up_at: int
+    updated_at: int
+
+
+class UserReferralResult(_UserReferralResultRequired, total=False):
+    """``GET /v1/users/{id}/referral``: the stored result of the user's referral calls,
+    with no call to the platform. 404 when the user was never reported.
+    """
+
+    partner_id: str | None
+    #: The referrer as the platform knows them.
+    partner_external_ref: str | None
+    referrer_user_id: str | None
+    matched_via: str | None
+    #: The platform's own status for the referral.
+    referral_status: str | None
+    referral_code: str | None
+    referral_link: str | None
+    #: The referral captured at sign-up, as sent (camelCase).
+    context: dict[str, Any] | None
+    risk_level: Literal["low", "medium", "high"] | None
+    flagged: bool
+    #: Why the sign-up report is held, while ``held``.
+    hold_reason: str | None
 
 
 class _EmailAddressVerificationRequired(TypedDict):
@@ -3234,7 +3288,7 @@ class InstanceDeleteProxySecretResult(TypedDict):
 # --------------------------------------------------------------------------- #
 
 
-class ReferralProviderCapabilities(TypedDict):
+class _ReferralProviderCapabilitiesRequired(TypedDict):
     signup: bool
     erase: bool
     export: bool
@@ -3243,15 +3297,25 @@ class ReferralProviderCapabilities(TypedDict):
     signal: bool
 
 
+class ReferralProviderCapabilities(_ReferralProviderCapabilitiesRequired, total=False):
+    #: Re-keys a customer whose ``external_id`` changed after sign-up.
+    alias: bool
+    #: Takes user lifecycle updates (email, name, suspension).
+    user: bool
+    #: Answers a ping for the connection test (org, program, clock).
+    ping: bool
+
+
 class ReferralProvider(TypedDict):
     """A referral provider Atlas supports."""
 
-    #: ``webhook`` (the Atlas referral protocol) or a vendor adapter id.
+    #: ``webhook`` (the Atlas referral protocol), ``referally`` or another vendor
+    #: adapter id.
     id: str
     name: str
     capabilities: ReferralProviderCapabilities
     #: What must be set before ``enabled`` can be true: ``endpoint_url``,
-    #: ``signing_secret``, ``api_key``, ``connection_id``.
+    #: ``signing_secret``, ``api_key``, ``connection_id``, ``tracking_token``.
     needs: list[str]
     default_context_cookie: str | None
     docs_url: str | None
@@ -3283,13 +3347,61 @@ class ReferralLastTest(TypedDict):
     error: str | None
 
 
-class ReferralConnectionStatus(TypedDict):
+class ReferralPing(TypedDict, total=False):
+    """What a platform answered to a ping (the connection test, where supported)."""
+
+    ok: bool
+    #: Epoch ms.
+    at: int | None
+    http_status: int | None
+    #: e.g. ``signature_rejected``, ``connection_paused``, ``timeout``,
+    #: ``network_error``, ``ping_not_ok``.
+    error_code: str | None
+    error: str | None
+    latency_ms: int | None
+    connection_id: str | None
+    program_id: str | None
+    program_name: str | None
+    org_name: str | None
+    #: The platform connection's own auto-enrol setting.
+    auto_enroll_users: bool | None
+    #: The platform's clock, as it reported it.
+    server_time: str | None
+    #: The platform's clock minus Atlas's, in ms. Signed calls fail past 5 minutes.
+    clock_skew_ms: int | None
+    #: True when the skew is over 60 seconds.
+    clock_skew_warning: bool
+
+
+class _ReferralAlertRequired(TypedDict):
+    #: ``signature_rejected`` (the platform answered 401: a rotated secret or clock
+    #: skew) or ``connection_paused``.
+    code: str
+    message: str
+    #: Epoch ms.
+    at: int
+
+
+class ReferralAlert(_ReferralAlertRequired, total=False):
+    """Delivery is blocked on something only a person can fix. Show it as a banner."""
+
+    call_id: str | None
+
+
+class _ReferralConnectionStatusRequired(TypedDict):
     last_test: ReferralLastTest | None
     #: Calls that failed permanently in the last 7 days.
     failed_calls_7d: int
     #: Calls waiting for a retry.
     retrying_calls: int
     last_success_at: int | None
+
+
+class ReferralConnectionStatus(_ReferralConnectionStatusRequired, total=False):
+    #: The last ping, when the provider answers one.
+    last_ping: ReferralPing | None
+    #: Set while delivery is blocked on something only a person can fix.
+    alert: ReferralAlert | None
 
 
 class _ReferralSettingsRequired(TypedDict):
@@ -3315,6 +3427,21 @@ class ReferralSettings(_ReferralSettingsRequired, total=False):
     link_template: str | None
     timeout_ms: int
     security: ReferralSecuritySettings
+    #: Public tracking token (the ``referally`` provider derives the code lookup from
+    #: it). Not a secret.
+    tracking_token: str | None
+    #: Public, CORS-enabled URL template with ``{code}`` for "X invited you" on hosted
+    #: sign-up.
+    code_lookup_url: str | None
+    #: Show an optional "Referral code" field on hosted sign-up (default ``False``).
+    signup_code_field: bool
+    #: Forward email, name and suspension changes to the platform (default ``True``).
+    forward_lifecycle: bool
+    #: Mirror the result into ``public_metadata.referral`` (default ``False``).
+    mirror_to_public_metadata: bool
+    #: Add the user's own code as a ``referral_code`` claim to session and ID tokens
+    #: (default ``False``).
+    include_referral_claims: bool
     #: What the chosen provider still needs before referrals can be enabled.
     missing: list[str]
     connection: ReferralConnectionStatus | None
@@ -3346,6 +3473,14 @@ class UpdateReferralSettingsBody(TypedDict, total=False):
     #: 100-5000.
     timeout_ms: int
     security: ReferralSecuritySettings
+    #: 1-128 of ``A-Z a-z 0-9 _ -``.
+    tracking_token: str | None
+    #: An https URL template containing ``{code}``.
+    code_lookup_url: str | None
+    signup_code_field: bool
+    forward_lifecycle: bool
+    mirror_to_public_metadata: bool
+    include_referral_claims: bool
 
 
 class ReferralTestError(TypedDict):
@@ -3363,6 +3498,115 @@ class ReferralConnectionTest(_ReferralConnectionTestRequired, total=False):
     http_status: int | None
     latency_ms: int | None
     error: ReferralTestError
+    #: ``ping`` when the platform answered a ping; ``probe`` for the signed export probe.
+    method: Literal["ping", "probe"]
+    #: The ping answer, when the provider supports ping.
+    ping: ReferralPing | None
+    #: e.g. a clock more than 60 seconds off.
+    warnings: list[str]
+
+
+class ReferralSimulationMatch(TypedDict, total=False):
+    partner_id: str | None
+    partner_external_ref: str | None
+    matched_via: str | None
+    status: str | None
+
+
+class ReferralSimulationPartner(TypedDict, total=False):
+    id: str | None
+    code: str | None
+    link: str | None
+
+
+class ReferralSimulationResult(TypedDict, total=False):
+    referral: ReferralSimulationMatch | None
+    partner: ReferralSimulationPartner | None
+    notes: list[str]
+
+
+class _ReferralSimulateResultRequired(TypedDict):
+    object: Literal["referral_simulation"]
+    ok: bool
+    #: ``atlas_test_<random>``. No user is created.
+    customer_ref: str
+
+
+class ReferralSimulateResult(_ReferralSimulateResultRequired, total=False):
+    """``POST /v1/instance/referrals/simulate``: a sign-up call for a made-up user."""
+
+    #: The logged call, in the delivery log.
+    call_id: str | None
+    http_status: int | None
+    latency_ms: int | None
+    #: The platform's answer, normalised (``None`` when the call failed).
+    result: ReferralSimulationResult | None
+    #: The platform's raw answer, personal fields removed.
+    response: dict[str, Any] | None
+    error: ReferralTestError | None
+
+
+class ReferralRetryFailedResult(TypedDict):
+    """``POST /v1/instance/referrals/calls/retry_failed``."""
+
+    object: Literal["referral_retry"]
+    #: How many failed calls were queued to send now.
+    requeued: int
+
+
+class _ReferralBackfillBodyRequired(TypedDict):
+    #: ISO 8601 date or date-time (or epoch ms): users created at or after it.
+    since: str | int
+
+
+class ReferralBackfillBody(_ReferralBackfillBodyRequired, total=False):
+    """``POST /v1/instance/referrals/backfill``."""
+
+    #: customerRef (``external_id`` or user id) to referral code, up to 10,000. Wins
+    #: over ``code_metadata_path``.
+    codes: dict[str, str]
+    #: Where each user keeps the code they arrived with, e.g.
+    #: ``public_metadata.referral_code``.
+    code_metadata_path: str
+
+
+class ReferralBackfillCalls(TypedDict):
+    pending: int
+    succeeded: int
+    failed: int
+    skipped: int
+    held: int
+
+
+class _ReferralBackfillJobRequired(TypedDict):
+    object: Literal["referral_backfill"]
+    id: str
+    #: ``running`` while any queued call is still to be sent, then ``completed``.
+    status: Literal["running", "completed"]
+    #: Epoch ms.
+    since: int
+    users_scanned: int
+    #: Already reported, or no code while auto-enrol is off.
+    users_skipped: int
+    calls_queued: int
+    #: True when more users matched than one backfill takes: run again from
+    #: ``next_since``.
+    truncated: bool
+    #: Where the queued calls stand.
+    calls: ReferralBackfillCalls
+    #: Epoch ms.
+    created_at: int
+
+
+class ReferralBackfillJob(_ReferralBackfillJobRequired, total=False):
+    """A backfill job. Users already reported are skipped."""
+
+    code_metadata_path: str | None
+    #: How many codes were given in ``codes``.
+    codes_given: int
+    #: Epoch ms, when ``truncated``.
+    next_since: int | None
+    finished_at: int | None
 
 
 class ReferralRisk(TypedDict):
@@ -3380,7 +3624,7 @@ class _ReferralCallRequired(TypedDict):
     object: Literal["referral_call"]
     #: Also the signed ``atlas-id`` header of every attempt.
     id: str
-    kind: Literal["signup", "erase", "export", "partner", "signal", "test"]
+    kind: Literal["signup", "erase", "export", "partner", "signal", "alias", "user", "ping", "test"]
     status: Literal["pending", "succeeded", "retrying", "failed", "held", "skipped"]
     customer_ref: str
     attempts: int
@@ -3400,7 +3644,94 @@ class ReferralCall(_ReferralCallRequired, total=False):
     risk: ReferralRisk | None
     #: What was sent (never secrets).
     payload: dict[str, Any]
+    #: Round trip of the last attempt, in ms.
+    latency_ms: int | None
+    #: Why the last attempt failed, e.g. ``signature_rejected`` (401, not retried),
+    #: ``connection_paused`` (not retried), ``rate_limited``, ``timeout``,
+    #: ``network_error``, ``alias_conflict``, ``http_<status>``.
+    error_code: str | None
+    #: The platform's last answer, personal fields removed.
+    response: dict[str, Any] | None
+    #: Sign-up calls: how the platform matched the referral and why.
+    highlights: ReferralCallHighlights | None
+    #: The platform's request id for its last answer, for its support team.
+    request_id: str | None
+    #: The backfill job that queued the call.
+    batch_id: str | None
     updated_at: int
+
+
+class ReferralCallHighlights(TypedDict, total=False):
+    matched_via: str | None
+    partner_external_ref: str | None
+    notes: list[str]
+
+
+# --------------------------------------------------------------------------- #
+# before_user_create hook                                                      #
+# --------------------------------------------------------------------------- #
+
+
+class BeforeUserCreateHookLastCall(TypedDict, total=False):
+    #: Epoch ms.
+    at: int
+    #: ``ok``, ``timeout``, ``error`` or ``invalid_response``.
+    status: str | None
+    error: str | None
+
+
+class _BeforeUserCreateHookRequired(TypedDict):
+    object: Literal["before_user_create_hook"]
+    enabled: bool
+    url: str | None
+    #: The secret is write-only.
+    signing_secret_set: bool
+    #: 500-5000, default 3000.
+    timeout_ms: int
+
+
+class BeforeUserCreateHook(_BeforeUserCreateHookRequired, total=False):
+    """``GET /v1/instance/hooks/before_user_create``."""
+
+    #: The last call Atlas made to the hook.
+    last_call: BeforeUserCreateHookLastCall | None
+    updated_at: int | None
+
+
+class UpdateBeforeUserCreateHookBody(TypedDict, total=False):
+    """``PATCH /v1/instance/hooks/before_user_create``: only the fields sent change.
+    Turning it on needs ``url`` and ``signing_secret``.
+    """
+
+    enabled: bool
+    #: https (http only for localhost on a development instance); ``None`` clears.
+    url: str | None
+    #: Write-only, 16-512 characters; ``None`` clears.
+    signing_secret: str | None
+    #: 500-5000.
+    timeout_ms: int
+
+
+class BeforeUserCreateHookAnswer(TypedDict, total=False):
+    external_id: str | None
+    public_metadata: dict[str, Any] | None
+    private_metadata_set: bool
+    unsafe_metadata: dict[str, Any] | None
+
+
+class _BeforeUserCreateHookTestRequired(TypedDict):
+    ok: bool
+    latency_ms: int
+
+
+class BeforeUserCreateHookTest(_BeforeUserCreateHookTestRequired, total=False):
+    """``POST /v1/instance/hooks/before_user_create/test``: a sample draft sent to the
+    hook; nothing is stored.
+    """
+
+    answer: BeforeUserCreateHookAnswer
+    #: ``code``: ``timeout``, ``error``, ``invalid_response`` or ``not_configured``.
+    error: ReferralTestError
 
 
 class SetLdapBindPasswordBody(TypedDict, total=False):

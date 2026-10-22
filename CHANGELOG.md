@@ -2,6 +2,54 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.10.0
+
+### Added
+
+- **Referral attribution v2.** `instance.referrals.retry_failed(*, kind=None, error_code=None,
+  idempotency_key=None)` (`POST /v1/instance/referrals/calls/retry_failed`,
+  `ReferralRetryFailedResult` with `requeued`), `instance.referrals.simulate(*, code=None)`
+  (`POST /v1/instance/referrals/simulate`, `ReferralSimulateResult`: `call_id`, `customer_ref`,
+  `result`, `response`), `instance.referrals.backfill(body, *, idempotency_key=None)` and
+  `instance.referrals.get_backfill(backfill_id)` (`POST /v1/instance/referrals/backfill`,
+  `GET /v1/instance/referrals/backfill/{id}`; `ReferralBackfillBody`: `since`, `codes`,
+  `code_metadata_path`; `ReferralBackfillJob`: `users_scanned`, `users_skipped`, `calls_queued`,
+  `truncated`, `next_since`, `calls`), and `instance.referrals.get_for_user(user_id)`
+  (`GET /v1/users/{id}/referral`, `UserReferralResult`).
+- **Settings.** `ReferralSettings` and `UpdateReferralSettingsBody` gain `tracking_token`,
+  `code_lookup_url`, `signup_code_field`, `forward_lifecycle`, `mirror_to_public_metadata` and
+  `include_referral_claims`. `provider` can be `referally`. `ReferralProviderCapabilities` gains
+  `alias`, `user` and `ping`. `ReferralConnectionStatus` gains `last_ping` (`ReferralPing`) and
+  `alert` (`ReferralAlert`: `signature_rejected` or `connection_paused`).
+  `ReferralConnectionTest` gains `method` (`ping` or `probe`), `ping` and `warnings`.
+- **Call log.** `instance.referrals.list_calls` takes `error_code` and `starting_after`; `limit`
+  goes up to 1000. `ReferralCall.kind` adds `alias`, `user` and `ping`; calls gain `latency_ms`,
+  `error_code`, `response`, `highlights` (`ReferralCallHighlights`), `request_id` and `batch_id`.
+- **Users.** `users.set_external_id(user_id, external_id)` (`PATCH /v1/users/{id}`; with referrals
+  on, the change is forwarded to the platform as an alias). `UserReferral` gains
+  `partner_external_ref`, `referral_status` and `notes`. `UserReferralResolvedEvent` types the
+  `data` of the new `user.referral_resolved` webhook (the full user).
+- **before_user_create hook.** New `instance.hooks` namespace: `get_before_user_create()`,
+  `update_before_user_create(body, *, idempotency_key=None)` and `test_before_user_create()`
+  (`/v1/instance/hooks/before_user_create`; `BeforeUserCreateHook`,
+  `UpdateBeforeUserCreateHookBody`, `BeforeUserCreateHookTest`). The hook call is signed like a
+  webhook with type `user.before_create`; verify it with `verify_webhook`.
+- **Preflight** can report `referrals_secret_invalid`, `referrals_program_inactive`,
+  `referrals_unreachable`, `referrals_clock_skew` and `referrals_external_id_unset`.
+- **Referral protocol receiver.** `verify_referral_request` accepts the operations `alias`
+  (`/aliases`, `ReferralAliasPayload`), `user` (`/users`, `ReferralUserPayload`) and `ping`
+  (`/ping`, `ReferralPingPayload`; answer `ReferralPingResponse`), and
+  `ReferralVerification` gains `protocol_version` (the `Atlas-Referrals-Version` header).
+  `ReferralSignupResponse` gains optional `notes`. New constants `REFERRAL_PROTOCOL_VERSION`
+  (`2026-10-21`) and `REFERRAL_PROTOCOL_VERSION_HEADER`.
+
+### Changed
+
+- On the server, `user["referral"]["status"]` is now where attribution stands (`pending`,
+  `attributed`, `none`, `failed`, `held`, `flagged`); the platform's own status moved to
+  `referral_status`. The user `referral` is present for every user reported to the platform, and
+  `user.created` carries `status: "pending"` while the platform has not answered.
+
 ## 0.9.0
 
 ### Added

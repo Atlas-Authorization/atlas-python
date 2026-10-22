@@ -19,6 +19,9 @@ import respx
 
 from atlas_backend import (
     REFERRAL_CONNECTION_TEST_REF,
+    REFERRAL_OP_ENDPOINTS,
+    REFERRAL_PROTOCOL_VERSION,
+    REFERRAL_PROTOCOL_VERSION_HEADER,
     AsyncAtlasClient,
     AtlasClient,
     AtlasError,
@@ -408,3 +411,382 @@ def test_referral_op_for_path() -> None:
     assert referral_op_for_path("https://x.example.com/b/partners?x=1") == "partner"
     assert referral_op_for_path("/signals/") == "signal"
     assert referral_op_for_path("/nope") is None
+
+
+# --------------------------------------------------------------------------- #
+# Referral attribution v2                                                      #
+# --------------------------------------------------------------------------- #
+
+PING = {
+    "ok": True,
+    "at": 7,
+    "http_status": 200,
+    "error_code": None,
+    "error": None,
+    "latency_ms": 31,
+    "connection_id": "conn_1",
+    "program_id": "prg_1",
+    "program_name": "Acme partners",
+    "org_name": "Acme",
+    "auto_enroll_users": True,
+    "server_time": "2026-10-21T12:00:00.000Z",
+    "clock_skew_ms": 90_000,
+    "clock_skew_warning": True,
+}
+
+BACKFILL = {
+    "object": "referral_backfill",
+    "id": "rbf_1",
+    "status": "running",
+    "since": 1_790_000_000_000,
+    "code_metadata_path": "public_metadata.referral_code",
+    "codes_given": 1,
+    "users_scanned": 12,
+    "users_skipped": 2,
+    "calls_queued": 10,
+    "truncated": False,
+    "next_since": None,
+    "calls": {"pending": 10, "succeeded": 0, "failed": 0, "skipped": 0, "held": 0},
+    "created_at": 1,
+    "finished_at": None,
+}
+
+HOOK = {
+    "object": "before_user_create_hook",
+    "enabled": True,
+    "url": "https://app.example.com/hooks/before-create",
+    "signing_secret_set": True,
+    "timeout_ms": 3000,
+    "last_call": {"at": 3, "status": "ok", "error": None},
+    "updated_at": 3,
+}
+
+
+@respx.mock
+def test_v2_settings_fields_and_ping_test() -> None:
+    settings = {
+        **SETTINGS,
+        "provider": "referally",
+        "tracking_token": "tt_public_1",
+        "code_lookup_url": "https://referrals.example.com/lookup/{code}",
+        "signup_code_field": True,
+        "forward_lifecycle": True,
+        "mirror_to_public_metadata": False,
+        "include_referral_claims": True,
+        "connection": {
+            **SETTINGS["connection"],
+            "last_ping": PING,
+            "alert": {"code": "signature_rejected", "message": "401", "at": 9, "call_id": "rfc_9"},
+        },
+    }
+    respx.get(REFERRALS).mock(return_value=httpx.Response(200, json=settings))
+    patch = respx.patch(REFERRALS).mock(return_value=httpx.Response(200, json=settings))
+    respx.post(f"{REFERRALS}/test").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "http_status": 200,
+                "latency_ms": 31,
+                "method": "ping",
+                "ping": PING,
+                "warnings": ["clock skew"],
+            },
+        )
+    )
+    referrals = client().instance.referrals
+
+    view = referrals.get()
+    assert view["tracking_token"] == "tt_public_1"
+    connection = view["connection"]
+    assert connection is not None
+    assert connection["alert"] is not None and connection["alert"]["code"] == "signature_rejected"
+    assert connection["last_ping"] is not None and connection["last_ping"]["clock_skew_warning"]
+
+    referrals.update(
+        {
+            "provider": "referally",
+            "tracking_token": "tt_public_1",
+            "code_lookup_url": None,
+            "signup_code_field": True,
+            "forward_lifecycle": False,
+            "mirror_to_public_metadata": True,
+            "include_referral_claims": True,
+        }
+    )
+    assert body_of(patch) == {
+        "provider": "referally",
+        "tracking_token": "tt_public_1",
+        "code_lookup_url": None,
+        "signup_code_field": True,
+        "forward_lifecycle": False,
+        "mirror_to_public_metadata": True,
+        "include_referral_claims": True,
+    }
+    tested = referrals.test()
+    assert tested["method"] == "ping" and tested["warnings"] == ["clock skew"]
+    ping = tested["ping"]
+    assert ping is not None and ping["org_name"] == "Acme"
+
+
+@respx.mock
+def test_v2_call_log_paging_and_fields() -> None:
+    call = {
+        **CALL,
+        "kind": "alias",
+        "error_code": "signature_rejected",
+        "latency_ms": 44,
+        "request_id": "req_1",
+        "response": {"ok": False},
+        "highlights": {"matched_via": "code", "partner_external_ref": "cust_9", "notes": ["n"]},
+        "batch_id": "rbf_1",
+    }
+    calls = respx.get(f"{REFERRALS}/calls").mock(
+        return_value=httpx.Response(200, json={"object": "list", "data": [call], "has_more": True})
+    )
+    page = client().instance.referrals.list_calls(
+        limit=1000, error_code="signature_rejected", starting_after="rfc_0"
+    )
+    assert dict(calls.calls.last.request.url.params) == {
+        "limit": "1000",
+        "error_code": "signature_rejected",
+        "starting_after": "rfc_0",
+    }
+    assert page["has_more"] is True
+    got = page["data"][0]
+    assert got["error_code"] == "signature_rejected" and got["batch_id"] == "rbf_1"
+    assert got["highlights"]["notes"] == ["n"]
+
+
+@respx.mock
+def test_v2_retry_failed_simulate_backfill() -> None:
+    retry = respx.post(f"{REFERRALS}/calls/retry_failed").mock(
+        return_value=httpx.Response(200, json={"object": "referral_retry", "requeued": 4})
+    )
+    simulate = respx.post(f"{REFERRALS}/simulate").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "referral_simulation",
+                "ok": True,
+                "call_id": "rfc_5",
+                "customer_ref": "atlas_test_abc",
+                "http_status": 200,
+                "latency_ms": 20,
+                "result": {
+                    "referral": {
+                        "partner_id": "pn_1",
+                        "partner_external_ref": "cust_9",
+                        "matched_via": "code",
+                        "status": "active",
+                    },
+                    "partner": None,
+                    "notes": ["matched code"],
+                },
+                "response": {"referral": {}},
+                "error": None,
+            },
+        )
+    )
+    backfill = respx.post(f"{REFERRALS}/backfill").mock(
+        return_value=httpx.Response(200, json=BACKFILL)
+    )
+    get_backfill = respx.get(f"{REFERRALS}/backfill/rbf_1").mock(
+        return_value=httpx.Response(200, json={**BACKFILL, "status": "completed"})
+    )
+    referrals = client().instance.referrals
+
+    assert (
+        referrals.retry_failed(error_code="signature_rejected", idempotency_key="k1")["requeued"]
+        == 4
+    )
+    assert body_of(retry) == {"error_code": "signature_rejected"}
+    assert retry.calls.last.request.headers["idempotency-key"] == "k1"
+    referrals.retry_failed()
+    assert body_of(retry) == {}
+
+    sim = referrals.simulate(code="ACME10")
+    assert body_of(simulate) == {"code": "ACME10"}
+    result = sim["result"]
+    assert result is not None and result["notes"] == ["matched code"]
+    referrals.simulate()
+    assert body_of(simulate) == {}
+
+    job = referrals.backfill(
+        {"since": "2026-01-01", "codes": {"cust_1": "ACME10"}}, idempotency_key="k2"
+    )
+    assert body_of(backfill) == {"since": "2026-01-01", "codes": {"cust_1": "ACME10"}}
+    assert backfill.calls.last.request.headers["idempotency-key"] == "k2"
+    assert job["calls"]["pending"] == 10
+    assert referrals.get_backfill("rbf_1")["status"] == "completed"
+    assert get_backfill.called
+
+
+@respx.mock
+def test_v2_user_referral_result_set_external_id_and_fields() -> None:
+    result = {
+        "object": "user_referral",
+        "user_id": "user_1",
+        "status": "attributed",
+        "customer_ref": "cust_1",
+        "partner_id": "pn_1",
+        "partner_external_ref": "cust_9",
+        "referrer_user_id": "user_9",
+        "matched_via": "code",
+        "referral_status": "active",
+        "notes": ["matched code"],
+        "referral_code": "ada-1",
+        "referral_link": None,
+        "context": {"code": "ACME10"},
+        "risk_level": "low",
+        "flagged": False,
+        "hold_reason": None,
+        "signed_up_at": 1,
+        "updated_at": 2,
+    }
+    respx.get(f"{API_URL}/v1/users/user_1/referral").mock(
+        return_value=httpx.Response(200, json=result)
+    )
+    user = {
+        "object": "user",
+        "id": "user_1",
+        "external_id": "cust_1",
+        "referral": {
+            "status": "pending",
+            "partner_id": None,
+            "partner_external_ref": None,
+            "referrer_external_id": None,
+            "referrer_user_id": None,
+            "matched_via": None,
+            "referral_status": None,
+            "notes": [],
+            "risk_level": None,
+            "flagged": False,
+        },
+    }
+    update = respx.patch(f"{API_URL}/v1/users/user_1").mock(
+        return_value=httpx.Response(200, json=user)
+    )
+    atlas = client()
+
+    got = atlas.instance.referrals.get_for_user("user_1")
+    assert got["status"] == "attributed" and got["referral_status"] == "active"
+    assert got["customer_ref"] == "cust_1"
+
+    updated = atlas.users.set_external_id("user_1", "cust_1")
+    assert body_of(update) == {"external_id": "cust_1"}
+    referral = updated["referral"]
+    assert referral is not None and referral["status"] == "pending"
+    atlas.users.set_external_id("user_1", None)
+    assert body_of(update) == {"external_id": None}
+
+
+@respx.mock
+def test_v2_before_user_create_hook() -> None:
+    url = f"{API_URL}/v1/instance/hooks/before_user_create"
+    get = respx.get(url).mock(return_value=httpx.Response(200, json=HOOK))
+    patch = respx.patch(url).mock(return_value=httpx.Response(200, json=HOOK))
+    test = respx.post(f"{url}/test").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "latency_ms": 12,
+                "answer": {
+                    "external_id": "cust_1",
+                    "public_metadata": None,
+                    "private_metadata_set": True,
+                    "unsafe_metadata": None,
+                },
+            },
+        )
+    )
+    hooks = client().instance.hooks
+
+    hook = hooks.get_before_user_create()
+    assert get.called and hook["last_call"] is not None
+    hooks.update_before_user_create(
+        {"enabled": True, "url": HOOK["url"], "signing_secret": "s" * 32, "timeout_ms": 2000},
+        idempotency_key="k3",
+    )
+    assert body_of(patch) == {
+        "enabled": True,
+        "url": HOOK["url"],
+        "signing_secret": "s" * 32,
+        "timeout_ms": 2000,
+    }
+    assert patch.calls.last.request.headers["idempotency-key"] == "k3"
+    tested = hooks.test_before_user_create()
+    assert tested["answer"]["external_id"] == "cust_1"
+    assert test.calls.last.request.content in (b"", None)
+
+
+@respx.mock
+def test_v2_async() -> None:
+    respx.post(f"{REFERRALS}/simulate").mock(
+        return_value=httpx.Response(
+            200, json={"object": "referral_simulation", "ok": False, "customer_ref": "atlas_test_x"}
+        )
+    )
+    respx.get(f"{API_URL}/v1/instance/hooks/before_user_create").mock(
+        return_value=httpx.Response(200, json=HOOK)
+    )
+    update = respx.patch(f"{API_URL}/v1/users/user_1").mock(
+        return_value=httpx.Response(200, json={"object": "user", "id": "user_1"})
+    )
+
+    async def run() -> None:
+        async with AsyncAtlasClient("sk_test_x", base_url=API_URL) as atlas:
+            sim = await atlas.instance.referrals.simulate(code="ACME10")
+            assert sim["ok"] is False
+            hook = await atlas.instance.hooks.get_before_user_create()
+            assert hook["enabled"] is True
+            await atlas.users.set_external_id("user_1", "cust_1")
+
+    asyncio.run(run())
+    assert body_of(update) == {"external_id": "cust_1"}
+
+
+ALIAS = json.dumps(
+    {"op": "alias", "customerRef": "cust_1", "fromCustomerRef": "user_1", "toCustomerRef": "cust_1"}
+)
+USER = json.dumps(
+    {"op": "user", "customerRef": "cust_1", "email": "a@example.com", "status": "suspended"}
+)
+PING_CALL = json.dumps({"op": "ping", "customerRef": REFERRAL_CONNECTION_TEST_REF})
+
+
+def test_verify_alias_user_ping_and_version_header() -> None:
+    alias = verify(ALIAS, "/atlas/aliases")
+    assert alias.verified and alias.op == "alias" and alias.customer_ref == "cust_1"
+    assert alias.payload is not None and alias.payload["fromCustomerRef"] == "user_1"
+    user = verify(USER, "/atlas/users")
+    assert user.verified and user.op == "user"
+    assert user.payload is not None and user.payload["status"] == "suspended"
+    ping = verify(PING_CALL, "/atlas/ping")
+    assert ping.verified and ping.op == "ping" and not ping.test
+    assert ping.customer_ref == REFERRAL_CONNECTION_TEST_REF
+    assert verify(PING_CALL, expected_op="ping").verified
+    # Replays against another endpoint are refused.
+    assert verify(ALIAS, "/atlas/users").reason == "op_mismatch"
+    assert verify(PING_CALL, "/atlas/export").reason == "op_mismatch"
+    assert verify(USER, expected_op="alias").reason == "op_mismatch"
+    # The version header is read when sent, and is not required.
+    assert ping.protocol_version is None
+    headers = {**signed("rfc_2", PING_CALL), "Atlas-Referrals-Version": REFERRAL_PROTOCOL_VERSION}
+    versioned = verify_referral_request(PING_CALL, headers, SECRET, path="/ping", now_ms=NOW)
+    assert versioned.protocol_version == "2026-10-21"
+    assert REFERRAL_PROTOCOL_VERSION_HEADER == "atlas-referrals-version"
+    assert referral_op_for_path("/a/aliases") == "alias"
+    assert referral_op_for_path("/a/users/") == "user"
+    assert referral_op_for_path("/a/ping?x=1") == "ping"
+    assert set(REFERRAL_OP_ENDPOINTS) == {
+        "signup",
+        "erase",
+        "export",
+        "partner",
+        "signal",
+        "alias",
+        "user",
+        "ping",
+    }

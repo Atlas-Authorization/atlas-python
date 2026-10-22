@@ -1,4 +1,4 @@
-"""The Atlas referral protocol (v1), for a REFERRAL PLATFORM receiving calls from Atlas.
+"""The Atlas referral protocol, for a REFERRAL PLATFORM receiving calls from Atlas.
 
 An Atlas instance with referral attribution on (provider ``webhook``) calls the
 platform's base URL. Every call is a signed POST whose JSON body says which
@@ -9,13 +9,17 @@ operation it is (``op``) and which customer it is about::
     POST {base}/export    {op: export, customerRef, test}               -> 200 any JSON | 404
     POST {base}/partners  {op: partner, customerRef, code, emailHash}   -> 2xx | 409 | 404/405/501
     POST {base}/signals   {op: signal, customerRef, type, ...}         -> 2xx | 404/405/501
+    POST {base}/aliases   {op: alias, customerRef, fromCustomerRef, toCustomerRef}
+                                                                    -> 2xx | 409 (permanent)
+    POST {base}/users     {op: user, customerRef, email?, name?, status?} -> 2xx
+    POST {base}/ping      {op: ping, customerRef: atlas_connection_test} -> 200 ReferralPingResponse
 
 The connection test is ``POST {base}/export`` with ``{op: export, customerRef:
 atlas_connection_test, test: true}`` (answer 2xx or 404). Calls are signed exactly
 like Atlas webhooks (``atlas-id``, ``atlas-timestamp``, ``atlas-signature`` over
-``<id>.<timestamp>.<raw body>``), with ``Idempotency-Key`` and
-``User-Agent: Atlas-Referrals/1``. ``atlas-id`` is the call id, the same on every
-retry of one call.
+``<id>.<timestamp>.<raw body>``), with ``Idempotency-Key``,
+``User-Agent: Atlas-Referrals/1`` and ``Atlas-Referrals-Version: 2026-10-21``.
+``atlas-id`` is the call id, the same on every retry of one call.
 
 The signature covers the body, not the URL. Pass the path the call arrived on (or
 the operation you expect): a signed body whose ``op`` does not match it is refused,
@@ -31,6 +35,8 @@ so a captured call cannot be replayed against another endpoint. Matches
         return attribute(result.payload)       # a ReferralSignupResponse
     if result.op == "export" and result.test:
         return 404
+    if result.op == "ping":
+        return {"ok": True, "serverTime": now_iso()}   # a ReferralPingResponse
 """
 
 from __future__ import annotations
@@ -46,6 +52,11 @@ from ._webhooks import REPLAY_TOLERANCE_MS, _header, verify_webhook
 REFERRAL_CONNECTION_TEST_REF = "atlas_connection_test"
 #: The ``User-Agent`` Atlas sends on every referral call.
 REFERRAL_PROTOCOL_USER_AGENT = "Atlas-Referrals/1"
+#: The ``Atlas-Referrals-Version`` Atlas sends on every call; shapes only grow, additively,
+#: under it.
+REFERRAL_PROTOCOL_VERSION = "2026-10-21"
+#: The name of the version header (lower-case).
+REFERRAL_PROTOCOL_VERSION_HEADER = "atlas-referrals-version"
 
 #: The lifecycle signal types.
 REFERRAL_SIGNAL_TYPES = (
@@ -57,7 +68,7 @@ REFERRAL_SIGNAL_TYPES = (
     "fraud_confirmed",
 )
 
-ReferralOp = Literal["signup", "erase", "export", "partner", "signal"]
+ReferralOp = Literal["signup", "erase", "export", "partner", "signal", "alias", "user", "ping"]
 
 #: The endpoint (last path segment) each operation is sent to.
 REFERRAL_OP_ENDPOINTS: dict[str, str] = {
@@ -66,6 +77,9 @@ REFERRAL_OP_ENDPOINTS: dict[str, str] = {
     "export": "export",
     "partner": "partners",
     "signal": "signals",
+    "alias": "aliases",
+    "user": "users",
+    "ping": "ping",
 }
 
 
@@ -132,6 +146,8 @@ class ReferralSignupResponse(_ReferralSignupResponseRequired, total=False):
 
     #: The user's own partner record when ``autoEnroll`` was true.
     partner: ReferralPartner | None
+    #: Why you matched or did not (shown in the Atlas delivery log and on the user).
+    notes: list[str]
 
 
 class ReferralErasePayload(TypedDict):
@@ -167,6 +183,58 @@ class ReferralSignalPayload(TypedDict):
     data: dict[str, Any]
 
 
+class ReferralAliasPayload(TypedDict):
+    """``POST {base}/aliases``: the user's ``external_id`` was set or changed after the
+    sign-up call. Re-key the customer from ``fromCustomerRef`` (the old value, or the
+    Atlas user id) to ``toCustomerRef``. ``customerRef`` equals ``toCustomerRef``. A 409
+    is treated as permanent.
+    """
+
+    op: Literal["alias"]
+    customerRef: str
+    fromCustomerRef: str
+    toCustomerRef: str
+
+
+class _ReferralUserPayloadRequired(TypedDict):
+    op: Literal["user"]
+    customerRef: str
+
+
+class ReferralUserPayload(_ReferralUserPayloadRequired, total=False):
+    """``POST {base}/users``: a lifecycle change. ``email`` / ``name`` when they changed;
+    ``status`` ``suspended`` on a ban, ``active`` on an unban, ``deleted`` on deletion
+    (deletion is also sent to ``/erase``).
+    """
+
+    email: str | None
+    name: str | None
+    status: Literal["active", "suspended", "deleted"]
+
+
+class ReferralPingPayload(TypedDict):
+    """``POST {base}/ping``: the connection test where the platform supports it."""
+
+    op: Literal["ping"]
+    customerRef: str
+
+
+class _ReferralPingResponseRequired(TypedDict):
+    ok: bool
+
+
+class ReferralPingResponse(_ReferralPingResponseRequired, total=False):
+    """The answer to a ping. Every field but ``ok`` is optional and shown on the Atlas
+    dashboard.
+    """
+
+    programName: str
+    orgName: str
+    autoEnrollUsers: bool
+    #: ISO 8601. Atlas warns when it is more than 60 seconds off.
+    serverTime: str
+
+
 @dataclass(frozen=True)
 class ReferralVerification:
     """The outcome of :func:`verify_referral_request`. Never raised: check ``verified``."""
@@ -178,7 +246,8 @@ class ReferralVerification:
     #: segment is not a protocol endpoint) or ``op_mismatch`` (the signed ``op`` is not
     #: the endpoint's or the expected one).
     reason: str | None = None
-    #: ``signup``, ``erase``, ``export``, ``partner`` or ``signal`` (verified only).
+    #: ``signup``, ``erase``, ``export``, ``partner``, ``signal``, ``alias``, ``user`` or
+    #: ``ping`` (verified only).
     op: ReferralOp | None = None
     #: The signed JSON body, including ``op`` and ``customerRef`` (verified only).
     payload: dict[str, Any] | None = None
@@ -191,6 +260,8 @@ class ReferralVerification:
     timestamp: int | None = None
     #: The ``Idempotency-Key`` header (not signed).
     idempotency_key: str | None = None
+    #: The ``Atlas-Referrals-Version`` header, when sent (not signed).
+    protocol_version: str | None = None
 
 
 def referral_op_for_path(path: str) -> ReferralOp | None:
@@ -248,4 +319,5 @@ def verify_referral_request(
         delivery_id=result.delivery_id,
         timestamp=result.timestamp,
         idempotency_key=_header(headers, "idempotency-key"),
+        protocol_version=_header(headers, REFERRAL_PROTOCOL_VERSION_HEADER),
     )
