@@ -424,6 +424,8 @@ class Session(_SessionRequired, total=False):
     #: Epoch ms the session ends from inactivity unless there is activity first
     #: (same value as ``abandon_at``).
     idle_expires_at: int
+    #: Custom per-session data your backend (or a post_login Action) attached.
+    custom_data: dict[str, Any] | None
 
 
 class TouchedSession(_SessionRequired):
@@ -630,6 +632,25 @@ class OAuthClient(_OAuthClientRequired, total=False):
     client_secret_expires_at: int | None
     #: ``cimd`` when the client came from its Client ID Metadata Document.
     discovery_source: str | None
+    #: ``jwt`` or ``opaque`` access tokens for this client; ``None`` inherits.
+    access_token_format: Literal["jwt", "opaque"] | None
+    #: Token lifetime overrides (seconds); a ``None`` field is inherited. On write it
+    #: replaces the overrides; ``None`` clears them all.
+    token_lifetimes: OAuthTokenLifetimes | None
+
+
+class OAuthTokenLifetimes(TypedDict, total=False):
+    """Token lifetimes in seconds; a missing or ``None`` field inherits the API's, then
+    the instance's, then Atlas's default. Bounds: access / id token 60–86400; refresh
+    token 300–31536000 (idle ≤ absolute); authorization code 10–600; device code
+    60–1800."""
+
+    access_token_ttl_seconds: int | None
+    id_token_ttl_seconds: int | None
+    refresh_token_absolute_ttl_seconds: int | None
+    refresh_token_idle_ttl_seconds: int | None
+    authorization_code_ttl_seconds: int | None
+    device_code_ttl_seconds: int | None
 
 
 class RotateOAuthClientSecretBody(TypedDict, total=False):
@@ -699,6 +720,11 @@ class CreateOAuthClientBody(_CreateOAuthClientRequired, total=False):
     #: An https URL listing every redirect_uri; required for a pairwise client whose
     #: redirect_uris span more than one host. ``None`` clears it.
     sector_identifier_uri: str | None
+    #: ``jwt`` or ``opaque`` access tokens for this client; ``None`` inherits.
+    access_token_format: Literal["jwt", "opaque"] | None
+    #: Token lifetime overrides (seconds); a ``None`` field is inherited. On write it
+    #: replaces the overrides; ``None`` clears them all.
+    token_lifetimes: OAuthTokenLifetimes | None
 
 
 class UpdateOAuthClientBody(TypedDict, total=False):
@@ -734,6 +760,11 @@ class UpdateOAuthClientBody(TypedDict, total=False):
     disabled: bool
     #: Require PKCE for this confidential client too.
     require_pkce: bool
+    #: ``jwt`` or ``opaque`` access tokens for this client; ``None`` inherits.
+    access_token_format: Literal["jwt", "opaque"] | None
+    #: Token lifetime overrides (seconds); a ``None`` field is inherited. On write it
+    #: replaces the overrides; ``None`` clears them all.
+    token_lifetimes: OAuthTokenLifetimes | None
 
 
 class _CreateGrantRequired(TypedDict):
@@ -764,6 +795,13 @@ class _ResourceServerRequired(TypedDict):
 class ResourceServer(_ResourceServerRequired, total=False):
     #: Atlas serves the API's RFC 9728 protected-resource metadata document.
     publish_resource_metadata: bool
+    #: ``jwt`` or ``opaque`` access tokens for this API; ``None`` inherits.
+    access_token_format: Literal["jwt", "opaque"] | None
+    #: Refresh-token lifetimes for grants issued for this API (seconds); ``None`` inherits.
+    refresh_token_absolute_ttl_seconds: int | None
+    refresh_token_idle_ttl_seconds: int | None
+    #: client_ids of confidential clients allowed to introspect this API's tokens.
+    introspection_client_ids: list[str]
 
 
 class _CreateResourceServerRequired(TypedDict):
@@ -778,6 +816,13 @@ class CreateResourceServerBody(_CreateResourceServerRequired, total=False):
     signing_alg: Literal["RS256", "ES256"]
     #: Serve the RFC 9728 protected-resource metadata document for this API.
     publish_resource_metadata: bool
+    #: ``jwt`` or ``opaque`` access tokens for this API; ``None`` inherits.
+    access_token_format: Literal["jwt", "opaque"] | None
+    #: Refresh-token lifetimes for grants issued for this API (seconds); ``None`` inherits.
+    refresh_token_absolute_ttl_seconds: int | None
+    refresh_token_idle_ttl_seconds: int | None
+    #: client_ids of confidential clients allowed to introspect this API's tokens.
+    introspection_client_ids: list[str]
 
 
 class UpdateResourceServerBody(TypedDict, total=False):
@@ -787,6 +832,13 @@ class UpdateResourceServerBody(TypedDict, total=False):
     identifier: str
     signing_alg: Literal["RS256", "ES256"]
     publish_resource_metadata: bool
+    #: ``jwt`` or ``opaque`` access tokens for this API; ``None`` inherits.
+    access_token_format: Literal["jwt", "opaque"] | None
+    #: Refresh-token lifetimes for grants issued for this API (seconds); ``None`` inherits.
+    refresh_token_absolute_ttl_seconds: int | None
+    refresh_token_idle_ttl_seconds: int | None
+    #: client_ids of confidential clients allowed to introspect this API's tokens.
+    introspection_client_ids: list[str]
 
 
 # --------------------------------------------------------------------------- #
@@ -800,7 +852,7 @@ class ClaimRoleMapping(TypedDict):
     roleKey: str
 
 
-class SsoConnection(TypedDict):
+class _SsoConnectionRequired(TypedDict):
     object: Literal["sso_connection"]
     id: str
     organization_id: str | None
@@ -825,11 +877,56 @@ class SsoConnection(TypedDict):
     updated_at: int
 
 
-class SamlMetadata(TypedDict):
+class SsoConnection(_SsoConnectionRequired, total=False):
+    #: SAML Single Logout is on for the connection.
+    saml_single_logout: bool
+    #: The IdP SingleLogoutService Location / ResponseLocation and delivery binding.
+    saml_idp_slo_url: str | None
+    saml_idp_slo_response_url: str | None
+    saml_idp_slo_binding: Literal["redirect", "post"]
+    #: The IdP SOAP SingleLogoutService — the back channel for sessions ended server-side.
+    saml_idp_slo_soap_url: str | None
+    #: Assertions not encrypted to the connection's key are refused.
+    saml_require_encrypted_assertions: bool
+    #: An SP encryption key pair is set up (the private key is never returned).
+    has_saml_encryption_key: bool
+    #: A key rotation is in progress (the previous key is still accepted).
+    has_previous_saml_encryption_key: bool
+    saml_encryption_rotated_at: int | None
+    #: OIDC relying-party settings (see custom OAuth providers).
+    profile_mapping: ProfileMapping | None
+    token_endpoint_auth_method: TokenEndpointAuthMethod | None
+    client_assertion_audience: str | None
+    logout: UpstreamLogoutSettings
+    idp_initiated_login: IdpInitiatedLoginSettings
+    #: OIDC connections: the URLs to register at the IdP.
+    upstream_urls: UpstreamUrls | None
+
+
+class _SamlMetadataRequired(TypedDict):
     object: Literal["sso_saml_metadata"]
     sp_entity_id: str
     acs_url: str
     metadata_xml: str
+
+
+class SamlMetadata(_SamlMetadataRequired, total=False):
+    #: Our SingleLogoutService URL (both bindings), when Single Logout is on.
+    slo_url: str | None
+
+
+class SamlEncryptionKey(TypedDict):
+    """A SAML connection's SP encryption key pair — certificates only."""
+
+    object: Literal["sso_saml_encryption_key"]
+    connection_id: str
+    #: The current certificate (PEM), published in SP metadata; ``None`` when off.
+    certificate: str | None
+    #: The previous certificate during a rotation.
+    previous_certificate: str | None
+    #: When the current key was installed (epoch ms).
+    rotated_at: int | None
+    require_encrypted_assertions: bool
 
 
 class CreateSsoConnectionBody(TypedDict, total=False):
@@ -856,6 +953,24 @@ class CreateSsoConnectionBody(TypedDict, total=False):
     provisioning_mode: Literal["member", "end_user"]
     #: Optional manual OIDC endpoint overrides.
     manual_endpoints: dict[str, Any]
+    #: SAML Single Logout on/off; the IdP SLO URLs are https (``None`` clears them).
+    saml_single_logout: bool
+    saml_idp_slo_url: str | None
+    saml_idp_slo_response_url: str | None
+    saml_idp_slo_binding: Literal["redirect", "post"] | None
+    #: The back channel for sessions ended server-side (https; ``None`` clears it).
+    saml_idp_slo_soap_url: str | None
+    #: Requires an encryption key (see ``sso_connections.create_saml_encryption_key``).
+    saml_require_encrypted_assertions: bool
+    #: OIDC: declarative profile mapping; ``None`` clears it.
+    profile_mapping: ProfileMapping | None
+    #: OIDC: token-endpoint client authentication (private_key_jwt needs no secret).
+    token_endpoint_auth_method: TokenEndpointAuthMethod | None
+    client_assertion_audience: str | None
+    #: OIDC: RP-initiated and back-channel logout.
+    logout: UpstreamLogoutSettings | None
+    #: OIDC: third-party initiated login.
+    idp_initiated_login: IdpInitiatedLoginSettings | None
 
 
 #: PATCH accepts everything create does except ``type``, which is immutable.
@@ -1004,7 +1119,20 @@ class BlocklistIdentifier(TypedDict):
 # --------------------------------------------------------------------------- #
 
 
-class AttackProtection(TypedDict):
+class DormantAccountsSettings(TypedDict, total=False):
+    """When an account idle for ``threshold_days`` (1–3650, default 90) signs in again:
+    an audit entry, the ``user.reactivated`` webhook, an optional notice to the user
+    and, with ``require_mfa``, a second-factor step-up (``on_no_factor`` decides for an
+    account without one)."""
+
+    enabled: bool
+    threshold_days: int
+    require_mfa: bool
+    on_no_factor: Literal["allow", "require_enroll", "block"]
+    notify_user: bool
+
+
+class _AttackProtectionRequired(TypedDict):
     object: Literal["attack_protection"]
     brute_force: dict[str, Any]
     breached_password: dict[str, Any]
@@ -1012,9 +1140,17 @@ class AttackProtection(TypedDict):
     captcha: dict[str, Any]
 
 
+class AttackProtection(_AttackProtectionRequired, total=False):
+    country_restrictions: dict[str, Any]
+    device_accounts: dict[str, Any]
+    #: Dormant-account reactivation alerts (writable).
+    dormant_accounts: DormantAccountsSettings
+
+
 class UpdateAttackProtectionBody(TypedDict, total=False):
     brute_force: dict[str, Any]
     breached_password: dict[str, Any]
+    dormant_accounts: DormantAccountsSettings
 
 
 # --------------------------------------------------------------------------- #
@@ -1549,6 +1685,8 @@ class TestActionBodyEventConnection(TypedDict, total=False):
 class TestActionBodyEventRequest(TypedDict, total=False):
     ip: str
     user_agent: str
+    #: The ISO code ``event.request.country`` should carry.
+    country: str
 
 
 class TestActionBodyEvent(TypedDict, total=False):
@@ -1574,6 +1712,19 @@ class ActionTestResult(_ActionTestResultRequired, total=False):
     app_metadata: dict[str, Any]
     logs: list[str]
     error: str | None
+    #: What the code queued with ``api.http`` (sent only on a real post_login /
+    #: post_user_registration run).
+    http_requests: list[ActionTestHttpRequest]
+
+
+class ActionTestHttpRequest(TypedDict):
+    method: Literal["GET", "POST"]
+    #: Query values are masked.
+    url: str
+    #: Header names only; values are never echoed.
+    header_names: list[str]
+    has_body: bool
+    save_response_as: str | None
 
 
 #: The window a spend cap counts over: ``request`` caps a single debit; ``day`` and
@@ -1959,6 +2110,10 @@ class CreateBatchAuditEventBody(TypedDict, total=False):
     events: list[CreateAuditEventBody]
 
 
+#: The billing providers a plan or subscription can live on.
+BillingProviderName = Literal["stripe", "polar", "dodo", "creem", "chargebee", "autumn", "commet"]
+
+
 class _CreateBillingPlanBodyRequired(TypedDict):
     name: str
     #: Unique per instance; becomes the `pla` session claim.
@@ -1979,12 +2134,16 @@ class CreateBillingPlanBody(_CreateBillingPlanBodyRequired, total=False):
     pricing_model: Literal["flat", "per_seat", "metered"]
     trial_days: int | None
     #: The billing provider the plan sells through (default ``stripe``).
-    provider: Literal["stripe", "polar", "dodo", "creem"]
+    provider: BillingProviderName
     #: The plan's price at the provider (the neutral alias of ``stripe_price_id``).
     provider_price_id: str
     #: The yearly price at the provider, to offer the plan annually too.
     annual_price_id: str | None
     annual_amount: str | None
+    #: ``base`` (default): the subject's main plan. ``addon``: bought alongside it.
+    kind: Literal["base", "addon"]
+    #: Autumn plans: one of the plan's features; its usage follows the org's member count.
+    seat_feature_id: str | None
 
 
 class BillingPlanCreateResult(TypedDict, total=False):
@@ -2028,10 +2187,14 @@ class BillingPlan(_BillingPlanRequired, total=False):
     trial_days: int | None
     stripe_meter_id: str | None
     usage_unit: str | None
-    provider: Literal["stripe", "polar", "dodo", "creem"]
+    provider: BillingProviderName
     provider_price_id: str | None
     annual_price_id: str | None
     annual_amount: str | None
+    #: ``base``: the subject's main plan. ``addon``: bought alongside it; several may be live.
+    kind: Literal["base", "addon"]
+    #: Autumn plans: the feature whose usage tracks the org's member count.
+    seat_feature_id: str | None
 
 
 class UpdateBillingPlanBody(TypedDict, total=False):
@@ -2050,12 +2213,16 @@ class UpdateBillingPlanBody(TypedDict, total=False):
     stripe_meter_id: str | None
     usage_unit: str | None
     #: The billing provider the plan sells through (default ``stripe``).
-    provider: Literal["stripe", "polar", "dodo", "creem"]
+    provider: BillingProviderName
     #: The plan's price at the provider (the neutral alias of ``stripe_price_id``).
     provider_price_id: str
     #: The yearly price at the provider, to offer the plan annually too.
     annual_price_id: str | None
     annual_amount: str | None
+    #: ``base`` or ``addon`` (refused once the plan has subscriptions).
+    kind: Literal["base", "addon"]
+    #: Autumn seat feature; ``None`` clears it.
+    seat_feature_id: str | None
 
 
 class BillingSeats(TypedDict):
@@ -2090,7 +2257,7 @@ class _SubscriptionRequired(TypedDict):
 
 
 class Subscription(_SubscriptionRequired, total=False):
-    provider: Literal["stripe", "polar", "dodo", "creem"]
+    provider: BillingProviderName
     provider_subscription_id: str | None
     provider_customer_id: str | None
     #: ``instance`` (your own provider account) or ``platform`` (a legacy subscription on
@@ -2107,6 +2274,53 @@ class Subscription(_SubscriptionRequired, total=False):
     canceled_at: int | None
     #: On a change: ``True`` when the switch waits for the period end.
     scheduled: bool
+    #: What an entitlement provider (Autumn, Commet) reports this subscription grants.
+    entitlements: BillingEntitlements | None
+
+
+class BillingEntitlements(TypedDict):
+    features: list[str]
+    limits: dict[str, float]
+
+
+class BillingSettings(TypedDict):
+    """How numeric limits merge when a subject holds several entitling subscriptions."""
+
+    object: Literal["billing_settings"]
+    default_limit_merge: Literal["max", "sum"]
+    limit_merge: dict[str, Literal["max", "sum"]]
+
+
+class UpdateBillingSettingsBody(TypedDict, total=False):
+    default_limit_merge: Literal["max", "sum"]
+    #: Limit key → ``max`` | ``sum``; replaces the stored map.
+    limit_merge: dict[str, Literal["max", "sum"]]
+
+
+class _CheckBillingFeatureBodyRequired(TypedDict):
+    subject_type: Literal["user", "org"]
+    subject_id: str
+    feature: str
+
+
+class CheckBillingFeatureBody(_CheckBillingFeatureBodyRequired, total=False):
+    #: Units about to be used (default 1).
+    required: float
+
+
+class BillingFeatureCheck(TypedDict):
+    """``source`` is ``provider`` (asked live of Autumn/Commet) or ``atlas`` (from the
+    resolved entitlement and this period's usage)."""
+
+    object: Literal["billing_feature_check"]
+    feature: str
+    allowed: bool
+    source: Literal["provider", "atlas"]
+    provider: str | None
+    remaining: float | None
+    granted: float | None
+    usage: float | None
+    unlimited: bool
 
 
 class ChangeSubscriptionBody(TypedDict, total=False):
@@ -2122,7 +2336,7 @@ class BillingProvider(TypedDict, total=False):
     provider."""
 
     object: Literal["billing_provider"]
-    provider: Literal["stripe", "polar", "dodo", "creem"]
+    provider: BillingProviderName
     environment: Literal["live", "test"]
     status: str
     config: dict[str, str]
@@ -2137,7 +2351,9 @@ class BillingProvider(TypedDict, total=False):
 class SetBillingProviderBody(TypedDict, total=False):
     """Merged onto what is stored. ``config`` keys: Stripe ``secret_key``,
     ``webhook_secret``, ``publishable_key``; Polar ``access_token``, ``webhook_secret``;
-    Dodo and Creem ``api_key``, ``webhook_secret``."""
+    Dodo and Creem ``api_key``, ``webhook_secret``; Chargebee ``api_key``, ``site``,
+    ``webhook_username`` + ``webhook_password``; Autumn ``secret_key``, ``webhook_secret``;
+    Commet ``api_key``, ``webhook_secret``, optional ``seat_feature_code``."""
 
     environment: Literal["live", "test"]
     config: dict[str, str]
@@ -2156,6 +2372,10 @@ class RecordUsageBody(TypedDict, total=False):
     subject_id: str
     quantity: float
     idempotency_key: str
+    #: Count against this provider feature (an Autumn feature id / Commet feature code).
+    feature: str
+    #: Attribute to this subscription when the subject holds several.
+    subscription_id: str
 
 
 class BillingUsage(TypedDict):
@@ -5786,9 +6006,24 @@ class _RateLimitPolicyRequired(TypedDict):
     bounds: dict[str, RateLimitPolicyBoundsValue]
 
 
+class RateLimitRule(TypedDict):
+    """At most ``max`` requests per ``window_seconds`` for one named ``group``, counted
+    per ``key``. A rule on a group that owns a built-in budget replaces it; any other
+    rule adds a budget on top."""
+
+    group: str
+    window_seconds: int
+    max: int
+    key: Literal["ip", "user", "instance"]
+
+
 class RateLimitPolicy(_RateLimitPolicyRequired, total=False):
     ldap_per_ip_per_min: int
     ldap_per_user_per_min: int
+    #: Per-endpoint rules (one per group) over the built-in limiter.
+    rules: list[RateLimitRule]
+    #: The groups a rule may name, with what each covers and its budget.
+    groups: list[dict[str, Any]]
 
 
 class UpdateRateLimitPolicyBody(TypedDict, total=False):
@@ -5797,6 +6032,8 @@ class UpdateRateLimitPolicyBody(TypedDict, total=False):
     bapi_per_min: Any
     ldap_per_ip_per_min: Any
     ldap_per_user_per_min: Any
+    #: The FULL rule list (replaces the stored one; ``[]`` clears).
+    rules: list[RateLimitRule]
 
 
 class CreateRedirectUrlBody(TypedDict, total=False):
@@ -5980,6 +6217,8 @@ class CreateSessionBody(_CreateSessionBodyRequired, total=False):
     cookie_domain: str
     #: Stamp an impersonation act claim.
     actor: CreateSessionBodyActor
+    #: Custom per-session data to attach (a JSON object, at most 2 KB).
+    custom_data: dict[str, Any]
 
 
 class SessionCreated(TypedDict, total=False):
@@ -7260,6 +7499,53 @@ class SigningKey(TypedDict, total=False):
     role: Literal["main", "secondary"]
     #: Epoch ms.
     retires_at: int | None
+    #: On the current main key: ``local``, or the KMS that holds its private half.
+    provider: Literal["local", "aws_kms", "gcp_kms", "azure_key_vault"]
+
+
+class SigningKeyProviderSettings(TypedDict, total=False):
+    """Where the signing key lives; never carries credentials. ``config`` holds the
+    non-secret settings (``None`` for ``local``); ``active`` is ``True`` when the current
+    main key is in this KMS; ``key_version`` is the KMS key version tokens are signed
+    with."""
+
+    object: Literal["signing_key_provider"]
+    id: str
+    provider: Literal["local", "aws_kms", "gcp_kms", "azure_key_vault"]
+    config: dict[str, Any] | None
+    active: bool
+    key_version: str | None
+    last_verified_at: int | None
+    created_at: int
+    updated_at: int
+    #: On a PUT / DELETE: the rotation onto (or off) the KMS key.
+    rotation: SigningKeyRotation | None
+    deleted: bool
+
+
+class _SetSigningKeyProviderRequired(TypedDict):
+    provider: Literal["aws_kms", "gcp_kms", "azure_key_vault"]
+    config: dict[str, Any]
+    credentials: dict[str, Any]
+
+
+class SetSigningKeyProviderBody(_SetSigningKeyProviderRequired, total=False):
+    """``aws_kms``: config ``{region, key_id?, alg?}``, credentials ``{access_key_id,
+    secret_access_key, session_token?}``. ``gcp_kms``: config ``{crypto_key,
+    key_version?}``, credentials ``{service_account_json}``. ``azure_key_vault``: config
+    ``{vault_url, key_name, key_version?, alg?}``, credentials ``{tenant_id, client_id,
+    client_secret}``. Without a key id / version Atlas creates a new key version."""
+
+    #: How long the previous key stays published (default 86400, at most 2592000).
+    grace_period_seconds: int
+    #: Publish only the new key now.
+    emergency: bool
+
+
+class WalletRpcSecret(TypedDict):
+    object: Literal["wallet_rpc_secret"]
+    chain_id: int
+    set: bool
 
 
 class SigningKeyList(TypedDict):
@@ -7307,3 +7593,326 @@ class CreateInitialAccessTokenBody(TypedDict, total=False):
     description: str
     expires_in_seconds: int
     max_uses: int
+
+
+# --------------------------------------------------------------------------- #
+# Custom OAuth / OIDC providers (Atlas as the relying party)                   #
+# --------------------------------------------------------------------------- #
+
+#: Token-endpoint client authentication to the upstream provider.
+TokenEndpointAuthMethod = Literal[
+    "client_secret_basic", "client_secret_post", "client_secret_jwt", "private_key_jwt", "none"
+]
+
+#: A claim path (``"emails[0].value"``, ``"$id_token.sub"``), a ``"{{template}}"``, or a
+#: rule ``{from, template, value, transforms}``.
+ProfileMappingExpr = Any
+
+
+class ProfileMapping(TypedDict, total=False):
+    """``fields`` keys: id, email, email_verified, first_name, last_name, full_name,
+    username, image_url, phone_number, external_id. ``update_on_sign_in`` re-applies
+    names, image and metadata on every sign-in (default: at account creation)."""
+
+    fields: dict[str, ProfileMappingExpr]
+    public_metadata: dict[str, ProfileMappingExpr]
+    private_metadata: dict[str, ProfileMappingExpr]
+    update_on_sign_in: bool
+
+
+class UpstreamLogoutSettings(TypedDict, total=False):
+    #: On Atlas sign-out, hand back the provider end-session URL to send the browser to.
+    rp_initiated: bool
+    post_logout_redirect_url: str | None
+    #: Accept OIDC Back-Channel Logout tokens and end the matching Atlas sessions.
+    backchannel: bool
+    #: Accept OIDC Front-Channel Logout (the provider frames ``frontchannel_logout_uri``).
+    frontchannel: bool
+    #: Front-channel: require ``iss`` + ``sid`` (default ``True``).
+    frontchannel_session_required: bool
+    end_session_endpoint: str | None
+
+
+class IdpInitiatedLoginSettings(TypedDict, total=False):
+    enabled: bool
+    #: Exact URLs or bare origins a third-party initiated login may land on.
+    allowed_targets: list[str]
+    default_target: str | None
+
+
+class UpstreamSigningKey(TypedDict):
+    object: Literal["upstream_signing_key"]
+    kid: str
+    alg: Literal["RS256", "PS256", "ES256"]
+    status: Literal["active", "retiring", "retired"]
+    public_jwk: dict[str, Any]
+    created_at: int
+    retired_at: int | None
+
+
+class UpstreamUrls(TypedDict):
+    #: Register at the provider as the client JWKS URL (private_key_jwt).
+    client_jwks_uri: str
+    backchannel_logout_uri: str
+    frontchannel_logout_uri: str
+    post_logout_redirect_uri: str
+    initiate_login_uri: str
+
+
+class CustomOAuthProviderSettings(TypedDict, total=False):
+    display_name: str
+    icon_url: str | None
+    protocol: Literal["oidc", "oauth2"]
+    issuer: str | None
+    discovery_url: str | None
+    authorization_endpoint: str | None
+    token_endpoint: str | None
+    userinfo_endpoint: str | None
+    jwks_uri: str | None
+    end_session_endpoint: str | None
+    scopes: list[str]
+    scope_separator: Literal[" ", ",", "+"]
+    pkce: bool
+    authorization_params: dict[str, str] | None
+    token_params: dict[str, str] | None
+    userinfo_auth: Literal["header", "query"]
+    token_endpoint_auth_method: TokenEndpointAuthMethod
+    client_assertion_audience: str | None
+    profile_source: Literal["merged", "userinfo", "id_token"]
+    profile_mapping: ProfileMapping | None
+    logout: UpstreamLogoutSettings | None
+    idp_initiated_login: IdpInitiatedLoginSettings | None
+    client_id: str
+    #: Write-only; never returned.
+    client_secret: str
+    enabled: bool
+    allow_sign_in: bool
+    allow_sign_up: bool
+
+
+class CreateCustomOAuthProviderBody(CustomOAuthProviderSettings, total=False):
+    """``provider_key`` and ``display_name`` are required on create."""
+
+    provider_key: str
+
+
+class CustomOAuthProvider(UpstreamUrls):
+    object: Literal["custom_oauth_provider"]
+    id: str
+    provider_key: str
+    display_name: str
+    icon_url: str | None
+    protocol: Literal["oidc", "oauth2"]
+    issuer: str | None
+    discovery_url: str | None
+    authorization_endpoint: str | None
+    token_endpoint: str | None
+    userinfo_endpoint: str | None
+    jwks_uri: str | None
+    end_session_endpoint: str | None
+    scopes: list[str]
+    scope_separator: str
+    pkce: bool
+    authorization_params: dict[str, str]
+    token_params: dict[str, str]
+    userinfo_auth: Literal["header", "query"]
+    token_endpoint_auth_method: TokenEndpointAuthMethod
+    client_assertion_audience: str | None
+    profile_source: Literal["merged", "userinfo", "id_token"]
+    profile_mapping: ProfileMapping | None
+    logout: UpstreamLogoutSettings
+    idp_initiated_login: IdpInitiatedLoginSettings
+    client_id: str | None
+    has_secret: bool
+    enabled: bool
+    allow_sign_in: bool
+    allow_sign_up: bool
+    #: Register at the provider as the redirect / callback URI.
+    redirect_uri: str
+    signing_keys: list[UpstreamSigningKey]
+    created_at: int
+    updated_at: int
+
+
+class ProfileMappingPreviewBody(TypedDict, total=False):
+    profile_mapping: ProfileMapping
+    userinfo: dict[str, Any]
+    id_token_claims: dict[str, Any]
+    #: A sample id_token — decoded, not verified.
+    id_token: str
+
+
+class ProfileMappingPreview(TypedDict):
+    object: Literal["profile_mapping_preview"]
+    profile: dict[str, Any]
+    #: Per target: ``{value, source}``.
+    trace: dict[str, dict[str, Any]]
+    warnings: list[str]
+
+
+class OidcDiscoveryResult(TypedDict, total=False):
+    object: Literal["oidc_discovery"]
+    issuer: str
+    authorization_endpoint: str
+    token_endpoint: str
+    userinfo_endpoint: str | None
+    jwks_uri: str
+    end_session_endpoint: str | None
+    scopes_supported: list[str]
+    claims_supported: list[str]
+    token_endpoint_auth_methods_supported: list[str]
+    token_endpoint_auth_signing_alg_values_supported: list[str]
+    code_challenge_methods_supported: list[str]
+    backchannel_logout_supported: bool
+    backchannel_logout_session_supported: bool
+
+
+# --------------------------------------------------------------------------- #
+# Actions gallery                                                              #
+# --------------------------------------------------------------------------- #
+
+
+class ActionTemplateSecret(TypedDict):
+    """A secret a template reads, declared by NAME; values are never part of a template."""
+
+    name: str
+    description: str
+    required: bool
+
+
+class ActionGalleryEntry(TypedDict, total=False):
+    object: Literal["action_template"]
+    source: Literal["builtin", "community"]
+    slug: str
+    name: str
+    summary: str
+    trigger: str
+    category: str
+    tags: list[str]
+    #: SPDX licence id.
+    license: str
+    author: dict[str, Any]
+    verified: bool
+    featured: bool
+    install_count: int
+    latest_version: str
+    #: The code sends outbound requests with ``api.http``.
+    uses_http: bool
+    secrets: list[ActionTemplateSecret]
+    updated_at: int | None
+    #: On the detail view.
+    description: str
+    code: str
+    changelog: str | None
+    repository_url: str | None
+    versions: list[dict[str, Any]]
+
+
+class InstallTemplateBody(TypedDict, total=False):
+    #: A specific approved version (default: the latest).
+    version: str
+    #: The action's name (default: the template's).
+    name: str
+    #: Values for the secrets the template declares. Write-only.
+    secrets: dict[str, str]
+
+
+class ActionGalleryInstallResult(TypedDict):
+    object: Literal["action_gallery_install"]
+    #: The new action: disabled and not bound to any flow yet.
+    action: dict[str, Any]
+    template: dict[str, Any]
+    install_id: str
+    #: Required secrets you have not supplied yet.
+    missing_secrets: list[str]
+
+
+class ActionGalleryUpdateResult(TypedDict, total=False):
+    object: Literal["action_gallery_update"]
+    #: ``False`` when the action already runs the latest version.
+    updated: bool
+    action: dict[str, Any]
+    from_version: str
+    version: str
+
+
+class ActionTemplateVersion(TypedDict, total=False):
+    object: Literal["action_template_version"]
+    version: str
+    status: Literal["draft", "pending_review", "approved", "rejected"]
+    trigger: str
+    secrets: list[ActionTemplateSecret]
+    changelog: str | None
+    #: Why staff rejected it, when they did.
+    review_note: str | None
+    code: str
+    submitted_at: int | None
+    reviewed_at: int | None
+    created_at: int
+
+
+class ActionTemplate(TypedDict, total=False):
+    """A template this instance publishes."""
+
+    object: Literal["action_template"]
+    id: str
+    slug: str
+    name: str
+    author_name: str
+    summary: str
+    description: str | None
+    category: str
+    tags: list[str]
+    trigger: str
+    license: str
+    repository_url: str | None
+    status: Literal["draft", "in_review", "published", "unlisted", "rejected", "banned"]
+    latest_version: str | None
+    verified: bool
+    featured: bool
+    install_count: int
+    view_count: int
+    published_at: int | None
+    created_at: int
+    updated_at: int
+    versions: list[ActionTemplateVersion]
+
+
+class ActionTemplateListing(TypedDict, total=False):
+    slug: str
+    name: str
+    #: Shown as the author on the gallery.
+    author_name: str
+    summary: str
+    #: Markdown.
+    description: str
+    category: str
+    tags: list[str]
+    trigger: str
+    #: SPDX id (MIT, Apache-2.0, BSD-3-Clause, ISC, MPL-2.0, …).
+    license: str
+    repository_url: str | None
+
+
+class CreateActionTemplateBody(ActionTemplateListing, total=False):
+    """``slug``, ``name``, ``author_name`` and ``trigger`` are required; the first
+    version may come in the same call."""
+
+    version: str
+    code: str
+    secrets: list[ActionTemplateSecret]
+    changelog: str
+    #: Send to review right away.
+    submit: bool
+
+
+class _NewTemplateVersionRequired(TypedDict):
+    #: MAJOR.MINOR.PATCH, higher than every existing version.
+    version: str
+    code: str
+
+
+class NewTemplateVersionBody(_NewTemplateVersionRequired, total=False):
+    secrets: list[ActionTemplateSecret]
+    changelog: str
+    submit: bool

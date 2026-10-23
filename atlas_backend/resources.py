@@ -728,6 +728,24 @@ class Sessions:
             path=f"/v1/sessions/{session_id}/tokens/{template}",
         )
 
+    def set_custom_data(self, session_id: str, custom_data: dict[str, Any] | None) -> m.Session:
+        """Replace the session's custom data (``None`` clears it). At most 2 KB; only an
+        active session can be changed. Not for secrets: the signed-in user can read it.
+        Sends the ``session.updated`` webhook."""
+        return self._t.request(
+            method="PUT",
+            path=f"/v1/sessions/{session_id}/custom_data",
+            body={"custom_data": custom_data},
+        )
+
+    def update_custom_data(self, session_id: str, patch: dict[str, Any]) -> m.Session:
+        """Merge keys into the session's custom data; a key set to ``None`` is removed."""
+        return self._t.request(
+            method="PATCH",
+            path=f"/v1/sessions/{session_id}/custom_data",
+            body={"custom_data": patch},
+        )
+
 
 class Invitations:
     def __init__(self, transport: _SyncTransport) -> None:
@@ -1080,6 +1098,157 @@ class SsoConnections:
         return self._t.request(
             method="GET",
             path=f"/v1/sso_connections/{connection_id}/saml_metadata",
+        )
+
+    def preview_profile_mapping(
+        self, connection_id: str, body: m.ProfileMappingPreviewBody
+    ) -> m.ProfileMappingPreview:
+        """OIDC: run the connection's profile mapping (or the body's) against a sample."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/sso_connections/{connection_id}/profile_mapping/preview",
+            body=body,
+        )
+
+    def list_signing_keys(self, connection_id: str) -> ListPage:
+        """OIDC: the connection's private_key_jwt signing keys
+        (:class:`~atlas_backend.models.UpstreamSigningKey`)."""
+        return self._t.request(
+            method="GET", path=f"/v1/sso_connections/{connection_id}/signing_keys"
+        )
+
+    def rotate_signing_key(
+        self, connection_id: str, *, alg: Literal["RS256", "PS256", "ES256"] | None = None
+    ) -> m.UpstreamSigningKey:
+        """Generate a new active key; the previous one turns ``retiring`` (still published)."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/sso_connections/{connection_id}/signing_keys",
+            body=_q(alg=alg),
+        )
+
+    def retire_signing_key(self, connection_id: str, kid: str) -> m.UpstreamSigningKey:
+        """Retire a non-active key (it leaves the JWKS)."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/sso_connections/{connection_id}/signing_keys/{kid}/retire",
+        )
+
+    def get_saml_encryption_key(self, connection_id: str) -> m.SamlEncryptionKey:
+        """The SAML connection's SP encryption certificate(s)."""
+        return self._t.request(
+            method="GET", path=f"/v1/sso_connections/{connection_id}/saml_encryption_key"
+        )
+
+    def create_saml_encryption_key(
+        self, connection_id: str, *, idempotency_key: str | None = None
+    ) -> m.SamlEncryptionKey:
+        """Generate the SP encryption key pair, or ROTATE it when one exists: the current
+        pair becomes the previous one (still advertised and accepted until
+        :meth:`retire_previous_saml_encryption_key`)."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/sso_connections/{connection_id}/saml_encryption_key",
+            idempotency_key=idempotency_key,
+        )
+
+    def retire_previous_saml_encryption_key(self, connection_id: str) -> m.SamlEncryptionKey:
+        """Finish a rotation: stop accepting the previous encryption key."""
+        return self._t.request(
+            method="DELETE",
+            path=f"/v1/sso_connections/{connection_id}/saml_encryption_key/previous",
+        )
+
+    def delete_saml_encryption_key(self, connection_id: str) -> m.SamlEncryptionKey:
+        """Turn assertion encryption off (refused while encrypted assertions are required)."""
+        return self._t.request(
+            method="DELETE", path=f"/v1/sso_connections/{connection_id}/saml_encryption_key"
+        )
+
+
+class CustomOAuthProviders:
+    """Your own upstream OAuth 2.0 / OpenID Connect login providers, with Atlas as the
+    relying party: endpoints (or just an OIDC issuer), token-endpoint client
+    authentication (incl. private_key_jwt with an Atlas-held key), a declarative
+    profile mapping, upstream logout and third-party initiated login. The provider then
+    signs users in like any built-in one, under its ``provider_key``."""
+
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def list(self) -> ListPage:
+        """Each ``data`` item is a :class:`~atlas_backend.models.CustomOAuthProvider`."""
+        return self._t.request(method="GET", path="/v1/custom_oauth_providers")
+
+    def get(self, provider_id: str) -> m.CustomOAuthProvider:
+        return self._t.request(method="GET", path=f"/v1/custom_oauth_providers/{provider_id}")
+
+    def create(
+        self, body: m.CreateCustomOAuthProviderBody, *, idempotency_key: str | None = None
+    ) -> m.CustomOAuthProvider:
+        return self._t.request(
+            method="POST",
+            path="/v1/custom_oauth_providers",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    def update(
+        self, provider_id: str, body: m.CustomOAuthProviderSettings
+    ) -> m.CustomOAuthProvider:
+        """Patch a provider; a ``None`` value clears a nullable setting."""
+        return self._t.request(
+            method="PATCH", path=f"/v1/custom_oauth_providers/{provider_id}", body=body
+        )
+
+    def delete(self, provider_id: str) -> JSON:
+        return self._t.request(method="DELETE", path=f"/v1/custom_oauth_providers/{provider_id}")
+
+    def discover(self, issuer: str, *, discovery_url: str | None = None) -> m.OidcDiscoveryResult:
+        """Fetch and validate an issuer's OpenID configuration (for autofill)."""
+        return self._t.request(
+            method="POST",
+            path="/v1/custom_oauth_providers/discover",
+            body=_q(issuer=issuer, discovery_url=discovery_url),
+        )
+
+    def preview_profile_mapping(self, body: m.ProfileMappingPreviewBody) -> m.ProfileMappingPreview:
+        """Run a mapping (``body["profile_mapping"]``) against a pasted sample."""
+        return self._t.request(
+            method="POST", path="/v1/custom_oauth_providers/profile_mapping/preview", body=body
+        )
+
+    def preview_provider_profile_mapping(
+        self, provider_id: str, body: m.ProfileMappingPreviewBody
+    ) -> m.ProfileMappingPreview:
+        """Run a provider's stored mapping (or the body's) against a pasted sample."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/custom_oauth_providers/{provider_id}/profile_mapping/preview",
+            body=body,
+        )
+
+    def list_signing_keys(self, provider_id: str) -> ListPage:
+        """The provider's private_key_jwt signing keys."""
+        return self._t.request(
+            method="GET", path=f"/v1/custom_oauth_providers/{provider_id}/signing_keys"
+        )
+
+    def rotate_signing_key(
+        self, provider_id: str, *, alg: Literal["RS256", "PS256", "ES256"] | None = None
+    ) -> m.UpstreamSigningKey:
+        """Generate a new active key; the previous one turns ``retiring`` (still published)."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/custom_oauth_providers/{provider_id}/signing_keys",
+            body=_q(alg=alg),
+        )
+
+    def retire_signing_key(self, provider_id: str, kid: str) -> m.UpstreamSigningKey:
+        """Retire a non-active key (it leaves the JWKS)."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/custom_oauth_providers/{provider_id}/signing_keys/{kid}/retire",
         )
 
 
@@ -2161,14 +2330,27 @@ class Billing:
         )
 
     def record_usage(self, body: m.RecordUsageBody | None = None) -> m.BillingUsage:
-        """Report metered usage for a subject (idempotent on idempotency_key); mirrored to a
-        Stripe meter event when the plan is metered and configured.
+        """Report metered usage for a subject (idempotent on idempotency_key); mirrored to
+        the provider when the plan is metered. ``feature`` counts it against one provider
+        feature; ``subscription_id`` attributes it when the subject holds several.
         """
         return self._t.request(
             method="POST",
             path="/v1/billing/usage",
             body=body,
         )
+
+    def get_settings(self) -> m.BillingSettings:
+        """How numeric limits merge across a subject's several subscriptions."""
+        return self._t.request(method="GET", path="/v1/billing/settings")
+
+    def update_settings(self, body: m.UpdateBillingSettingsBody) -> m.BillingSettings:
+        return self._t.request(method="PUT", path="/v1/billing/settings", body=body)
+
+    def check_feature(self, body: m.CheckBillingFeatureBody) -> m.BillingFeatureCheck:
+        """May a subject use a feature? Asked live of Autumn/Commet when the subject is on
+        one; otherwise answered from the resolved entitlement and this period's usage."""
+        return self._t.request(method="POST", path="/v1/billing/check", body=body)
 
 
 class _BillingPlans:
@@ -2217,6 +2399,13 @@ class _BillingPlans:
             path=f"/v1/billing/plans/{plan_id}",
         )
 
+    def sync_entitlements(self, plan_id: str) -> m.BillingPlan:
+        """Mirror a plan's features and limits from its provider (Autumn, Commet)."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/billing/plans/{plan_id}/sync_entitlements",
+        )
+
 
 class _BillingSubscriptions:
     def __init__(self, transport: _SyncTransport) -> None:
@@ -2232,6 +2421,13 @@ class _BillingSubscriptions:
             method="GET",
             path="/v1/billing/subscriptions",
             query=_q(subject_type=subject_type, subject_id=subject_id),
+        )
+
+    def get(self, subscription_id: str) -> m.Subscription:
+        """One subscription (a subject may hold several: a base plan plus add-ons)."""
+        return self._t.request(
+            method="GET",
+            path=f"/v1/billing/subscriptions/{subscription_id}",
         )
 
     def import_subscription(
@@ -2274,7 +2470,7 @@ class _BillingSubscriptions:
 
 class _BillingProviders:
     """The instance's own billing provider credentials (bring your own key): stripe,
-    polar, dodo or creem. Secrets are write-only."""
+    polar, dodo, creem, chargebee, autumn or commet. Secrets are write-only."""
 
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
@@ -3180,6 +3376,28 @@ class Instance:
             body=body,
         )
 
+    def set_account_linking_trust(self, trust: dict[str, str]) -> m.Instance:
+        """Write ``auth_config.accountLinkingTrust``: keys are an exact provider key, a
+        ``prefix*`` or ``*``; values ``always`` (vouch for the provider's email, for
+        linking only), ``verified`` or ``never`` (refuse with 409
+        ``IDENTITY_ALREADY_LINKED``). An account that never proved its email is never
+        linked."""
+        return self._t.request(
+            method="PATCH",
+            path="/v1/instance",
+            body={"auth_config": {"accountLinkingTrust": trust}},
+        )
+
+    def set_captcha_config(self, captcha: dict[str, Any]) -> m.Instance:
+        """Merge ``auth_config.captcha``: ``provider`` (see ``CAPTCHA_PROVIDERS``),
+        ``siteKey``, ``widget``, ``minScore``, per-flow / per-action overrides, and for
+        Vercel BotID ``attestationUrl`` (an https URL or a root-relative path)."""
+        return self._t.request(
+            method="PATCH",
+            path="/v1/instance",
+            body={"auth_config": {"captcha": captcha}},
+        )
+
     def set_captcha_secret(self, body: m.SetCaptchaSecretBody | None = None) -> m.CaptchaSecret:
         """Store the captcha provider secret (write-only, encrypted; never read back)."""
         return self._t.request(
@@ -3628,6 +3846,35 @@ class _InstanceSecurity:
         """Rotate the instance signing key, optionally switching ``alg`` (RS256 or ES256)."""
         return self._t.request(
             method="POST", path="/v1/instance/signing_keys/rotate", body=body or {}
+        )
+
+    def get_signing_key_provider(self) -> m.SigningKeyProviderSettings:
+        """The key management service the signing key lives in (``local`` when none)."""
+        return self._t.request(method="GET", path="/v1/instance/signing_key_provider")
+
+    def set_signing_key_provider(
+        self, body: m.SetSigningKeyProviderBody
+    ) -> m.SigningKeyProviderSettings:
+        """Sign every token with a key in your own AWS KMS, Google Cloud KMS or Azure Key
+        Vault. The result carries the ``rotation`` onto the KMS key."""
+        return self._t.request(method="PUT", path="/v1/instance/signing_key_provider", body=body)
+
+    def remove_signing_key_provider(
+        self, body: m.RotateSigningKeyBody | None = None
+    ) -> m.SigningKeyProviderSettings:
+        """Stop using the KMS: rotate back to a key Atlas holds and forget the credentials."""
+        return self._t.request(
+            method="DELETE", path="/v1/instance/signing_key_provider", body=body or {}
+        )
+
+    def set_wallet_rpc_secret(self, *, chain_id: int, url: str) -> m.WalletRpcSecret:
+        """Store (write-only, encrypted) the wallet RPC endpoint for an EIP-155 chain, used
+        by wallet token gating and the Sign in with Ethereum ENS lookup. An empty ``url``
+        removes it; the URL is never returned."""
+        return self._t.request(
+            method="PUT",
+            path="/v1/instance/wallet_rpc_secret",
+            body={"chain_id": chain_id, "url": url},
         )
 
 
@@ -5719,3 +5966,117 @@ class OAuthInitialAccessTokens:
 
     def revoke(self, token_id: str) -> m.InitialAccessToken:
         return self._t.request(method="DELETE", path=f"/v1/oauth_initial_access_tokens/{token_id}")
+
+
+class ActionGallery:
+    """The community Actions gallery: browse reusable Action templates (first-party and
+    community), install one as a DISABLED action, keep installed actions up to date."""
+
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def list(
+        self,
+        *,
+        q: str | None = None,
+        category: str | None = None,
+        trigger: str | None = None,
+        source: Literal["builtin", "community"] | None = None,
+    ) -> ListPage:
+        """The gallery, best first (:class:`~atlas_backend.models.ActionGalleryEntry`)."""
+        return self._t.request(
+            method="GET",
+            path="/v1/action_gallery",
+            query=_q(q=q, category=category, trigger=trigger, source=source),
+        )
+
+    def get(self, slug: str) -> m.ActionGalleryEntry:
+        """One template with its code, secret names and versions."""
+        return self._t.request(method="GET", path=f"/v1/action_gallery/{slug}")
+
+    def install(
+        self,
+        slug: str,
+        body: m.InstallTemplateBody | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.ActionGalleryInstallResult:
+        """Install as a new, disabled action. Supply secrets, bind it, then enable it."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/action_gallery/{slug}/install",
+            body=body or {},
+            idempotency_key=idempotency_key,
+        )
+
+    def installs(self) -> ListPage:
+        """Actions installed from the gallery, with update status."""
+        return self._t.request(method="GET", path="/v1/action_gallery_installs")
+
+    def update(
+        self, action_id: str, *, secrets: dict[str, str] | None = None
+    ) -> m.ActionGalleryUpdateResult:
+        """Move an installed action to its template's latest version."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/actions/{action_id}/gallery_update",
+            body=_q(secrets=secrets),
+        )
+
+
+class ActionTemplates:
+    """Templates this instance publishes to the gallery (staff review them)."""
+
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def list(self) -> ListPage:
+        return self._t.request(method="GET", path="/v1/action_templates")
+
+    def create(
+        self, body: m.CreateActionTemplateBody, *, idempotency_key: str | None = None
+    ) -> m.ActionTemplate:
+        return self._t.request(
+            method="POST",
+            path="/v1/action_templates",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    def get(self, template_id: str) -> m.ActionTemplate:
+        return self._t.request(method="GET", path=f"/v1/action_templates/{template_id}")
+
+    def update(self, template_id: str, body: m.ActionTemplateListing) -> m.ActionTemplate:
+        return self._t.request(
+            method="PATCH", path=f"/v1/action_templates/{template_id}", body=body
+        )
+
+    def delete(self, template_id: str) -> JSON:
+        return self._t.request(method="DELETE", path=f"/v1/action_templates/{template_id}")
+
+    def add_version(
+        self, template_id: str, body: m.NewTemplateVersionBody
+    ) -> m.ActionTemplateVersion:
+        return self._t.request(
+            method="POST", path=f"/v1/action_templates/{template_id}/versions", body=body
+        )
+
+    def submit_version(self, template_id: str, version: str) -> m.ActionTemplateVersion:
+        return self._t.request(
+            method="POST",
+            path=f"/v1/action_templates/{template_id}/versions/{version}/submit",
+        )
+
+    def delete_version(self, template_id: str, version: str) -> JSON:
+        return self._t.request(
+            method="DELETE",
+            path=f"/v1/action_templates/{template_id}/versions/{version}",
+        )
+
+    def publish(self, template_id: str) -> m.ActionTemplate:
+        """List an approved template again after unlisting it."""
+        return self._t.request(method="POST", path=f"/v1/action_templates/{template_id}/publish")
+
+    def unlist(self, template_id: str) -> m.ActionTemplate:
+        """Hide a template from the gallery (installs keep working)."""
+        return self._t.request(method="POST", path=f"/v1/action_templates/{template_id}/unlist")

@@ -29,10 +29,10 @@ raises ``HTTPException(401)``.
 import os
 from typing import Optional
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .._access_token import AccessTokenResult, AccessTokenVerifier
+from .._access_token import AccessTokenResult, AccessTokenVerifier, dpop_header
 from .._verify import AtlasBackend, SessionClaims, VerificationError
 
 __all__ = ["AtlasAuth", "AtlasAccessToken", "require_auth"]
@@ -114,7 +114,9 @@ async def require_auth(request: Request) -> SessionClaims:
 class AtlasAccessToken:
     """A FastAPI dependency that protects an API route with an Atlas-issued OAuth access
     token. A refusal raises ``HTTPException`` with the verifier's status and the RFC 6750
-    / RFC 9728 ``WWW-Authenticate`` challenge::
+    / RFC 9449 / RFC 9728 ``WWW-Authenticate`` challenge. A DPoP-bound token must come
+    with a valid ``DPoP`` proof for this request; the verifier's ``DPoP-Nonce``, when it
+    issues nonces, is set on every response::
 
         verifier = AccessTokenVerifier(issuer=..., audience="https://api.example.com")
 
@@ -127,14 +129,24 @@ class AtlasAccessToken:
         self._verifier = verifier
         self._scopes = required_scopes
 
-    async def __call__(self, request: Request) -> AccessTokenResult:
+    async def __call__(self, request: Request, response: Response) -> AccessTokenResult:
+        path = request.url.path + (f"?{request.url.query}" if request.url.query else "")
         result = self._verifier.verify(
-            request.headers.get("authorization"), required_scopes=self._scopes
+            request.headers.get("authorization"),
+            required_scopes=self._scopes,
+            method=request.method,
+            url=self._verifier.request_url(str(request.url), path),
+            dpop=dpop_header(request.headers.getlist("dpop")),
         )
         if not result.ok:
+            headers = {"WWW-Authenticate": result.www_authenticate}
+            if result.dpop_nonce:
+                headers["DPoP-Nonce"] = result.dpop_nonce
             raise HTTPException(
                 status_code=result.status,
                 detail=result.error or "unauthorized",
-                headers={"WWW-Authenticate": result.www_authenticate},
+                headers=headers,
             )
+        if result.dpop_nonce:
+            response.headers["DPoP-Nonce"] = result.dpop_nonce
         return result

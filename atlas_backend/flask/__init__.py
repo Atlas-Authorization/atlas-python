@@ -29,10 +29,10 @@ from __future__ import annotations
 from functools import wraps
 from typing import Any, Callable
 
-from flask import Flask, current_app, g, jsonify, request
+from flask import Flask, after_this_request, current_app, g, jsonify, request
 from flask.wrappers import Response
 
-from .._access_token import AccessTokenVerifier
+from .._access_token import AccessTokenVerifier, dpop_header
 from .._verify import AtlasBackend, AtlasUser, SessionClaims, VerificationError
 
 __all__ = ["Atlas", "atlas_required", "access_token_required"]
@@ -119,21 +119,38 @@ def access_token_required(
     """Route decorator that requires an Atlas-issued OAuth access token for your API.
 
     On success sets ``g.atlas_access_token`` (the :class:`AccessTokenResult`). A refusal
-    answers with the verifier's status and the RFC 6750 / RFC 9728 ``WWW-Authenticate``
-    challenge.
+    answers with the verifier's status and the RFC 6750 / RFC 9449 / RFC 9728
+    ``WWW-Authenticate`` challenge. A DPoP-bound token must come with a valid ``DPoP``
+    proof for this request; the verifier's ``DPoP-Nonce``, when it issues nonces, is set
+    on every response.
     """
 
     def decorator(view_func: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(view_func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            path = request.full_path if request.query_string else request.path
             result = verifier.verify(
-                request.headers.get("Authorization"), required_scopes=required_scopes
+                request.headers.get("Authorization"),
+                required_scopes=required_scopes,
+                method=request.method,
+                url=verifier.request_url(request.url, path),
+                dpop=dpop_header(request.headers.getlist("DPoP")),
             )
             if not result.ok:
                 response: Response = jsonify(error=result.error or "unauthorized")
                 response.status_code = result.status
                 response.headers["WWW-Authenticate"] = result.www_authenticate
+                if result.dpop_nonce:
+                    response.headers["DPoP-Nonce"] = result.dpop_nonce
                 return response
+            if result.dpop_nonce:
+                nonce = result.dpop_nonce
+
+                @after_this_request
+                def _set_nonce(resp: Response) -> Response:
+                    resp.headers["DPoP-Nonce"] = nonce
+                    return resp
+
             g.atlas_access_token = result
             return view_func(*args, **kwargs)
 

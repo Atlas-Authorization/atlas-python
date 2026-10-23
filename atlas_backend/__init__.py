@@ -21,11 +21,43 @@ from ._access_token import (
     protected_resource_metadata,
     protected_resource_metadata_path,
 )
+from ._botid import (
+    BOTID_ATTESTATION_MAX_TTL_SECONDS,
+    BOTID_ATTESTATION_PREFIX,
+    BOTID_SECRET_MIN_LENGTH,
+    create_botid_attestation,
+)
 from ._client import (
     AsyncAtlasClient,
     AsyncAtlasPlatformClient,
     AtlasClient,
     AtlasPlatformClient,
+)
+from ._constants import (
+    BILLING_PROVIDERS,
+    CAPTCHA_PROVIDERS,
+    EMAIL_TEMPLATE_ACCOUNT_REACTIVATED,
+    LINKING_TRUST_LEVELS,
+    SIGNING_KEY_PROVIDERS,
+    WEBHOOK_EVENT_SESSION_UPDATED,
+    WEBHOOK_EVENT_USER_REACTIVATED,
+)
+from ._device_authorization import (
+    AsyncDeviceAuthorizations,
+    DeviceAuthorizationError,
+    DeviceAuthorizations,
+    format_user_code,
+    user_code_from_url,
+)
+from ._dpop import (
+    DPOP_ALGS,
+    DpopNonceSource,
+    DpopReplayStore,
+    HmacDpopNonceSource,
+    MemoryDpopReplayStore,
+    dpop_access_token_hash,
+    jwk_thumbprint,
+    normalize_htu,
 )
 from ._errors import AtlasError, ErrorCode, ErrorItem
 from ._handshake import (
@@ -37,6 +69,7 @@ from ._handshake import (
     read_handshake_params,
     redeem_handshake,
 )
+from ._introspection import IntrospectionError, IntrospectionOptions, Introspector
 from ._logout import (
     BACKCHANNEL_LOGOUT_EVENT,
     LogoutTokenClaims,
@@ -89,9 +122,28 @@ from ._verify import (
 )
 from ._webhooks import WebhookVerification, verify_webhook
 
-__version__ = "0.13.0"
+__version__ = "0.14.0"
 
 __all__ = [
+    "AsyncDeviceAuthorizations",
+    "BILLING_PROVIDERS",
+    "BOTID_ATTESTATION_MAX_TTL_SECONDS",
+    "BOTID_ATTESTATION_PREFIX",
+    "BOTID_SECRET_MIN_LENGTH",
+    "CAPTCHA_PROVIDERS",
+    "DeviceAuthorizationError",
+    "DeviceAuthorizations",
+    "EMAIL_TEMPLATE_ACCOUNT_REACTIVATED",
+    "IntrospectionError",
+    "IntrospectionOptions",
+    "Introspector",
+    "LINKING_TRUST_LEVELS",
+    "SIGNING_KEY_PROVIDERS",
+    "WEBHOOK_EVENT_SESSION_UPDATED",
+    "WEBHOOK_EVENT_USER_REACTIVATED",
+    "create_botid_attestation",
+    "format_user_code",
+    "user_code_from_url",
     "AtlasClient",
     "AsyncAtlasClient",
     "AtlasPlatformClient",
@@ -125,6 +177,14 @@ __all__ = [
     "SessionClaims",
     "AccessTokenVerifier",
     "AccessTokenResult",
+    "DPOP_ALGS",
+    "DpopNonceSource",
+    "DpopReplayStore",
+    "HmacDpopNonceSource",
+    "MemoryDpopReplayStore",
+    "dpop_access_token_hash",
+    "jwk_thumbprint",
+    "normalize_htu",
     "build_www_authenticate",
     "protected_resource_metadata",
     "protected_resource_metadata_path",

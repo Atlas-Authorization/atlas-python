@@ -2,6 +2,27 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.14.0 — 2026-10-24
+
+### Added
+
+- **DPoP (RFC 9449) on the access-token verifier.** A DPoP-bound token (`cnf.jkt`) is accepted only with the DPoP scheme and a valid proof (never as Bearer): `typ` `dpop+jwt`, `DPOP_ALGS` (ES256/384/512, RS256/384/512, PS256/384/512, EdDSA), public embedded JWK, signature, `htm`, normalised `htu` (`normalize_htu`; `public_origin` for path-only URLs), `iat` window, `ath` (`dpop_access_token_hash`), `jti` replay via a `DpopReplayStore` (`MemoryDpopReplayStore` by default), RFC 7638 `jwk_thumbprint` match. `require_dpop` refuses unbound tokens; `dpop_nonces` (`HmacDpopNonceSource`) demands a server nonce (`use_dpop_nonce`, `AccessTokenResult.dpop_nonce` for the `DPoP-Nonce` header). `verify(..., method=, url=, dpop=)`; challenges use the `DPoP` scheme with `algs`. The FastAPI and Flask guards pass the request method, URL and `DPoP` header and set `DPoP-Nonce`. `protected_resource_metadata` advertises `dpop_signing_alg_values_supported` and takes `dpop_bound_access_tokens_required`.
+- **Billing: several subscriptions per subject, add-ons, Chargebee / Autumn / Commet.** Providers `chargebee`, `autumn`, `commet` (`BILLING_PROVIDERS`; config keys on `SetBillingProviderBody`). Plans: `kind` (`base` / `addon`), `limits`, `seat_feature_id` (Autumn; `None` clears). Subscriptions carry `entitlements`. New `billing.subscriptions.get`, `billing.plans.sync_entitlements`, `billing.get_settings` / `update_settings` (limit merge `max` / `sum`), `billing.check_feature`. Usage takes `feature` and `subscription_id`.
+- **Custom OAuth / OIDC providers.** `custom_oauth_providers`: `list`, `get`, `create`, `update`, `delete`, `discover`, `preview_profile_mapping`, `preview_provider_profile_mapping`, `list_signing_keys` / `rotate_signing_key` / `retire_signing_key`. Typed `ProfileMapping`, `UpstreamLogoutSettings`, `IdpInitiatedLoginSettings`, `UpstreamUrls`. OIDC SSO connections take the same relying-party settings and gain `preview_profile_mapping` and the signing-key methods.
+- **Actions gallery.** `action_gallery` (`list` with filters, `get`, `install`, `installs`, `update`) and `action_templates` (`list`, `create`, `get`, `update`, `delete`, `add_version`, `submit_version`, `delete_version`, `publish`, `unlist`). Action dry runs report `http_requests`; sample events take `request.country`.
+- **Session custom data.** `sessions.set_custom_data` (replace; `None` clears) and `update_custom_data` (merge; `None` removes a key); sessions carry `custom_data`; `sessions.create` takes `custom_data`. `WEBHOOK_EVENT_SESSION_UPDATED`.
+- **Sign-in settings.** `instance.security.set_wallet_rpc_secret(chain_id=, url=)`; rate-limit `rules` (`RateLimitRule`) and the group catalog on the rate-limit policy; `instance.set_account_linking_trust`; `instance.set_captcha_config`; `CAPTCHA_PROVIDERS` (incl. `captchafox`, `vercel_botid`), `LINKING_TRUST_LEVELS`.
+- **Vercel BotID attestations.** `create_botid_attestation(secret, is_bot=, is_verified_bot=, ttl_seconds=)` signs a verdict in Atlas's `atlas_botid.v1` format.
+- **Enterprise SSO.** SAML Single Logout fields (`saml_single_logout`, `saml_idp_slo_url`, `saml_idp_slo_response_url`, `saml_idp_slo_binding`, `saml_idp_slo_soap_url`), `saml_require_encrypted_assertions` and the encryption-key flags; `SamlMetadata.slo_url`; `sso_connections.get_saml_encryption_key`, `create_saml_encryption_key` (create or rotate), `retire_previous_saml_encryption_key`, `delete_saml_encryption_key`. Attack protection `dormant_accounts`; risk weight / signal `dormantAccount`; `EMAIL_TEMPLATE_ACCOUNT_REACTIVATED`; `WEBHOOK_EVENT_USER_REACTIVATED`.
+- **Atlas as OAuth provider.** OAuth clients: `access_token_format`, `token_lifetimes` (`OAuthTokenLifetimes`). Resource servers: `access_token_format`, refresh-token lifetimes, `introspection_client_ids`. Signing keys report `provider`; `instance.security.get_signing_key_provider` / `set_signing_key_provider` / `remove_signing_key_provider` (AWS KMS, Google Cloud KMS, Azure Key Vault).
+- **Opaque access tokens.** `AccessTokenVerifier(introspection=IntrospectionOptions(...))` validates non-JWT access tokens at Atlas's RFC 7662 endpoint with your API's client credentials, cached by token hash (TTL, negative TTL, never past `exp`, bounded); `introspect_jwts=True` checks JWTs live too. `Introspector` is exported.
+- **Device sign-in approval.** `DeviceAuthorizations(frontend_api, session_token)`: `lookup`, `approve`, `deny` on the Frontend API with the user's session token; `DeviceAuthorizationError` (`needs_reverification`, `is_invalid_code`); `format_user_code`, `user_code_from_url`; `AsyncDeviceAuthorizations` over an `httpx.AsyncClient`.
+- The coverage list now holds all 588 Backend and Platform API operations.
+
+### Changed
+
+- Without `introspection`, a token that is not a JWT is refused with "configure `introspection` to accept opaque tokens" instead of "malformed".
+
 ## 0.13.0 — 2026-10-23
 
 ### Added
