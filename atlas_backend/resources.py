@@ -6363,3 +6363,240 @@ class ActionTemplates:
     def unlist(self, template_id: str) -> m.ActionTemplate:
         """Hide a template from the gallery (installs keep working)."""
         return self._t.request(method="POST", path=f"/v1/action_templates/{template_id}/unlist")
+
+
+class Policies:
+    """Policy acceptance: the policies (Terms of Service, privacy policy, any key) your
+    users accept at sign-up - and, per policy, again at sign-in when a new version takes
+    effect. A policy's versions go draft, published (with an ``effective_at``), retired.
+    Acceptances are append-only evidence (version, content hash, how it was shown).
+    ``id_or_key`` is the policy id or its key.
+    """
+
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+        self.versions = _PolicyVersions(transport)
+        self.settings = _PolicySettings(transport)
+
+    def list(self, *, include_retired: bool | None = None) -> ListPage:
+        """Active policies (``include_retired`` for all), each with its current, upcoming
+        and latest version."""
+        return self._t.request(
+            method="GET",
+            path="/v1/policies",
+            query=_q(include_retired=include_retired),
+        )
+
+    def create(self, body: m.CreatePolicyBody, *, idempotency_key: str | None = None) -> m.Policy:
+        """Create a policy. It asks nobody anything until a version is published."""
+        return self._t.request(
+            method="POST", path="/v1/policies", body=body, idempotency_key=idempotency_key
+        )
+
+    def get(self, id_or_key: str) -> m.Policy:
+        """One policy, by id or key."""
+        return self._t.request(method="GET", path=f"/v1/policies/{id_or_key}")
+
+    def update(
+        self,
+        id_or_key: str,
+        body: m.UpdatePolicyBody,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.Policy:
+        """Update a policy (the key cannot change). ``status: "retired"`` stops it gating."""
+        return self._t.request(
+            method="PATCH",
+            path=f"/v1/policies/{id_or_key}",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    def delete(self, id_or_key: str) -> JSON:
+        """Delete a policy that was never published; one with a published version is
+        retired instead (the response says which: ``deleted`` / ``retired``)."""
+        return self._t.request(method="DELETE", path=f"/v1/policies/{id_or_key}")
+
+    def list_acceptances(
+        self,
+        id_or_key: str,
+        *,
+        version: str | None = None,
+        status: Literal["accepted", "withdrawn", "all"] | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> CursorPage:
+        """Who accepted the policy (optionally one version, a version id or label), newest
+        first, with the evidence."""
+        return self._t.request(
+            method="GET",
+            path=f"/v1/policies/{id_or_key}/acceptances",
+            query=_q(version=version, status=status, limit=limit, starting_after=starting_after),
+        )
+
+    def export_acceptances_csv(
+        self,
+        id_or_key: str,
+        *,
+        version: str | None = None,
+        status: Literal["accepted", "withdrawn", "all"] | None = None,
+    ) -> str:
+        """The same as CSV text (``format=csv``, up to 100,000 rows)."""
+        return self._t.request(
+            method="GET",
+            path=f"/v1/policies/{id_or_key}/acceptances",
+            query=_q(version=version, status=status, format="csv"),
+            raw=True,
+        )
+
+    def for_user(self, user_id: str) -> m.UserPolicies:
+        """A user's standing on every policy (accepted and current version,
+        ``needs_reaccept``, ``blocking``, ``grace_ends_at``) and ``needs_acceptance``."""
+        return self._t.request(method="GET", path=f"/v1/users/{user_id}/policies")
+
+
+class _PolicyVersions:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def list(self, id_or_key: str) -> ListPage:
+        """The policy's versions, newest first, each with ``acceptance_count``."""
+        return self._t.request(method="GET", path=f"/v1/policies/{id_or_key}/versions")
+
+    def create(
+        self,
+        id_or_key: str,
+        body: m.CreatePolicyVersionBody,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.PolicyVersion:
+        """Create a draft, or publish at once with ``publish: True`` (and ``effective_at``).
+        400 for an external policy: its versions come from the policy source."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/policies/{id_or_key}/versions",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    def get(self, id_or_key: str, version_id_or_label: str) -> m.PolicyVersion:
+        """One version, by id or label."""
+        return self._t.request(
+            method="GET", path=f"/v1/policies/{id_or_key}/versions/{version_id_or_label}"
+        )
+
+    def update(
+        self,
+        id_or_key: str,
+        version_id_or_label: str,
+        body: m.UpdatePolicyVersionBody,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.PolicyVersion:
+        """Edit a draft (409 for a published version: publish a new one instead)."""
+        return self._t.request(
+            method="PATCH",
+            path=f"/v1/policies/{id_or_key}/versions/{version_id_or_label}",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    def delete(self, id_or_key: str, version_id_or_label: str) -> JSON:
+        """Delete a draft (409 for a published version: retire it instead)."""
+        return self._t.request(
+            method="DELETE", path=f"/v1/policies/{id_or_key}/versions/{version_id_or_label}"
+        )
+
+    def publish(
+        self,
+        id_or_key: str,
+        version_id_or_label: str,
+        body: m.PublishPolicyVersionBody | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.PolicyVersion:
+        """Publish a draft. ``effective_at`` (epoch ms or ISO, default now) is when
+        sign-ups must accept it and sign-ins re-ask per the policy's ``reaccept`` rule."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/policies/{id_or_key}/versions/{version_id_or_label}/publish",
+            body=body if body is not None else {},
+            idempotency_key=idempotency_key,
+        )
+
+    def retire(
+        self,
+        id_or_key: str,
+        version_id_or_label: str,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.PolicyVersion:
+        """Retire a published version: it no longer gates or is offered; acceptances stay."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/policies/{id_or_key}/versions/{version_id_or_label}/retire",
+            idempotency_key=idempotency_key,
+        )
+
+
+class _PolicySettings:
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def get(self) -> m.PolicySettings:
+        """Policy settings: the optional ``pol`` session claim."""
+        return self._t.request(method="GET", path="/v1/instance/policy_settings")
+
+    def update(self, body: m.UpdatePolicySettingsBody) -> m.PolicySettings:
+        """Turn the ``pol`` session claim on or off (tokens minted after the change; it
+        can take 30 seconds to apply everywhere)."""
+        return self._t.request(method="PATCH", path="/v1/instance/policy_settings", body=body)
+
+
+class PolicySource:
+    """The external policy source (Atlas policy source protocol v1): serve your policies
+    from a CMS or your own service. Atlas fetches ``GET {endpoint_url}/policies`` signed
+    with the source's signing secret (``verify_policy_feed_request`` checks it) and your
+    source tells Atlas about changes with a signed event (``sign_policy_source_event``).
+    ``signing_secret`` is write-only.
+    """
+
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def get(self) -> m.PolicySource:
+        """Endpoint, sync mode, the webhook URL to give the source and the last sync."""
+        return self._t.request(method="GET", path="/v1/instance/policy_source")
+
+    def update(self, body: m.UpdatePolicySourceBody) -> m.PolicySource:
+        """Configure the source; only the fields sent change and ``None`` clears. Enabling
+        needs ``endpoint_url`` and ``signing_secret``."""
+        return self._t.request(method="PUT", path="/v1/instance/policy_source", body=body)
+
+    def delete(self) -> m.PolicySource:
+        """Disconnect the source (its policies and their history stay; they stop syncing)."""
+        return self._t.request(method="DELETE", path="/v1/instance/policy_source")
+
+    def test(self) -> m.PolicySourceTest:
+        """A signed fetch of the feed, validated but not stored."""
+        return self._t.request(method="POST", path="/v1/instance/policy_source/test")
+
+    def sync(self) -> m.PolicySourceSync:
+        """Fetch the feed now and store it. A published version whose content changed at
+        the source is refused: publish a new version there."""
+        return self._t.request(method="POST", path="/v1/instance/policy_source/sync")
+
+    def list_deliveries(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+        kind: str | None = None,
+        status: str | None = None,
+    ) -> CursorPage:
+        """The delivery log: every fetch, test, poll and inbound event, newest first."""
+        return self._t.request(
+            method="GET",
+            path="/v1/instance/policy_source/deliveries",
+            query=_q(limit=limit, starting_after=starting_after, kind=kind, status=status),
+        )

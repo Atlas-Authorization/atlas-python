@@ -286,6 +286,46 @@ rotated = ep.rotate_secret(created["id"], {"overlap_seconds": 3600})
 rotated["previous_secret_expires_at"]  # epoch ms, or None when the old secret already stopped
 ```
 
+## Policy acceptance
+
+Terms of Service, privacy policies and any other policy your users accept at sign-up (and again
+at sign-in when a new version takes effect). A version goes draft, published (with an
+`effective_at`), retired; each acceptance is kept as evidence.
+
+```python
+atlas.policies.create({"key": "tos", "title": "Terms of Service", "applies_to": "sign_in_and_sign_up",
+                       "reaccept": "grace", "grace_days": 14})
+atlas.policies.versions.create("tos", {"version": "2026-10-24", "content_markdown": "# Terms\n..."})
+atlas.policies.versions.publish("tos", "2026-10-24", {"effective_at": "2026-11-01T00:00:00Z"})
+atlas.policies.list_acceptances("tos", version="2026-10-24", limit=50)
+csv_text = atlas.policies.export_acceptances_csv("tos")
+atlas.policies.for_user("user_123")            # standing on every policy, incl. needs_acceptance
+atlas.policies.settings.update({"session_claim": True})   # put `pol` on session tokens
+```
+
+With the session claim on, `SessionClaims.policies` / `accepted_policy_version("tos")` read the
+`pol` claim. The `user.policy_accepted` and `policy.version_published` webhook events have the
+constants `WEBHOOK_EVENT_USER_POLICY_ACCEPTED` and `WEBHOOK_EVENT_POLICY_VERSION_PUBLISHED`.
+
+### Serving policies from your own system (policy source)
+
+Point Atlas at a CMS or service with `atlas.policy_source.update({"enabled": True,
+"endpoint_url": ..., "signing_secret": ...})` (the secret is write-only), then `test()` / `sync()`.
+In your service, verify Atlas's signed `GET {endpoint}/policies[?key=...]` and answer a feed:
+
+```python
+from atlas_backend import verify_policy_feed_request, sign_policy_source_event
+
+v = verify_policy_feed_request(request.method, request.full_path, request.headers, secret)
+if not v.verified:
+    abort(401)
+feed = {"object": "policy_list", "policies": build_policies(only=v.key)}
+
+# When a policy changes, tell Atlas (it re-fetches; nothing in the event is trusted as content):
+signed = sign_policy_source_event({"type": "policy.published", "key": "tos", "version": "2026-10-24"}, secret)
+httpx.post(webhook_url, content=signed.body, headers={"content-type": "application/json", **signed.headers})
+```
+
 ## OAuth client secret rotation
 
 The previous secret keeps working for `overlap_seconds` (default 24 hours, at most 7 days), so
@@ -598,6 +638,7 @@ app servers, back it with a shared store such as Redis (`SET jti 1 NX EX 300`).
 `audit_logs`, `audit_events`, `config_changelog`, `events`, `usage`, `jobs`,
 `user_imports`, `user_exports`, `data_subject_requests`, `entitlement_overrides`,
 `organization_settings_schema`, `billing` (+ `plans`, `subscriptions`), `actions`,
+`policies` (+ `versions`, `settings`), `policy_source`,
 `connectors`, `directory`, `fga` (+ `stores`, `authorization_models`), `openfga`
 (+ `stores`, `authorization_models`), `jwt_templates`, `legacy_auth_connection`,
 `network_acls`, `radius_clients`, `lti_platforms`, `rate_limit_policy`,

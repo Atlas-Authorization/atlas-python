@@ -6571,6 +6571,14 @@ class RecordConsentBody(TypedDict, total=False):
     status: str
     source: str
     metadata: Any
+    #: Policy acceptance evidence: the exact version (must be that version of that policy).
+    policy_version_id: str
+    #: Must equal the version's ``content_sha256`` when given.
+    content_sha256: str
+    display: Literal["checkbox", "scroll", "link"]
+    scrolled_to_end: bool
+    view_ms: int
+    locale: str
 
 
 class _ConsentRequired(TypedDict):
@@ -6587,6 +6595,13 @@ class _ConsentRequired(TypedDict):
 class Consent(_ConsentRequired, total=False):
     source: str | None
     metadata: Any
+    #: Policy acceptance evidence (``None`` on records made outside a policy flow).
+    policy_version_id: str | None
+    content_sha256: str | None
+    display: Literal["checkbox", "scroll", "link"] | None
+    scrolled_to_end: bool | None
+    view_ms: int | None
+    locale: str | None
 
 
 class ScheduleUserDeletionBody(TypedDict, total=False):
@@ -8103,3 +8118,314 @@ class BetterAuthExchangeResponse(TypedDict, total=False):
     refresh_token: str
     expires_in: int
     status: Literal["needs_second_factor", "needs_mfa_enrollment"]
+
+
+# --------------------------------------------------------------------------- #
+# Policy acceptance                                                            #
+# --------------------------------------------------------------------------- #
+
+PolicyDisplay = Literal["checkbox", "scroll", "link"]
+PolicyAppliesTo = Literal["sign_up", "sign_in_and_sign_up"]
+PolicyReaccept = Literal["none", "next_sign_in", "grace"]
+
+
+class PolicyVersionRef(TypedDict):
+    """A policy's current, upcoming or latest version."""
+
+    id: str
+    version: str
+    #: ``draft``, ``published`` or ``retired``.
+    status: str
+    content_sha256: str
+    published_at: int | None
+    effective_at: int | None
+
+
+class Policy(TypedDict):
+    """A policy (Terms of Service, privacy policy, any key) users accept."""
+
+    object: Literal["policy"]
+    id: str
+    key: str
+    title: str
+    display: PolicyDisplay
+    required: bool
+    applies_to: PolicyAppliesTo
+    reaccept: PolicyReaccept
+    grace_days: int | None
+    #: ``atlas`` or ``external`` (synced from a policy source).
+    source: str
+    position: int
+    #: ``active`` or ``retired``.
+    status: str
+    #: External policies: the fields changed in Atlas that a sync keeps.
+    overrides: list[str]
+    #: The version in effect now.
+    current_version: PolicyVersionRef | None
+    #: A newer published version that is not in effect yet.
+    upcoming_version: PolicyVersionRef | None
+    #: The newest version of any status (drafts included).
+    latest_version: PolicyVersionRef | None
+    retired_at: int | None
+    created_at: int
+    updated_at: int
+
+
+class _PolicyVersionRequired(TypedDict):
+    object: Literal["policy_version"]
+    id: str
+    policy_id: str
+    policy: str
+    version: str
+    #: ``draft``, ``published`` or ``retired``.
+    status: str
+    content_markdown: str | None
+    #: The sanitised HTML clients render.
+    content_html: str
+    content_url: str | None
+    #: Hex SHA-256 of ``content_html``.
+    content_sha256: str
+    summary_of_changes: str | None
+    locale: str | None
+    published_at: int | None
+    effective_at: int | None
+    retired_at: int | None
+    created_at: int
+    updated_at: int
+
+
+class PolicyVersion(_PolicyVersionRequired, total=False):
+    #: On a list: how many users accepted this version.
+    acceptance_count: int
+
+
+class PolicyAcceptance(TypedDict):
+    """One acceptance (or withdrawal) with its evidence."""
+
+    object: Literal["policy_acceptance"]
+    id: str
+    user_id: str
+    policy: str
+    version: str
+    policy_version_id: str | None
+    #: ``accepted`` or ``withdrawn``.
+    status: str
+    #: ``signup``, ``signin``, ``reaccept``, ``api``, ``import`` or another string.
+    source: str | None
+    content_sha256: str | None
+    display: PolicyDisplay | None
+    scrolled_to_end: bool | None
+    view_ms: int | None
+    locale: str | None
+    ip: str | None
+    user_agent: str | None
+    accepted_at: int
+
+
+class PolicyStanding(TypedDict):
+    """A user's standing on one policy."""
+
+    object: Literal["policy_standing"]
+    policy: str
+    policy_id: str
+    title: str
+    display: PolicyDisplay
+    required: bool
+    applies_to: PolicyAppliesTo
+    reaccept: PolicyReaccept
+    current_version_id: str | None
+    current_version: str | None
+    content_sha256: str | None
+    summary_of_changes: str | None
+    accepted_version_id: str | None
+    accepted_version: str | None
+    accepted_at: int | None
+    needs_reaccept: bool
+    #: Accepting is required before the user's next sign-in completes.
+    blocking: bool
+    grace_ends_at: int | None
+
+
+class _UserPoliciesRequired(TypedDict):
+    object: Literal["list"]
+    user_id: str
+    data: list[PolicyStanding]
+    needs_acceptance: bool
+
+
+class UserPolicies(_UserPoliciesRequired, total=False):
+    """``GET /v1/users/{id}/policies``: the user's standing on every policy."""
+
+
+class _CreatePolicyBodyRequired(TypedDict):
+    #: Slug, unique per instance (``tos``, ``privacy``). Becomes the consent record's ``policy``.
+    key: str
+    title: str
+
+
+class CreatePolicyBody(_CreatePolicyBodyRequired, total=False):
+    display: PolicyDisplay
+    required: bool
+    applies_to: PolicyAppliesTo
+    reaccept: PolicyReaccept
+    #: Required with ``reaccept: "grace"`` (1-365).
+    grace_days: int | None
+    position: int
+
+
+class UpdatePolicyBody(TypedDict, total=False):
+    """``PATCH /v1/policies/{id}``. The key cannot change."""
+
+    title: str
+    display: PolicyDisplay
+    required: bool
+    applies_to: PolicyAppliesTo
+    reaccept: PolicyReaccept
+    grace_days: int | None
+    position: int
+    #: ``retired`` stops it gating (history is kept); ``active`` brings it back.
+    status: Literal["active", "retired"]
+
+
+class _CreatePolicyVersionBodyRequired(TypedDict):
+    #: A label such as ``2026-10-24`` or ``1.2.0``, unique per policy.
+    version: str
+
+
+class CreatePolicyVersionBody(_CreatePolicyVersionBodyRequired, total=False):
+    #: Markdown (rendered and sanitised by Atlas) - or ``content_html``.
+    content_markdown: str
+    content_html: str
+    content_url: str | None
+    summary_of_changes: str | None
+    locale: str | None
+    #: Publish immediately instead of saving a draft.
+    publish: bool
+    #: With ``publish``: when the gate starts asking for it (epoch ms or ISO; default now).
+    effective_at: int | str
+
+
+class UpdatePolicyVersionBody(TypedDict, total=False):
+    """``PATCH /v1/policies/{id}/versions/{versionId}`` (drafts only)."""
+
+    version: str
+    content_markdown: str
+    content_html: str
+    content_url: str | None
+    summary_of_changes: str | None
+    locale: str | None
+
+
+class PublishPolicyVersionBody(TypedDict, total=False):
+    #: When the gate starts asking for it (epoch ms or ISO; default now).
+    effective_at: int | str
+
+
+class PolicySettings(TypedDict):
+    object: Literal["policy_settings"]
+    #: Put ``pol`` (the accepted versions of required policies) on session tokens.
+    session_claim: bool
+
+
+class UpdatePolicySettingsBody(TypedDict, total=False):
+    session_claim: bool
+
+
+class PolicySource(TypedDict):
+    """The external policy source (Atlas policy source protocol v1). The signing
+    secret is never returned, only ``signing_secret_set``."""
+
+    object: Literal["policy_source"]
+    enabled: bool
+    endpoint_url: str | None
+    signing_secret_set: bool
+    #: ``webhook`` or ``poll``.
+    sync: str
+    poll_interval_minutes: int
+    #: Where your source sends ``policy.published`` / ``policy.retired`` events.
+    webhook_url: str | None
+    protocol_version: str
+    last_synced_at: int | None
+    last_sync_ok: bool | None
+    last_sync_error: str | None
+    next_poll_at: int | None
+
+
+class UpdatePolicySourceBody(TypedDict, total=False):
+    """``PUT /v1/instance/policy_source``: only the fields sent change, ``None`` clears.
+    Enabling needs ``endpoint_url`` and ``signing_secret``."""
+
+    enabled: bool
+    #: Base URL; Atlas calls ``GET {endpoint_url}/policies``.
+    endpoint_url: str | None
+    #: Write-only (a ``whsec_`` secret works).
+    signing_secret: str | None
+    #: ``webhook`` or ``poll``.
+    sync: Literal["webhook", "poll"]
+    #: Poll mode: 5-1440.
+    poll_interval_minutes: int
+
+
+class PolicySourceDelivery(TypedDict):
+    object: Literal["policy_source_delivery"]
+    id: str
+    #: ``outbound`` or ``inbound``.
+    direction: str
+    #: ``fetch``, ``test``, ``poll`` or ``webhook``.
+    kind: str
+    #: ``ok``, ``failed`` or ``rejected``.
+    status: str
+    http_status: int | None
+    error: str | None
+    event_type: str | None
+    policy: str | None
+    version: str | None
+    url: str | None
+    changes: dict[str, Any] | None
+    latency_ms: int | None
+    created_at: int
+
+
+class PolicySourceFeedSummary(TypedDict):
+    key: str
+    title: str
+    versions: list[str]
+
+
+class _PolicySourceTestRequired(TypedDict):
+    object: Literal["policy_source_test"]
+    ok: bool
+
+
+class PolicySourceTest(_PolicySourceTestRequired, total=False):
+    """``POST /v1/instance/policy_source/test``: a signed fetch, validated, not stored."""
+
+    http_status: int | None
+    latency_ms: int | None
+    error: str | None
+    warnings: list[str]
+    policies: list[PolicySourceFeedSummary]
+    delivery: PolicySourceDelivery
+
+
+class PolicySourceChanges(TypedDict, total=False):
+    created: list[str]
+    updated: list[str]
+    published: list[str]
+    unchanged: list[str]
+    rejected: list[str]
+    retired: list[str]
+
+
+class _PolicySourceSyncRequired(TypedDict):
+    object: Literal["policy_source_sync"]
+    ok: bool
+
+
+class PolicySourceSync(_PolicySourceSyncRequired, total=False):
+    """``POST /v1/instance/policy_source/sync``: fetch the feed now and store it."""
+
+    error: str | None
+    warnings: list[str]
+    changes: PolicySourceChanges | None
+    delivery: PolicySourceDelivery

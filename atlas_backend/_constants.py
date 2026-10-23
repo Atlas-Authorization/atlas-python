@@ -9,6 +9,8 @@ __all__ = [
     "SIGNING_KEY_PROVIDERS",
     "WEBHOOK_EVENT_SESSION_UPDATED",
     "WEBHOOK_EVENT_USER_REACTIVATED",
+    "WEBHOOK_EVENT_USER_POLICY_ACCEPTED",
+    "WEBHOOK_EVENT_POLICY_VERSION_PUBLISHED",
     "EMAIL_TEMPLATE_ACCOUNT_REACTIVATED",
 ]
 
@@ -54,3 +56,8 @@ WEBHOOK_EVENT_SESSION_UPDATED = "session.updated"
 WEBHOOK_EVENT_USER_REACTIVATED = "user.reactivated"
 #: The security notice sent when a dormant account signs in again.
 EMAIL_TEMPLATE_ACCOUNT_REACTIVATED = "account_reactivated"
+
+#: A user accepted a policy version (payload: ``policy_acceptance`` with its evidence).
+WEBHOOK_EVENT_USER_POLICY_ACCEPTED = "user.policy_accepted"
+#: A policy version was published.
+WEBHOOK_EVENT_POLICY_VERSION_PUBLISHED = "policy.version_published"

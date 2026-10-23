@@ -103,6 +103,19 @@ class SessionClaims:
         perms = self.raw.get("app_permissions")
         return isinstance(perms, list) and permission in perms
 
+    @property
+    def policies(self) -> dict[str, str]:
+        """The ``pol`` claim: the accepted version of each required policy, by policy key
+        (empty unless the instance turned the session claim on)."""
+        pol = self.raw.get("pol")
+        if not isinstance(pol, dict):
+            return {}
+        return {str(k): str(v) for k, v in pol.items() if isinstance(v, (str, int, float))}
+
+    def accepted_policy_version(self, key: str) -> str | None:
+        """The version of policy ``key`` the user accepted, from the ``pol`` claim."""
+        return self.policies.get(key)
+
     def has_permission(self, permission: str) -> bool:
         """Whether ``org_permissions`` contains ``permission``.
 

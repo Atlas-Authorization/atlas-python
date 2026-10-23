@@ -54,7 +54,21 @@ from ._constants import (
     LINKING_TRUST_LEVELS,
     SIGNING_KEY_PROVIDERS,
     WEBHOOK_EVENT_SESSION_UPDATED,
+    WEBHOOK_EVENT_POLICY_VERSION_PUBLISHED,
+    WEBHOOK_EVENT_USER_POLICY_ACCEPTED,
     WEBHOOK_EVENT_USER_REACTIVATED,
+)
+from ._policy_source import (
+    POLICY_SOURCE_PROTOCOL_VERSION,
+    POLICY_SOURCE_VERSION_HEADER,
+    PolicyFeed,
+    PolicyFeedPolicy,
+    PolicyFeedVerification,
+    PolicyFeedVersion,
+    PolicySourceEvent,
+    SignedPolicySourceEvent,
+    sign_policy_source_event,
+    verify_policy_feed_request,
 )
 from ._device_authorization import (
     AsyncDeviceAuthorizations,
@@ -141,7 +155,7 @@ from .resources import (
     split_bundle_parts,
 )
 
-__version__ = "0.15.0"
+__version__ = "0.16.0"
 
 __all__ = [
     "AsyncBetterAuthBridge",
@@ -176,6 +190,18 @@ __all__ = [
     "SIGNING_KEY_PROVIDERS",
     "WEBHOOK_EVENT_SESSION_UPDATED",
     "WEBHOOK_EVENT_USER_REACTIVATED",
+    "WEBHOOK_EVENT_USER_POLICY_ACCEPTED",
+    "WEBHOOK_EVENT_POLICY_VERSION_PUBLISHED",
+    "POLICY_SOURCE_PROTOCOL_VERSION",
+    "POLICY_SOURCE_VERSION_HEADER",
+    "PolicyFeed",
+    "PolicyFeedPolicy",
+    "PolicyFeedVerification",
+    "PolicyFeedVersion",
+    "PolicySourceEvent",
+    "SignedPolicySourceEvent",
+    "sign_policy_source_event",
+    "verify_policy_feed_request",
     "create_botid_attestation",
     "format_user_code",
     "user_code_from_url",
