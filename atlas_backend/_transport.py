@@ -177,21 +177,27 @@ class _BaseTransport:
         content: bytes | None,
         content_type: str | None,
         strict: bool | None,
+        headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         payload, has_body = _encode_body(body, content)
+        built = _build_headers(
+            self._secret_key,
+            has_body=has_body,
+            idempotency_key=idempotency_key,
+            content_type=content_type,
+            strict=self._strict if strict is None else strict,
+            method=method,
+        )
+        if headers:
+            # Extra per-call headers (e.g. the end user's forwarded IP). They can
+            # never replace the Bearer secret.
+            built.update({k: v for k, v in headers.items() if k.lower() != "authorization"})
         return {
             "method": method,
             "url": _join_url(self._base_url, path),
             "params": _serialize_query(query),
             "content": payload,
-            "headers": _build_headers(
-                self._secret_key,
-                has_body=has_body,
-                idempotency_key=idempotency_key,
-                content_type=content_type,
-                strict=self._strict if strict is None else strict,
-                method=method,
-            ),
+            "headers": built,
         }
 
     def _finish(self, response: httpx.Response, method: str, path: str, raw: bool) -> Any:
@@ -242,10 +248,11 @@ class _SyncTransport(_BaseTransport):
         content: bytes | None = None,
         content_type: str | None = None,
         strict: bool | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         response = self._client.request(
             **self._prepare(
-                method, path, query, body, idempotency_key, content, content_type, strict
+                method, path, query, body, idempotency_key, content, content_type, strict, headers
             )
         )
         return self._finish(response, method, path, raw)
@@ -292,10 +299,11 @@ class _AsyncTransport(_BaseTransport):
         content: bytes | None = None,
         content_type: str | None = None,
         strict: bool | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         response = await self._client.request(
             **self._prepare(
-                method, path, query, body, idempotency_key, content, content_type, strict
+                method, path, query, body, idempotency_key, content, content_type, strict, headers
             )
         )
         return self._finish(response, method, path, raw)

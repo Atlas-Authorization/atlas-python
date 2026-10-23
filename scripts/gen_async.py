@@ -28,13 +28,23 @@ module and regenerate rather than editing this file.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+import time
+from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
 from . import models as m
 from ._transport import _AsyncTransport
 from ._types import JSON, CursorPage, DeletedObject, ListPage
-from .resources import _csv, _json, _q, _sniff_image_type
+from .resources import (
+    BETTER_AUTH_IMPORT_IN_FLIGHT,
+    BETTER_AUTH_IMPORT_PART_BYTES,
+    _csv,
+    _json,
+    _q,
+    _sniff_image_type,
+    split_bundle_parts,
+)
 
 '''
 
@@ -51,6 +61,9 @@ def convert(src: str) -> str:
     body = body.replace("_SyncTransport", "_AsyncTransport")
     body = re.sub(r"^    def (?!__init__)", "    async def ", body, flags=re.M)
     body = body.replace("return self._t.request(", "return await self._t.request(")
+    # Composite helpers (upload / wait_for) call sibling methods and sleep between polls.
+    body = re.sub(r"(?<=[ (=])self\.(?!_t\b)([a-z]\w*)\(", r"await self.\1(", body)
+    body = body.replace("time.sleep(", "await asyncio.sleep(")
     return HEADER + "\n" + body
 
 

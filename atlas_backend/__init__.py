@@ -21,6 +21,20 @@ from ._access_token import (
     protected_resource_metadata,
     protected_resource_metadata_path,
 )
+from ._better_auth import (
+    BETTER_AUTH_COOKIE_PREFIX,
+    BETTER_AUTH_EXCHANGE_PATH,
+    AsyncBetterAuthBridge,
+    BetterAuthBridge,
+    BetterAuthExchangeResult,
+    BridgeCookie,
+    BridgeDecision,
+    async_exchange_better_auth_session,
+    better_auth_cookie_names,
+    exchange_better_auth_session,
+    read_better_auth_session_cookie,
+    serialize_bridge_cookie,
+)
 from ._botid import (
     BOTID_ATTESTATION_MAX_TTL_SECONDS,
     BOTID_ATTESTATION_PREFIX,
@@ -70,6 +84,7 @@ from ._handshake import (
     redeem_handshake,
 )
 from ._introspection import IntrospectionError, IntrospectionOptions, Introspector
+from ._legacy_issuers import BETTER_AUTH_JWT_ALGS, LegacyIssuer
 from ._logout import (
     BACKCHANNEL_LOGOUT_EVENT,
     LogoutTokenClaims,
@@ -121,11 +136,31 @@ from ._verify import (
     VerificationError,
 )
 from ._webhooks import WebhookVerification, verify_webhook
+from .resources import (
+    BETTER_AUTH_IMPORT_PART_BYTES,
+    split_bundle_parts,
+)
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 __all__ = [
+    "AsyncBetterAuthBridge",
     "AsyncDeviceAuthorizations",
+    "BETTER_AUTH_COOKIE_PREFIX",
+    "BETTER_AUTH_EXCHANGE_PATH",
+    "BETTER_AUTH_IMPORT_PART_BYTES",
+    "BETTER_AUTH_JWT_ALGS",
+    "BetterAuthBridge",
+    "BetterAuthExchangeResult",
+    "BridgeCookie",
+    "BridgeDecision",
+    "LegacyIssuer",
+    "async_exchange_better_auth_session",
+    "better_auth_cookie_names",
+    "exchange_better_auth_session",
+    "read_better_auth_session_cookie",
+    "serialize_bridge_cookie",
+    "split_bundle_parts",
     "BILLING_PROVIDERS",
     "BOTID_ATTESTATION_MAX_TTL_SECONDS",
     "BOTID_ATTESTATION_PREFIX",

@@ -2,6 +2,15 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.15.0 — 2026-10-24
+
+### Added
+
+- **Migrate from Better Auth: sealed-bundle imports.** `better_auth_imports` (sync and async): `get_public_key`, `rotate_public_key`, `create`, `list`, `get`, `upload_part`, `finalize`, `dry_run`, `apply` (resumes a failed import), `delete`, `list_jwks`, `delete_jwk`. Helpers: `upload(bundle, options=, part_bytes=, on_part=)` creates the import, uploads the bundle in line-aligned parts of at most 8 MiB (`split_bundle_parts`, `BETTER_AUTH_IMPORT_PART_BYTES`) and finalizes it; `wait_for(id, interval=, timeout=, on_progress=)` polls until the import leaves `analyzing` / `queued` / `applying`. Typed `BetterAuthImport`, `BetterAuthImportKey`, `BetterAuthImportOptions`, `ImportedJwk`.
+- **Better Auth session bridge.** `better_auth_bridge.get` / `update` / `delete` (migration window, cookie prefix, live fallback; the old app's secret is write-only) and `better_auth_bridge.exchange(token, client_ip=, user_agent=, remember=)` on the secret-key Backend API route, forwarding the end user's IP and user agent (`X-Atlas-Client-IP`, `X-Atlas-Client-User-Agent`). `exchange_better_auth_session` / `async_exchange_better_auth_session` classify the outcome (`session`, `needs_mfa`, `refused` with `meta.bridge_outcome`; never raise). `BetterAuthBridge` / `AsyncBetterAuthBridge` turn a request's cookies into a `BridgeDecision` (Atlas cookies to set, Better Auth cookies to clear only on a final refusal, `continuation_url` for a second factor); `read_better_auth_session_cookie`, `better_auth_cookie_names`, `serialize_bridge_cookie`. Django (`AtlasMiddleware`) and Flask (`Atlas`) take `ATLAS_BETTER_AUTH_BRIDGE` (with `ATLAS_SECRET_KEY`, optional `ATLAS_API_URL`): a GET/HEAD with a Better Auth cookie is exchanged and redirected to the same URL signed in.
+- **Better Auth JWTs during the cutover.** `AtlasBackend(legacy_issuers=[LegacyIssuer(issuer=, until=, jwks= | jwks_url=, audience=, algorithms=, resolve_subject=)], secret_key=, api_url=)`: a token from that issuer, inside its window, is verified against that issuer's keys only (EdDSA, ES256, ES512, RS256, PS256; `exp` required) and its `sub` is mapped to the Atlas user id through `external_id` (Backend API lookup cached 5 minutes, at most 10 000 entries; failures are not cached). The claims carry `external_id` and `legacy`. Django and Flask read `ATLAS_LEGACY_ISSUERS`.
+- API coverage list: 604 operations.
+
 ## 0.14.0 — 2026-10-24
 
 ### Added

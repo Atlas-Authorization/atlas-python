@@ -7,13 +7,23 @@ module and regenerate rather than editing this file.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+import time
+from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
 from . import models as m
 from ._transport import _AsyncTransport
 from ._types import JSON, CursorPage, DeletedObject, ListPage
-from .resources import _csv, _json, _q, _sniff_image_type
+from .resources import (
+    BETTER_AUTH_IMPORT_IN_FLIGHT,
+    BETTER_AUTH_IMPORT_PART_BYTES,
+    _csv,
+    _json,
+    _q,
+    _sniff_image_type,
+    split_bundle_parts,
+)
 
 
 class AsyncUsers:
@@ -3945,6 +3955,258 @@ class AsyncJobs:
         return await self._t.request(
             method="GET",
             path=f"/v1/jobs/{job_id}/errors",
+        )
+
+
+class AsyncBetterAuthImports:
+    """Migrate from Better Auth: import a sealed bundle made by the Better Auth
+    exporter (``npx atlas-better-auth-export``).
+
+    1. :meth:`get_public_key` — the key the exporter seals the bundle to.
+    2. :meth:`upload` (or :meth:`create`, :meth:`upload_part` per part and
+       :meth:`finalize`) — Atlas opens the bundle and runs the dry run.
+    3. Read the import's ``report``, then :meth:`apply`. Applying again after a
+       failure resumes where it stopped; every record is an idempotent upsert.
+    """
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get_public_key(self) -> m.BetterAuthImportKey:
+        """The instance's import public key (created on first read)."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/better_auth_imports/public_key",
+        )
+
+    async def rotate_public_key(
+        self, *, idempotency_key: str | None = None
+    ) -> m.BetterAuthImportKey:
+        """Replace the import key. The old one is retired: bundles sealed to it no
+        longer finalize (``import_key_retired``)."""
+        return await self._t.request(
+            method="POST",
+            path="/v1/better_auth_imports/public_key/rotate",
+            idempotency_key=idempotency_key,
+        )
+
+    async def create(
+        self,
+        body: m.CreateBetterAuthImportBody | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.BetterAuthImport:
+        """Start an import (status ``uploading``), optionally with import options."""
+        return await self._t.request(
+            method="POST",
+            path="/v1/better_auth_imports",
+            body=body or {},
+            idempotency_key=idempotency_key,
+        )
+
+    async def list(
+        self, *, limit: int | None = None, starting_after: str | None = None
+    ) -> CursorPage:
+        """List imports, newest first. Each ``data`` item is a
+        :class:`~atlas_backend.models.BetterAuthImport`."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/better_auth_imports",
+            query=_q(limit=limit, starting_after=starting_after),
+        )
+
+    async def get(self, import_id: str) -> m.BetterAuthImport:
+        """Fetch an import: status, progress, the dry-run ``report`` and the ``result``."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/better_auth_imports/{import_id}",
+        )
+
+    async def upload_part(
+        self, import_id: str, part: int, data: str | bytes
+    ) -> m.BetterAuthImportPart:
+        """Upload part ``part`` (1-based) of the sealed bundle: whole lines, at most
+        10 MiB. Re-sending a part replaces it."""
+        if isinstance(data, bytes):
+            # Raw bytes go up as-is (text/plain): the server reads them as the part's lines.
+            return await self._t.request(
+                method="PUT",
+                path=f"/v1/better_auth_imports/{import_id}/parts/{part}",
+                content=data,
+                content_type="text/plain; charset=utf-8",
+            )
+        return await self._t.request(
+            method="PUT",
+            path=f"/v1/better_auth_imports/{import_id}/parts/{part}",
+            body={"data": data},
+        )
+
+    async def finalize(self, import_id: str) -> m.BetterAuthImport:
+        """Close the upload: Atlas checks the parts and the key, then runs the dry run
+        (inline up to 4 MiB, ``analyzing`` in the background above that)."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/better_auth_imports/{import_id}/finalize",
+        )
+
+    async def dry_run(
+        self, import_id: str, body: m.CreateBetterAuthImportBody | None = None
+    ) -> m.BetterAuthImport:
+        """Run the dry run again; new ``options`` replace the stored ones."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/better_auth_imports/{import_id}/dry_run",
+            body=body or {},
+        )
+
+    async def apply(
+        self, import_id: str, body: m.ApplyBetterAuthImportBody | None = None
+    ) -> m.BetterAuthImport:
+        """Import (or resume a ``failed`` import from its cursor). Pass
+        ``{"confirm_conflicts": True}`` when the dry run reported conflicts."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/better_auth_imports/{import_id}/apply",
+            body=body or {},
+        )
+
+    async def delete(self, import_id: str) -> m.BetterAuthImportDeleted:
+        """Remove the import and its stored bundle; data already imported stays."""
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/better_auth_imports/{import_id}",
+        )
+
+    async def list_jwks(self) -> CursorPage:
+        """The Better Auth JWT keys Atlas publishes in the instance JWKS for the
+        cutover. Each ``data`` item is a :class:`~atlas_backend.models.ImportedJwk`."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/better_auth_imports/jwks",
+        )
+
+    async def delete_jwk(self, kid: str) -> m.ImportedJwkDeleted:
+        """Stop publishing one imported Better Auth JWT key."""
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/better_auth_imports/jwks/{kid}",
+        )
+
+    async def upload(
+        self,
+        bundle: str | bytes,
+        *,
+        options: m.BetterAuthImportOptions | None = None,
+        part_bytes: int = BETTER_AUTH_IMPORT_PART_BYTES,
+        on_part: Callable[[int, int], None] | None = None,
+    ) -> m.BetterAuthImport:
+        """Create an import, upload the sealed bundle in line-aligned parts of at most
+        ``part_bytes`` and finalize it. Returns the finalized import (``ready`` /
+        ``invalid``, or ``analyzing`` for a large bundle — see :meth:`wait_for`)."""
+        parts = split_bundle_parts(bundle, part_bytes)
+        if not parts:
+            raise ValueError("The bundle is empty.")
+        created = await self.create({"options": options} if options else None)
+        import_id = created.get("id") if isinstance(created, dict) else None
+        if not import_id:
+            raise ValueError("Atlas did not return an import id.")
+        for i, part in enumerate(parts, start=1):
+            await self.upload_part(import_id, i, part)
+            if on_part is not None:
+                on_part(i, len(parts))
+        return await self.finalize(import_id)
+
+    async def wait_for(
+        self,
+        import_id: str,
+        *,
+        interval: float = 2.0,
+        timeout: float = 6 * 3600.0,
+        on_progress: Callable[[m.BetterAuthImport], None] | None = None,
+    ) -> m.BetterAuthImport:
+        """Poll until the import leaves ``analyzing`` / ``queued`` / ``applying`` and
+        return it (``ready``, ``invalid``, ``completed`` or ``failed``). Raises
+        :class:`TimeoutError` after ``timeout`` seconds."""
+        deadline = time.monotonic() + timeout
+        while True:
+            imp = await self.get(import_id)
+            if on_progress is not None:
+                on_progress(imp)
+            if imp.get("status") not in BETTER_AUTH_IMPORT_IN_FLIGHT:
+                return imp
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"Timed out waiting for Better Auth import {import_id} "
+                    f"(status {imp.get('status')})."
+                )
+            await asyncio.sleep(interval)
+
+
+class AsyncBetterAuthBridge:
+    """The Better Auth session bridge: during a migration window a returning user's
+    Better Auth session is exchanged, once, for an Atlas session — nobody is signed
+    out by the switch. See :func:`atlas_backend.exchange_better_auth_session` and the
+    framework integrations' ``ATLAS_BETTER_AUTH_BRIDGE`` setting."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self) -> m.BetterAuthBridgeSettings:
+        """The bridge settings and exchange counts (``live_fallback.has_secret``, never
+        the secret)."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/migrations/better_auth/bridge",
+        )
+
+    async def update(
+        self, body: m.UpdateBetterAuthBridgeBody, *, idempotency_key: str | None = None
+    ) -> m.BetterAuthBridgeSettings:
+        """Create or update the settings. Every field is optional and merged onto the
+        stored ones; ``live_fallback.secret`` is write-only (omit to keep, ``None`` to
+        clear)."""
+        return await self._t.request(
+            method="PUT",
+            path="/v1/migrations/better_auth/bridge",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def delete(self, *, idempotency_key: str | None = None) -> m.BetterAuthBridgeDeleted:
+        """Remove the settings: the bridge is off and the stored secret is deleted."""
+        return await self._t.request(
+            method="DELETE",
+            path="/v1/migrations/better_auth/bridge",
+            idempotency_key=idempotency_key,
+        )
+
+    async def exchange(
+        self,
+        token: str,
+        *,
+        client_ip: str | None = None,
+        user_agent: str | None = None,
+        remember: bool | None = None,
+    ) -> m.BetterAuthExchangeResponse:
+        """Exchange a Better Auth session (the raw cookie value or the bare token) for
+        an Atlas session, once. Returns ``session_tokens`` or, when a second factor is
+        owed, a ``sign_in_attempt``. ``client_ip`` / ``user_agent`` are the END USER's,
+        forwarded so Atlas's guards, risk and geo checks and the device record see the
+        user rather than your server. Raises :class:`AtlasError` on refusal — use
+        :func:`atlas_backend.exchange_better_auth_session` for a classified result."""
+        headers: dict[str, str] = {}
+        if client_ip:
+            headers["x-atlas-client-ip"] = client_ip
+        if user_agent:
+            headers["x-atlas-client-user-agent"] = user_agent
+        body: dict[str, Any] = {"token": token}
+        if remember is False:
+            body["remember"] = False
+        return await self._t.request(
+            method="POST",
+            path="/v1/migrations/better_auth/exchange",
+            body=body,
+            headers=headers,
         )
 
 

@@ -7916,3 +7916,190 @@ class NewTemplateVersionBody(_NewTemplateVersionRequired, total=False):
     secrets: list[ActionTemplateSecret]
     changelog: str
     submit: bool
+
+
+# --------------------------------------------------------------------------- #
+# Migrate from Better Auth: sealed-bundle imports and the session bridge      #
+# --------------------------------------------------------------------------- #
+
+BetterAuthImportStatus = Literal[
+    "uploading", "analyzing", "ready", "invalid", "queued", "applying", "completed", "failed"
+]
+
+
+class BetterAuthImportKey(TypedDict, total=False):
+    """The X25519 key the Better Auth exporter seals a bundle to."""
+
+    object: Literal["better_auth_import_key"]
+    kid: str
+    #: base64url raw X25519 public key.
+    public_key: str
+    alg: Literal["X25519-HKDF-SHA256-A256GCM"]
+    status: Literal["active", "retired"]
+    #: SHA-256 of the raw key, first 16 bytes as hex pairs.
+    fingerprint: str
+    #: ``kid:public_key`` — the form the exporter's ``--public-key`` takes.
+    compact: str
+    created_at: int
+    retired_at: int | None
+
+
+class BetterAuthImportOptions(TypedDict, total=False):
+    models: list[str]
+    on_email_conflict: Literal["skip", "link"]
+    default_role: str
+    create_app_roles: bool
+    import_oauth_tokens: bool
+    passkeys_on_rp_mismatch: Literal["skip", "import"]
+    import_subscriptions: bool
+    plan_map: dict[str, str]
+    import_jwks: bool
+    #: 1–365, default 30.
+    jwks_cutover_days: int
+    import_sessions: bool
+    retain_bundle: bool
+
+
+class CreateBetterAuthImportBody(TypedDict, total=False):
+    options: BetterAuthImportOptions
+
+
+class ApplyBetterAuthImportBody(TypedDict, total=False):
+    #: Required when the dry run reported conflicts.
+    confirm_conflicts: bool
+
+
+class BetterAuthImportActionItem(TypedDict, total=False):
+    code: str
+    #: Only ``required`` should block: those rows stay out until fixed and re-run.
+    severity: Literal["required", "recommended", "info"]
+    message: str
+    count: int
+    items: list[str]
+
+
+class BetterAuthImportProgress(TypedDict, total=False):
+    total: int
+    processed: int
+    succeeded: int
+    failed: int
+    percent: int
+
+
+class BetterAuthImportError(TypedDict, total=False):
+    #: bundle_malformed | bundle_unsupported | bundle_wrong_key | bundle_tampered |
+    #: bundle_truncated | bundle_count_mismatch | import_key_retired | analysis_failed |
+    #: apply_failed
+    code: str
+    message: str
+
+
+class BetterAuthImport(TypedDict, total=False):
+    """One Better Auth bundle import: ``uploading → analyzing → ready | invalid →
+    queued → applying → completed | failed``."""
+
+    object: Literal["better_auth_import"]
+    id: str
+    status: BetterAuthImportStatus
+    key_id: str | None
+    parts: int
+    bytes: int
+    bundle_sha256: str | None
+    bundle_purged: bool
+    options: BetterAuthImportOptions
+    #: The exporter's manifest (Better Auth version, plugins, models, rp_id, ...).
+    source: dict[str, Any] | None
+    total: int
+    progress: BetterAuthImportProgress | None
+    #: The dry run: ``models``, ``skipped``, ``conflicts``, ``action_items``, ...
+    report: dict[str, Any] | None
+    #: The apply outcome: per-model created/updated/unchanged/skipped/failed.
+    result: dict[str, Any] | None
+    error: BetterAuthImportError | None
+    created_at: int
+    updated_at: int
+    analyzed_at: int | None
+    apply_started_at: int | None
+    completed_at: int | None
+
+
+class BetterAuthImportPart(TypedDict, total=False):
+    object: Literal["better_auth_import_part"]
+    import_id: str
+    part: int
+    bytes: int
+    sha256: str
+
+
+class BetterAuthImportDeleted(TypedDict, total=False):
+    object: Literal["better_auth_import"]
+    id: str
+    deleted: bool
+
+
+class ImportedJwk(TypedDict, total=False):
+    """A Better Auth JWT key published in the instance JWKS for the cutover."""
+
+    object: Literal["imported_jwk"]
+    kid: str
+    source: str
+    jwk: dict[str, Any]
+    import_id: str | None
+    expires_at: int | None
+    created_at: int
+
+
+class ImportedJwkDeleted(TypedDict, total=False):
+    object: Literal["imported_jwk"]
+    kid: str
+    deleted: bool
+
+
+class BetterAuthLiveFallbackBody(TypedDict, total=False):
+    enabled: bool
+    #: The old app's Better Auth base URL including its base path
+    #: (``https://app.example.com/api/auth``).
+    base_url: str | None
+    #: The old app's ``BETTER_AUTH_SECRET``. Write-only: omit to keep, ``None`` to clear.
+    secret: str | None
+
+
+class UpdateBetterAuthBridgeBody(TypedDict, total=False):
+    enabled: bool
+    #: End of the migration window (ISO-8601 or epoch ms); ``None`` = open until disabled.
+    ends_at: str | int | None
+    #: Better Auth's ``advanced.cookiePrefix`` (default ``better-auth``).
+    cookie_prefix: str
+    live_fallback: BetterAuthLiveFallbackBody
+
+
+class BetterAuthBridgeSettings(TypedDict, total=False):
+    object: Literal["better_auth_bridge"]
+    enabled: bool
+    ends_at: int | None
+    cookie_prefix: str
+    #: ``{enabled, base_url, has_secret}`` — never the secret.
+    live_fallback: dict[str, Any]
+    exchange_path: str
+    #: ``{exchanged, from_import, from_live}``.
+    stats: dict[str, int]
+    created_at: int | None
+    updated_at: int | None
+
+
+class BetterAuthBridgeDeleted(TypedDict, total=False):
+    object: Literal["better_auth_bridge"]
+    deleted: bool
+
+
+class BetterAuthExchangeResponse(TypedDict, total=False):
+    #: ``session_tokens``, or ``sign_in_attempt`` when a second factor is still owed.
+    object: Literal["session_tokens", "sign_in_attempt"]
+    #: sign_in_attempt only: the attempt to continue.
+    id: str
+    session_id: str
+    user_id: str
+    jwt: str
+    refresh_token: str
+    expires_in: int
+    status: Literal["needs_second_factor", "needs_mfa_enrollment"]

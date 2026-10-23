@@ -30,11 +30,13 @@ import base64
 import json
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import httpx
+
+from ._legacy_issuers import DEFAULT_API_URL, LegacyIssuer, LegacyIssuerVerifier, peek_issuer
 
 #: §7.3's five seconds either side, matching the server's minting tolerance.
 CLOCK_SKEW_SECONDS = 5
@@ -319,6 +321,14 @@ class AtlasBackend:
             the JWKS cache.
         leeway: Clock-skew tolerance in seconds for ``exp``/``nbf``.
         now / ttl_ms / refetch_interval_ms: JWKS-cache tuning (mostly for tests).
+        legacy_issuers: Cutover from another auth provider (Better Auth): ALSO
+            accept JWTs from these :class:`LegacyIssuer` entries until each one's
+            ``until``, verified against that issuer's own key set, with ``sub``
+            mapped to the Atlas user id (the old id is the user's ``external_id``).
+            The claims then carry ``sub`` = the Atlas id, ``external_id`` = the old
+            id and ``legacy`` = ``{kind, issuer, sub}``. Atlas tokens are unaffected.
+        secret_key / api_url: The instance secret key and Backend API origin the
+            default ``legacy_issuers`` subject lookup uses.
     """
 
     def __init__(
@@ -332,6 +342,9 @@ class AtlasBackend:
         now: Callable[[], int] | None = None,
         ttl_ms: int = DEFAULT_TTL_MS,
         refetch_interval_ms: int = REFETCH_INTERVAL_MS,
+        legacy_issuers: Sequence[LegacyIssuer] | None = None,
+        secret_key: str | None = None,
+        api_url: str = DEFAULT_API_URL,
     ) -> None:
         if not jwks_url:
             raise ValueError("AtlasBackend requires jwks_url.")
@@ -350,6 +363,18 @@ class AtlasBackend:
             ttl_ms=ttl_ms,
             refetch_interval_ms=refetch_interval_ms,
         )
+        self._legacy: LegacyIssuerVerifier | None = None
+        if legacy_issuers:
+            if any(entry.issuer == issuer for entry in legacy_issuers):
+                raise ValueError("AtlasBackend: a legacy issuer cannot be the Atlas issuer itself.")
+            self._legacy = LegacyIssuerVerifier(
+                legacy_issuers,
+                secret_key=secret_key,
+                api_url=api_url,
+                http_client=http_client,
+                now=now,
+                leeway=leeway,
+            )
 
     def verify(self, token: str) -> SessionClaims:
         """Verify a token locally.
@@ -364,6 +389,23 @@ class AtlasBackend:
 
         if not token or token.count(".") != 2:
             raise VerificationError(VerificationError.MALFORMED)
+
+        # A token from a configured legacy issuer (inside its window) is verified
+        # against THAT issuer's keys only — never the Atlas keys; the `iss` routes,
+        # the signature decides.
+        if self._legacy is not None:
+            entry = self._legacy.match(peek_issuer(token))
+            if entry is not None:
+                outcome, legacy_claims = self._legacy.verify(token, entry)
+                if outcome == "no_keys":
+                    raise VerificationError(VerificationError.NO_KEYS)
+                if legacy_claims is None:
+                    raise VerificationError(VerificationError.INVALID)
+                azp = legacy_claims.get("azp")
+                if self._authorized_parties and azp is not None:
+                    if azp not in self._authorized_parties:
+                        raise VerificationError(VerificationError.UNAUTHORIZED_PARTY)
+                return SessionClaims.from_raw(legacy_claims)
 
         kid = JwksCache.read_kid(token)
         keyset = self.jwks.get(kid)

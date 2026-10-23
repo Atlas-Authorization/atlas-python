@@ -28,6 +28,13 @@ from atlas_backend import (
 API_URL = "https://api.example.test"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 OPS_FILE = Path(__file__).with_name("openapi_operations.txt")
+#: Composite helpers built from the operations above (tested on their own), not
+#: operations themselves: ``upload`` needs a real import id, ``wait_for`` polls.
+COMPOSITES = {"BetterAuthImports": {"upload", "wait_for"}}
+
+
+def _composite(ns: Any, name: str) -> bool:
+    return name in COMPOSITES.get(type(ns).__name__.removeprefix("Async"), set())
 
 
 def _spec_ops() -> set[tuple[str, str]]:
@@ -98,7 +105,7 @@ def _sync_ops(client: Any) -> set[tuple[str, str]]:
         route = mock.route().mock(return_value=httpx.Response(200, json={}))
         for ns in _namespaces(client):
             for name, fn in inspect.getmembers(ns, inspect.ismethod):
-                if name.startswith("_"):
+                if name.startswith("_") or _composite(ns, name):
                     continue
                 args, kwargs, ph = _args_for(fn)
                 fn(*args, **kwargs)
@@ -114,7 +121,7 @@ def _async_ops(client: Any) -> set[tuple[str, str]]:
             route = mock.route().mock(return_value=httpx.Response(200, json={}))
             for ns in _namespaces(client):
                 for name, fn in inspect.getmembers(ns, inspect.ismethod):
-                    if name.startswith("_"):
+                    if name.startswith("_") or _composite(ns, name):
                         continue
                     args, kwargs, ph = _args_for(fn)
                     await fn(*args, **kwargs)
