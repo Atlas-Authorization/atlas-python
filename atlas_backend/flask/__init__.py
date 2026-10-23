@@ -32,9 +32,10 @@ from typing import Any, Callable
 from flask import Flask, current_app, g, jsonify, request
 from flask.wrappers import Response
 
+from .._access_token import AccessTokenVerifier
 from .._verify import AtlasBackend, AtlasUser, SessionClaims, VerificationError
 
-__all__ = ["Atlas", "atlas_required"]
+__all__ = ["Atlas", "atlas_required", "access_token_required"]
 
 _EXTENSION_KEY = "atlas_backend"
 
@@ -58,8 +59,7 @@ class Atlas:
         issuer = app.config.get("ATLAS_ISSUER")
         if not jwks_url or not issuer:
             raise RuntimeError(
-                "atlas_backend.flask requires ATLAS_JWKS_URL and ATLAS_ISSUER "
-                "in app.config."
+                "atlas_backend.flask requires ATLAS_JWKS_URL and ATLAS_ISSUER in app.config."
             )
         self.backend = AtlasBackend(
             jwks_url=jwks_url,
@@ -111,3 +111,32 @@ def atlas_required(view_func: Callable[..., Any]) -> Callable[..., Any]:
         return view_func(*args, **kwargs)
 
     return wrapper
+
+
+def access_token_required(
+    verifier: AccessTokenVerifier, *required_scopes: str
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Route decorator that requires an Atlas-issued OAuth access token for your API.
+
+    On success sets ``g.atlas_access_token`` (the :class:`AccessTokenResult`). A refusal
+    answers with the verifier's status and the RFC 6750 / RFC 9728 ``WWW-Authenticate``
+    challenge.
+    """
+
+    def decorator(view_func: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(view_func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            result = verifier.verify(
+                request.headers.get("Authorization"), required_scopes=required_scopes
+            )
+            if not result.ok:
+                response: Response = jsonify(error=result.error or "unauthorized")
+                response.status_code = result.status
+                response.headers["WWW-Authenticate"] = result.www_authenticate
+                return response
+            g.atlas_access_token = result
+            return view_func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator

@@ -30,12 +30,54 @@ class AsyncUsers:
         self.notification_preferences = _AsyncUserNotificationPreferences(transport)
 
     async def list(
-        self, *, limit: int | None = None, starting_after: str | None = None
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+        offset: int | None = None,
+        query: str | None = None,
+        email_address: str | None = None,
+        username: str | None = None,
+        phone_number: str | None = None,
+        external_id: str | None = None,
+        banned: bool | None = None,
+        email_verified: bool | None = None,
+        organization_id: str | None = None,
+        created_after: int | None = None,
+        created_before: int | None = None,
+        order_by: Literal["created_at", "-created_at", "last_sign_in_at", "-last_sign_in_at"]
+        | None = None,
+        include_total_count: bool | None = None,
     ) -> CursorPage:
+        """List and search users. Every filter combines with AND. Page by cursor
+        (``starting_after``) or, with ``offset``, by offset. ``query`` searches email,
+        username, names, phone and ids; ``created_after`` / ``created_before`` are epoch
+        ms; ``include_total_count`` adds ``total_count`` to the page.
+        """
+
+        def _b(v: bool | None) -> str | None:
+            return None if v is None else ("true" if v else "false")
+
         return await self._t.request(
             method="GET",
             path="/v1/users",
-            query=_q(limit=limit, starting_after=starting_after),
+            query=_q(
+                limit=limit,
+                starting_after=starting_after,
+                offset=offset,
+                query=query,
+                email_address=email_address,
+                username=username,
+                phone_number=phone_number,
+                external_id=external_id,
+                banned=_b(banned),
+                email_verified=_b(email_verified),
+                organization_id=organization_id,
+                created_after=created_after,
+                created_before=created_before,
+                order_by=order_by,
+                include_total_count=_b(include_total_count),
+            ),
         )
 
     async def get(self, user_id: str, *, include_deleted: bool | None = None) -> m.User:
@@ -74,12 +116,23 @@ class AsyncUsers:
         *,
         reason: str | None = None,
         note: str | None = None,
+        expires_in_seconds: int | None = None,
+        expires_at: int | None = None,
         idempotency_key: str | None = None,
     ) -> m.User:
+        """Ban a user and revoke every session. Permanent unless ``expires_in_seconds`` or
+        ``expires_at`` (epoch ms) is given: a timed ban lifts itself (``user.unbanned``).
+        """
         return await self._t.request(
             method="POST",
             path=f"/v1/users/{user_id}/ban",
-            body=_q(reason=reason, note=note) or None,
+            body=_q(
+                reason=reason,
+                note=note,
+                expires_in_seconds=expires_in_seconds,
+                expires_at=expires_at,
+            )
+            or None,
             idempotency_key=idempotency_key,
         )
 
@@ -369,6 +422,101 @@ class _AsyncOrgInvitations:
             path=f"/v1/organizations/{org_id}/invitations/{invitation_id}/revoke",
         )
 
+    async def resend(self, org_id: str, invitation_id: str) -> JSON:
+        """Resend a pending invitation: same id and role, a fresh expiry."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/organizations/{org_id}/invitations/{invitation_id}/resend",
+        )
+
+
+class _AsyncOrgTeams:
+    """Teams inside an organization (``/v1/organizations/{id}/teams``)."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self, org_id: str, *, user_id: str | None = None) -> CursorPage:
+        """The organization's teams; ``user_id`` narrows to the teams that user is in."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/organizations/{org_id}/teams",
+            query=_q(user_id=user_id),
+        )
+
+    async def create(self, org_id: str, body: m.TeamBody) -> m.Team:
+        return await self._t.request(
+            method="POST", path=f"/v1/organizations/{org_id}/teams", body=body
+        )
+
+    async def get(self, org_id: str, team_id: str) -> m.Team:
+        return await self._t.request(
+            method="GET", path=f"/v1/organizations/{org_id}/teams/{team_id}"
+        )
+
+    async def update(self, org_id: str, team_id: str, body: m.TeamBody) -> m.Team:
+        return await self._t.request(
+            method="PATCH", path=f"/v1/organizations/{org_id}/teams/{team_id}", body=body
+        )
+
+    async def delete(self, org_id: str, team_id: str) -> DeletedObject:
+        return await self._t.request(
+            method="DELETE", path=f"/v1/organizations/{org_id}/teams/{team_id}"
+        )
+
+    async def list_members(self, org_id: str, team_id: str) -> CursorPage:
+        return await self._t.request(
+            method="GET", path=f"/v1/organizations/{org_id}/teams/{team_id}/members"
+        )
+
+    async def add_member(self, org_id: str, team_id: str, user_id: str) -> m.TeamMember:
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/organizations/{org_id}/teams/{team_id}/members",
+            body={"user_id": user_id},
+        )
+
+    async def remove_member(self, org_id: str, team_id: str, user_id: str) -> m.TeamMember:
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/organizations/{org_id}/teams/{team_id}/members/{user_id}",
+        )
+
+
+class _AsyncOrgRoles:
+    """The roles an organization can assign: the instance roles plus its own custom
+    roles (``organization_id`` set)."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self, org_id: str, *, own: bool | None = None) -> CursorPage:
+        """``own=True`` lists only the organization's own custom roles."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/organizations/{org_id}/roles",
+            query=_q(own="true" if own else None),
+        )
+
+    async def create(self, org_id: str, body: m.CreateOrgRoleBody) -> m.OrgRole:
+        return await self._t.request(
+            method="POST", path=f"/v1/organizations/{org_id}/roles", body=body
+        )
+
+    async def update(self, org_id: str, role_id: str, body: m.UpdateOrgRoleBody) -> m.OrgRole:
+        return await self._t.request(
+            method="PATCH", path=f"/v1/organizations/{org_id}/roles/{role_id}", body=body
+        )
+
+    async def delete(self, org_id: str, role_id: str, *, reassign_to: str | None = None) -> JSON:
+        """Delete one of the organization's own roles; ``reassign_to`` (a role key) moves
+        members and pending invitations first (409 ``ROLE_IN_USE`` without it)."""
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/organizations/{org_id}/roles/{role_id}",
+            query=_q(reassign_to=reassign_to),
+        )
+
 
 class _AsyncOrgDomains:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -434,6 +582,18 @@ class AsyncOrganizations:
         self.end_users = _AsyncOrgEndUsers(transport)
         self.reader_domain = _AsyncOrgReaderDomain(transport)
         self.branding = _AsyncOrgBranding(transport)
+        self.teams = _AsyncOrgTeams(transport)
+        self.roles = _AsyncOrgRoles(transport)
+
+    async def get_by_slug(self, slug: str) -> m.Organization:
+        """Fetch an organization by slug (case-insensitive)."""
+        return await self._t.request(method="GET", path=f"/v1/organizations/by_slug/{slug}")
+
+    async def check_slug(self, slug: str) -> m.SlugCheck:
+        """Whether a slug is valid and free, for a create-organization form."""
+        return await self._t.request(
+            method="GET", path="/v1/organizations/check_slug", query={"slug": slug}
+        )
 
     async def list(
         self, *, limit: int | None = None, starting_after: str | None = None
@@ -939,6 +1099,11 @@ class AsyncScimTokens:
 
     async def revoke(self, token_id: str) -> JSON:
         return await self._t.request(method="POST", path=f"/v1/scim_tokens/{token_id}/revoke")
+
+    async def update(self, token_id: str, body: m.UpdateScimTokenBody) -> m.ScimToken:
+        """Change a SCIM token's name, scopes (``["read"]`` = read-only) or role mappings.
+        The secret is unchanged."""
+        return await self._t.request(method="PATCH", path=f"/v1/scim_tokens/{token_id}", body=body)
 
 
 class AsyncDomains:
@@ -1813,7 +1978,9 @@ class AsyncApiKeys:
         )
 
     async def verify(self, body: m.VerifyApiKeyBody | None = None) -> m.ApiKeyVerification:
-        """Verify a presented ak_ secret."""
+        """Verify a presented ak_ secret. Send ``required_scopes`` to require scopes; a live
+        key refused by its own policy answers ``valid: False`` with a ``code``
+        (``insufficient_scope``, ``rate_limited`` or ``usage_exhausted``)."""
         return await self._t.request(
             method="POST",
             path="/v1/api_keys/verify",
@@ -1987,6 +2154,7 @@ class AsyncBilling:
         self._t = transport
         self.plans = _AsyncBillingPlans(transport)
         self.subscriptions = _AsyncBillingSubscriptions(transport)
+        self.providers = _AsyncBillingProviders(transport)
 
     async def sync_seats(self, subject_type: str, subject_id: str) -> m.BillingSeats:
         """Sync a per-seat subscription's Stripe quantity to the org's current member count
@@ -2084,6 +2252,65 @@ class _AsyncBillingSubscriptions:
             path="/v1/billing/subscriptions/import",
             body=body,
             idempotency_key=idempotency_key,
+        )
+
+    async def change(self, subscription_id: str, body: m.ChangeSubscriptionBody) -> m.Subscription:
+        """Switch a subscription to another plan or interval on the billing provider, now
+        (prorated) or at the period end (``schedule_at_period_end``)."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/billing/subscriptions/{subscription_id}/change",
+            body=body,
+        )
+
+    async def cancel(
+        self, subscription_id: str, *, immediately: bool | None = None
+    ) -> m.Subscription:
+        """Cancel at the end of the current period, or now with ``immediately=True``."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/billing/subscriptions/{subscription_id}/cancel",
+            body=_q(immediately=immediately),
+        )
+
+    async def restore(self, subscription_id: str) -> m.Subscription:
+        """Undo a cancellation scheduled for the period end."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/billing/subscriptions/{subscription_id}/restore",
+        )
+
+
+class _AsyncBillingProviders:
+    """The instance's own billing provider credentials (bring your own key): stripe,
+    polar, dodo or creem. Secrets are write-only."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self) -> CursorPage:
+        return await self._t.request(method="GET", path="/v1/billing/providers")
+
+    async def get(self, provider: str) -> m.BillingProvider:
+        return await self._t.request(method="GET", path=f"/v1/billing/providers/{provider}")
+
+    async def set(self, provider: str, body: m.SetBillingProviderBody) -> m.BillingProvider:
+        """Store credentials (merged onto what is stored, encrypted at rest)."""
+        return await self._t.request(
+            method="PUT", path=f"/v1/billing/providers/{provider}", body=body
+        )
+
+    async def test(self, provider: str) -> m.BillingProviderTest:
+        """Make one read-only call with the stored credentials."""
+        return await self._t.request(method="POST", path=f"/v1/billing/providers/{provider}/test")
+
+    async def delete(self, provider: str, *, force: bool | None = None) -> JSON:
+        """Remove a provider's credentials; refused while subscriptions or plans depend on
+        it unless ``force=True``."""
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/billing/providers/{provider}",
+            query=_q(force="true" if force else None),
         )
 
 
@@ -3264,6 +3491,10 @@ class _AsyncInstanceReferrals:
             ),
         )
 
+    async def get_call(self, call_id: str) -> m.ReferralCall:
+        """One call of the delivery log, by id or the platform's request id."""
+        return await self._t.request(method="GET", path=f"/v1/instance/referrals/calls/{call_id}")
+
     async def retry_call(
         self, call_id: str, *, idempotency_key: str | None = None
     ) -> m.ReferralCall:
@@ -3377,6 +3608,26 @@ class _AsyncInstanceHooks:
             path="/v1/instance/hooks/before_user_create/test",
         )
 
+    async def list_before_user_create_calls(
+        self,
+        *,
+        limit: int | None = None,
+        status: Literal["ok", "failed", "timeout", "error", "invalid_response"] | None = None,
+        test: bool | None = None,
+        starting_after: str | None = None,
+    ) -> CursorPage:
+        """The hook's delivery log, newest first (kept 30 days)."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/instance/hooks/before_user_create/calls",
+            query=_q(
+                limit=limit,
+                status=status,
+                test=None if test is None else ("true" if test else "false"),
+                starting_after=starting_after,
+            ),
+        )
+
 
 class _AsyncInstanceSecurity:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -3395,6 +3646,19 @@ class _AsyncInstanceSecurity:
             method="PATCH",
             path="/v1/instance/security",
             body=body,
+        )
+
+    async def list_signing_keys(self) -> m.SigningKeyList:
+        """The published token-signing keys: ``current`` and, inside a rotation's grace
+        window, ``previous`` with ``retires_at``."""
+        return await self._t.request(method="GET", path="/v1/instance/signing_keys")
+
+    async def rotate_signing_key(
+        self, body: m.RotateSigningKeyBody | None = None
+    ) -> m.SigningKeyRotation:
+        """Rotate the instance signing key, optionally switching ``alg`` (RS256 or ES256)."""
+        return await self._t.request(
+            method="POST", path="/v1/instance/signing_keys/rotate", body=body or {}
         )
 
 
@@ -5434,4 +5698,79 @@ class AsyncPlatformDesignAssets:
         return await self._t.request(
             method="DELETE",
             path=f"/v1/platform/design/assets/{asset_id}",
+        )
+
+
+class AsyncAppRoles:
+    """AsyncInstance-wide user roles (``/v1/app_roles``), not tied to any organization. A
+    user's app roles ride on their session token as ``app_roles`` / ``app_permissions``;
+    check them offline with :func:`has_app_role` / :func:`has_app_permission`.
+    """
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self) -> CursorPage:
+        return await self._t.request(method="GET", path="/v1/app_roles")
+
+    async def create(self, body: m.CreateAppRoleBody) -> m.AppRole:
+        return await self._t.request(method="POST", path="/v1/app_roles", body=body)
+
+    async def get(self, role_id: str) -> m.AppRole:
+        """By id or key."""
+        return await self._t.request(method="GET", path=f"/v1/app_roles/{role_id}")
+
+    async def update(self, role_id: str, body: m.UpdateAppRoleBody) -> m.AppRole:
+        return await self._t.request(method="PATCH", path=f"/v1/app_roles/{role_id}", body=body)
+
+    async def delete(self, role_id: str) -> DeletedObject:
+        return await self._t.request(method="DELETE", path=f"/v1/app_roles/{role_id}")
+
+    async def list_users(
+        self, role_id: str, *, limit: int | None = None, offset: int | None = None
+    ) -> CursorPage:
+        """The users holding a role, oldest assignment first."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/app_roles/{role_id}/users",
+            query=_q(limit=limit, offset=offset),
+        )
+
+    async def get_for_user(self, user_id: str) -> m.UserAppRoles:
+        """A user's app roles and effective permissions."""
+        return await self._t.request(method="GET", path=f"/v1/users/{user_id}/app_roles")
+
+    async def set_for_user(self, user_id: str, body: m.SetUserAppRolesBody) -> m.UserAppRoles:
+        """``roles`` replaces the set; ``add`` / ``remove`` change it (keys or ids)."""
+        return await self._t.request(
+            method="POST", path=f"/v1/users/{user_id}/app_roles", body=body
+        )
+
+    async def remove_from_user(self, user_id: str, role_id: str) -> m.UserAppRoles:
+        return await self._t.request(
+            method="DELETE", path=f"/v1/users/{user_id}/app_roles/{role_id}"
+        )
+
+
+class AsyncOAuthInitialAccessTokens:
+    """Initial access tokens for OAuth dynamic client registration (RFC 7591 §3), needed
+    once ``oauthProvider.requireInitialAccessToken`` is on."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self) -> CursorPage:
+        return await self._t.request(method="GET", path="/v1/oauth_initial_access_tokens")
+
+    async def create(
+        self, body: m.CreateInitialAccessTokenBody | None = None
+    ) -> m.InitialAccessToken:
+        """Mint a token; ``token`` is returned exactly once."""
+        return await self._t.request(
+            method="POST", path="/v1/oauth_initial_access_tokens", body=body or {}
+        )
+
+    async def revoke(self, token_id: str) -> m.InitialAccessToken:
+        return await self._t.request(
+            method="DELETE", path=f"/v1/oauth_initial_access_tokens/{token_id}"
         )

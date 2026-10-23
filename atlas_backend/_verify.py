@@ -89,6 +89,18 @@ class SessionClaims:
         """Whether the session's ``org_role`` equals ``role``."""
         return self.org_role == role
 
+    def has_app_role(self, role: str) -> bool:
+        """Whether the ``app_roles`` claim (the user's instance-wide app roles) contains
+        ``role``. Needs no active organization."""
+        roles = self.raw.get("app_roles")
+        return isinstance(roles, list) and role in roles
+
+    def has_app_permission(self, permission: str) -> bool:
+        """Whether the ``app_permissions`` claim (the union of the user's app roles'
+        permissions) contains ``permission``. Needs no active organization."""
+        perms = self.raw.get("app_permissions")
+        return isinstance(perms, list) and permission in perms
+
     def has_permission(self, permission: str) -> bool:
         """Whether ``org_permissions`` contains ``permission``.
 
@@ -249,11 +261,7 @@ class JwksCache:
 
             # The throttle: a kid-miss inside the window is answered from cache,
             # and the token simply fails to verify.
-            if (
-                kid_miss
-                and not expired
-                and now - self._last_attempt_at < self._refetch_interval_ms
-            ):
+            if kid_miss and not expired and now - self._last_attempt_at < self._refetch_interval_ms:
                 self.last_outcome = "throttled"
                 return self._cached
 
@@ -353,7 +361,6 @@ class AtlasBackend:
         # Import lazily so `import atlas_backend` does not require the crypto
         # backend to be importable until a token is actually verified.
         import jwt  # PyJWT
-        from jwt.algorithms import RSAAlgorithm
 
         if not token or token.count(".") != 2:
             raise VerificationError(VerificationError.MALFORMED)
@@ -368,17 +375,16 @@ class AtlasBackend:
             raise VerificationError(VerificationError.INVALID)
 
         try:
-            # from_jwk returns a public/private union; a public JWK always
-            # yields a public key, which jwt.decode accepts.
-            key: Any = RSAAlgorithm.from_jwk(json.dumps(jwk))
-            # ``from_jwk`` + algorithms=["RS256"] pins RS256, so a token whose
+            # The selected key's type fixes the ONE algorithm accepted: RS256 for
+            # an RSA key, ES256 for a P-256 key (SIGNING_ALGS). A token whose
             # header says alg:none — or any algorithm coerced onto the key
             # material — fails to decode. Signature + exp/nbf (with leeway) + iss
             # are all enforced here by PyJWT.
+            key, alg = jwk_public_key(jwk)
             claims = jwt.decode(
                 token,
                 key=key,
-                algorithms=["RS256"],
+                algorithms=[alg],
                 issuer=self._issuer,
                 leeway=self._leeway,
                 options={"verify_aud": False, "require": ["exp"]},
@@ -430,16 +436,49 @@ class AtlasBackend:
         return self.verify(token)
 
     @staticmethod
-    def _select_jwk(
-        keys: list[dict[str, Any]], kid: str | None
-    ) -> dict[str, Any] | None:
+    def _select_jwk(keys: list[dict[str, Any]], kid: str | None) -> dict[str, Any] | None:
         for k in keys:
-            if k.get("kty") != "RSA":
+            if _jwk_alg(k) is None:
                 continue
             if kid and k.get("kid") != kid:
                 continue
             return k
         return None
+
+
+#: The JWS algorithms Atlas signs tokens with. An instance key is RS256 (the default)
+#: or ES256, and an API may use either. Every verifier here is pinned to this list:
+#: ``none`` and HMAC never verify, and the token's ``kid`` selects exactly one
+#: published key whose type fixes which of the two applies.
+SIGNING_ALGS = ("RS256", "ES256")
+
+
+def _jwk_alg(jwk: Mapping[str, Any]) -> str | None:
+    """The one algorithm a published key verifies, or ``None`` for a key Atlas never
+    signs with (or whose own ``alg`` contradicts its type)."""
+    kty = jwk.get("kty")
+    if kty == "RSA":
+        alg = "RS256"
+    elif kty == "EC" and jwk.get("crv") == "P-256":
+        alg = "ES256"
+    else:
+        return None
+    declared = jwk.get("alg")
+    if declared is not None and declared != alg:
+        return None
+    return alg
+
+
+def jwk_public_key(jwk: Mapping[str, Any]) -> tuple[Any, str]:
+    """The public key object for a JWKS entry and the single algorithm it verifies."""
+    import jwt  # PyJWT
+    from jwt.algorithms import ECAlgorithm, RSAAlgorithm
+
+    alg = _jwk_alg(jwk)
+    if alg is None:
+        raise jwt.InvalidKeyError("unsupported key")
+    algo = RSAAlgorithm if alg == "RS256" else ECAlgorithm
+    return algo.from_jwk(json.dumps(dict(jwk))), alg
 
 
 # --------------------------------------------------------------------------- #

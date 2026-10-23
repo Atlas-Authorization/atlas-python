@@ -32,9 +32,10 @@ from typing import Optional
 from fastapi import HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from .._access_token import AccessTokenResult, AccessTokenVerifier
 from .._verify import AtlasBackend, SessionClaims, VerificationError
 
-__all__ = ["AtlasAuth", "require_auth"]
+__all__ = ["AtlasAuth", "AtlasAccessToken", "require_auth"]
 
 
 class AtlasAuth:
@@ -78,9 +79,7 @@ class AtlasAuth:
 
     async def __call__(self, request: Request) -> Optional[SessionClaims]:
         credentials: Optional[HTTPAuthorizationCredentials] = await self._bearer(request)
-        authorization = (
-            f"{credentials.scheme} {credentials.credentials}" if credentials else None
-        )
+        authorization = f"{credentials.scheme} {credentials.credentials}" if credentials else None
         session_cookie = request.cookies.get("__session")
         try:
             return self._backend.authenticate(
@@ -88,9 +87,7 @@ class AtlasAuth:
             )
         except VerificationError:
             if self._auto_error:
-                raise HTTPException(
-                    status_code=401, detail="Authentication required."
-                ) from None
+                raise HTTPException(status_code=401, detail="Authentication required.") from None
             return None
 
 
@@ -112,3 +109,32 @@ async def require_auth(request: Request) -> SessionClaims:
     result = await _default_auth(request)
     assert result is not None  # auto_error=True guarantees a non-None result
     return result
+
+
+class AtlasAccessToken:
+    """A FastAPI dependency that protects an API route with an Atlas-issued OAuth access
+    token. A refusal raises ``HTTPException`` with the verifier's status and the RFC 6750
+    / RFC 9728 ``WWW-Authenticate`` challenge::
+
+        verifier = AccessTokenVerifier(issuer=..., audience="https://api.example.com")
+
+        @app.get("/docs")
+        def docs(token: AccessTokenResult = Depends(AtlasAccessToken(verifier, "docs:read"))):
+            return {"sub": token.subject}
+    """
+
+    def __init__(self, verifier: AccessTokenVerifier, *required_scopes: str) -> None:
+        self._verifier = verifier
+        self._scopes = required_scopes
+
+    async def __call__(self, request: Request) -> AccessTokenResult:
+        result = self._verifier.verify(
+            request.headers.get("authorization"), required_scopes=self._scopes
+        )
+        if not result.ok:
+            raise HTTPException(
+                status_code=result.status,
+                detail=result.error or "unauthorized",
+                headers={"WWW-Authenticate": result.www_authenticate},
+            )
+        return result

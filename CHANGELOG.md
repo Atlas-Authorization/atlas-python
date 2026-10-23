@@ -2,6 +2,24 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.13.0 — 2026-10-23
+
+### Added
+
+- **App roles.** `client.app_roles`: `list`, `create`, `get`, `update`, `delete`, `list_users`, and per user `get_for_user`, `set_for_user` (replace, or add/remove), `remove_from_user`. `SessionClaims.has_app_role` / `has_app_permission` read the `app_roles` / `app_permissions` claims (no active organization needed).
+- **Organization teams and custom roles.** `organizations.teams` (list, create, get, update, delete, members list/add/remove) and `organizations.roles` (the roles an org can assign; create/update/delete its own, with `reassign_to`). `organizations.get_by_slug`, `organizations.check_slug`, `organizations.invitations.resend`.
+- **User search.** `users.list(...)` takes `query`, `email_address`, `username`, `phone_number`, `external_id`, `banned`, `email_verified`, `organization_id`, `created_after` / `created_before`, `order_by`, `offset` and `include_total_count`.
+- **Timed bans.** `users.ban(..., expires_in_seconds=, expires_at=)`; users carry `ban_expires_at`.
+- **API key controls.** Create bodies take `prefix`, `expires_in_seconds`, `enabled`, `rate_limit`, `remaining`; updates take `enabled`, `rate_limit` / `remaining` (`None` removes them). `api_keys.verify` takes `required_scopes`; a refusal of a live key carries `code` (`insufficient_scope`, `rate_limited`, `usage_exhausted`), `missing_scopes`, `retry_after_ms`.
+- **Billing providers (bring your own key).** `billing.providers` (`list`, `get`, `set`, `test`, `delete(force=)`); `billing.subscriptions.change`, `cancel(immediately=)`, `restore`. Plans take `provider`, `provider_price_id`, `annual_price_id`, `annual_amount`; subscriptions report the provider, account, interval, scheduled change, trial and cancellation fields.
+- **OAuth server administration.** `instance.security.list_signing_keys` / `rotate_signing_key` (`alg` RS256 or ES256); `client.oauth_initial_access_tokens` (list, create, revoke). OAuth client bodies take `disabled`, `require_pkce`, `subject_type`, `sector_identifier_uri`, `secret_expires_in_seconds`; resource servers take `signing_alg` and `publish_resource_metadata`.
+- **Access-token verification for your API.** `AccessTokenVerifier` checks an Atlas-issued OAuth access token locally (issuer, expiry, `token_use`, audience, scopes) and returns the RFC 6750 / RFC 9728 `WWW-Authenticate` challenge on refusal; `build_www_authenticate`, `protected_resource_metadata`, `protected_resource_metadata_path`; the FastAPI `AtlasAccessToken` dependency and the Flask `access_token_required` decorator. DPoP-bound tokens are refused.
+- SCIM tokens: `scopes`, `role_mappings`, `scim_tokens.update`. User imports: row `external_id`, `created_at`, `password_salt`, `phone_number(s)`, `organization_memberships`; job `create_organizations`, `password_hash_config`. `instance.hooks.list_before_user_create_calls`, `instance.referrals.get_call`.
+
+### Changed
+
+- Session and logout-token verification accept **ES256** as well as RS256 (`SIGNING_ALGS`), and nothing else; the token's `kid` selects one key whose type fixes the algorithm.
+
 ## 0.12.0
 
 ### Added

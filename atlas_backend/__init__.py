@@ -14,6 +14,13 @@ API, the Python peer of the TypeScript ``@atlas/backend`` SDK.
 from __future__ import annotations
 
 from . import models
+from ._access_token import (
+    AccessTokenResult,
+    AccessTokenVerifier,
+    build_www_authenticate,
+    protected_resource_metadata,
+    protected_resource_metadata_path,
+)
 from ._client import (
     AsyncAtlasClient,
     AsyncAtlasPlatformClient,
@@ -37,21 +44,6 @@ from ._logout import (
     logout_token_from_form,
 )
 from ._pagination import acollect, aiterate, collect, paginate
-from ._transport import DEFAULT_BASE_URL, UnknownFieldsHook
-from ._types import CursorPage, DeletedObject, ListPage, Metadata
-from ._verify import (
-    CLOCK_SKEW_SECONDS,
-    DEFAULT_TTL_MS,
-    REFETCH_INTERVAL_MS,
-    ApiKeyVerification,
-    ApiKeyVerifier,
-    AtlasBackend,
-    AtlasUser,
-    JwksCache,
-    SessionClaims,
-    VerificationError,
-)
-
 from ._referrals import (
     REFERRAL_CONNECTION_TEST_REF,
     REFERRAL_OP_ENDPOINTS,
@@ -80,9 +72,24 @@ from ._referrals import (
     sign_referral_updated_event,
     verify_referral_request,
 )
+from ._transport import DEFAULT_BASE_URL, UnknownFieldsHook
+from ._types import CursorPage, DeletedObject, ListPage, Metadata
+from ._verify import (
+    CLOCK_SKEW_SECONDS,
+    DEFAULT_TTL_MS,
+    REFETCH_INTERVAL_MS,
+    SIGNING_ALGS,
+    ApiKeyVerification,
+    ApiKeyVerifier,
+    AtlasBackend,
+    AtlasUser,
+    JwksCache,
+    SessionClaims,
+    VerificationError,
+)
 from ._webhooks import WebhookVerification, verify_webhook
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 
 __all__ = [
     "AtlasClient",
@@ -116,6 +123,12 @@ __all__ = [
     "read_handshake_params",
     "AtlasBackend",
     "SessionClaims",
+    "AccessTokenVerifier",
+    "AccessTokenResult",
+    "build_www_authenticate",
+    "protected_resource_metadata",
+    "protected_resource_metadata_path",
+    "SIGNING_ALGS",
     "AtlasUser",
     "VerificationError",
     "JwksCache",

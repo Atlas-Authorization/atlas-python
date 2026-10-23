@@ -47,6 +47,7 @@ from ._verify import (
     JwksCache,
     VerificationError,
     _b64url_decode,
+    jwk_public_key,
 )
 
 #: The event a logout_token must carry (OIDC Back-Channel Logout 1.0 §2.4).
@@ -140,7 +141,6 @@ class LogoutTokenVerifier:
     def verify(self, logout_token: str) -> LogoutTokenClaims:
         """Verify a ``logout_token``; raises :class:`VerificationError` on failure."""
         import jwt  # PyJWT
-        from jwt.algorithms import RSAAlgorithm
 
         if not logout_token or logout_token.count(".") != 2:
             raise VerificationError(VerificationError.MALFORMED)
@@ -169,11 +169,11 @@ class LogoutTokenVerifier:
             raise VerificationError(VerificationError.INVALID)
 
         try:
-            key: Any = RSAAlgorithm.from_jwk(json.dumps(jwk))
+            key, alg = jwk_public_key(jwk)
             claims = jwt.decode(
                 logout_token,
                 key=key,
-                algorithms=["RS256"],
+                algorithms=[alg],
                 issuer=self._issuer,
                 audience=self._client_id,
                 leeway=self._leeway,

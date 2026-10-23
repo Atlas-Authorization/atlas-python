@@ -76,6 +76,10 @@ class User(_UserRequired, total=False):
     referral_code: str | None
     #: The user's own referral link, when they are a referrer.
     referral_link: str | None
+    #: When a timed ban lifts (epoch ms); ``None`` for a permanent ban or no ban.
+    ban_expires_at: int | None
+    ban_reason: str | None
+    ban_note: str | None
 
 
 class UserReferralFlag(TypedDict):
@@ -614,12 +618,27 @@ class OAuthClient(_OAuthClientRequired, total=False):
     #: session and redirects straight back (with ``state``), skipping the
     #: confirmation page. ``False`` by default.
     skip_logout_confirmation: bool
+    #: Every OAuth flow for the client is refused while ``True``.
+    disabled: bool
+    #: PKCE is required for this confidential client too.
+    require_pkce: bool
+    #: ``public`` (``sub`` = the user id) or ``pairwise`` (a per-sector ``sub``).
+    subject_type: Literal["public", "pairwise"]
+    #: The pairwise sector document, if registered.
+    sector_identifier_uri: str | None
+    #: When the current secret stops authenticating (epoch ms); ``None`` = never.
+    client_secret_expires_at: int | None
+    #: ``cimd`` when the client came from its Client ID Metadata Document.
+    discovery_source: str | None
 
 
 class RotateOAuthClientSecretBody(TypedDict, total=False):
     #: How long the previous secret keeps working, in seconds. Default 86400 (24 hours);
     #: 0 revokes it now; at most 604800 (7 days).
     overlap_seconds: int
+    #: Lifetime of the new secret (reported as ``client_secret_expires_at``); omit for
+    #: one that does not expire.
+    secret_expires_in_seconds: int
 
 
 class _OAuthClientSecretRotationRequired(_OAuthClientRequired):
@@ -673,6 +692,13 @@ class CreateOAuthClientBody(_CreateOAuthClientRequired, total=False):
     #: registered ``post_logout_redirect_uri`` ends the session and redirects straight
     #: back with ``state``, without the confirmation page.
     skip_logout_confirmation: bool
+    #: How long the issued secret authenticates (reported as ``client_secret_expires_at``).
+    secret_expires_in_seconds: int
+    #: ``pairwise`` gives the client a per-sector ``sub`` (OIDC Core §8).
+    subject_type: Literal["public", "pairwise"]
+    #: An https URL listing every redirect_uri; required for a pairwise client whose
+    #: redirect_uris span more than one host. ``None`` clears it.
+    sector_identifier_uri: str | None
 
 
 class UpdateOAuthClientBody(TypedDict, total=False):
@@ -697,6 +723,17 @@ class UpdateOAuthClientBody(TypedDict, total=False):
     #: registered ``post_logout_redirect_uri`` ends the session and redirects straight
     #: back with ``state``, without the confirmation page.
     skip_logout_confirmation: bool
+    #: How long the issued secret authenticates (reported as ``client_secret_expires_at``).
+    secret_expires_in_seconds: int
+    #: ``pairwise`` gives the client a per-sector ``sub`` (OIDC Core §8).
+    subject_type: Literal["public", "pairwise"]
+    #: An https URL listing every redirect_uri; required for a pairwise client whose
+    #: redirect_uris span more than one host. ``None`` clears it.
+    sector_identifier_uri: str | None
+    #: Refuse (``True``) or re-allow (``False``) every OAuth flow for the client.
+    disabled: bool
+    #: Require PKCE for this confidential client too.
+    require_pkce: bool
 
 
 class _CreateGrantRequired(TypedDict):
@@ -712,7 +749,7 @@ class CreateGrantBody(_CreateGrantRequired, total=False):
 # --------------------------------------------------------------------------- #
 
 
-class ResourceServer(TypedDict):
+class _ResourceServerRequired(TypedDict):
     object: Literal["resource_server"]
     id: str
     identifier: str
@@ -724,6 +761,11 @@ class ResourceServer(TypedDict):
     updated_at: int
 
 
+class ResourceServer(_ResourceServerRequired, total=False):
+    #: Atlas serves the API's RFC 9728 protected-resource metadata document.
+    publish_resource_metadata: bool
+
+
 class _CreateResourceServerRequired(TypedDict):
     identifier: str
     name: str
@@ -732,6 +774,10 @@ class _CreateResourceServerRequired(TypedDict):
 class CreateResourceServerBody(_CreateResourceServerRequired, total=False):
     scopes: list[Any]
     token_ttl_seconds: int
+    #: ``RS256`` or ``ES256``: the algorithm of this API's access tokens.
+    signing_alg: Literal["RS256", "ES256"]
+    #: Serve the RFC 9728 protected-resource metadata document for this API.
+    publish_resource_metadata: bool
 
 
 class UpdateResourceServerBody(TypedDict, total=False):
@@ -739,6 +785,8 @@ class UpdateResourceServerBody(TypedDict, total=False):
     scopes: list[Any]
     token_ttl_seconds: int
     identifier: str
+    signing_alg: Literal["RS256", "ES256"]
+    publish_resource_metadata: bool
 
 
 # --------------------------------------------------------------------------- #
@@ -819,7 +867,7 @@ UpdateSsoConnectionBody = CreateSsoConnectionBody
 # --------------------------------------------------------------------------- #
 
 
-class ScimToken(TypedDict):
+class _ScimTokenRequired(TypedDict):
     object: Literal["scim_token"]
     id: str
     name: str | None
@@ -832,6 +880,19 @@ class ScimToken(TypedDict):
     created_at: int
 
 
+class ScimRoleMapping(TypedDict):
+    #: A SCIM ``roles`` value.
+    value: str
+    #: The organization role key it maps to.
+    role: str
+
+
+class ScimToken(_ScimTokenRequired, total=False):
+    #: ``None`` = read and write; ``["read"]`` = read-only.
+    scopes: list[str] | None
+    role_mappings: list[ScimRoleMapping]
+
+
 class _CreateScimTokenRequired(TypedDict):
     organization_id: str
 
@@ -839,6 +900,15 @@ class _CreateScimTokenRequired(TypedDict):
 class CreateScimTokenBody(_CreateScimTokenRequired, total=False):
     name: str
     connection_id: str
+    #: ``["read"]`` makes the token read-only.
+    scopes: list[str]
+    role_mappings: list[ScimRoleMapping]
+
+
+class UpdateScimTokenBody(TypedDict, total=False):
+    name: str | None
+    scopes: list[str] | None
+    role_mappings: list[ScimRoleMapping] | None
 
 
 # --------------------------------------------------------------------------- #
@@ -1620,6 +1690,15 @@ CreateApiKeyBody = TypedDict(
         "public_key": "str | None",
         "limits": "list[ApiKeyLimit] | None",
         "import": "CreateApiKeyBodyImport",
+        # Alternative to expires_at; without either the instance default lifetime applies.
+        "expires_in_seconds": "int",
+        # A custom secret prefix, e.g. "acme" gives acme_<id>_<secret>.
+        "prefix": "str",
+        # False mints the key disabled.
+        "enabled": "bool",
+        "rate_limit": "ApiKeyRateLimit",
+        # A use budget each successful verify spends; None = unlimited.
+        "remaining": "int | None",
     },
     total=False,
 )
@@ -1700,11 +1779,28 @@ class ApiKeyToken(_ApiKeyTokenRequired, total=False):
 
 class VerifyApiKeyBody(TypedDict, total=False):
     secret: str
+    #: Scopes the key must carry; a key missing one answers ``valid: False`` with
+    #: ``code: "insufficient_scope"`` and ``missing_scopes``.
+    required_scopes: list[str]
 
 
-class ApiKeyVerificationVariant1(TypedDict):
+class _ApiKeyVerificationVariant1Required(TypedDict):
     object: Literal["api_key_verification"]
     valid: Literal[False]
+
+
+class ApiKeyVerificationVariant1(_ApiKeyVerificationVariant1Required, total=False):
+    """A refusal. Without ``code`` the key is unknown, revoked, expired, disabled or its
+    subject deleted (never says which). With ``code`` a LIVE key was refused by its own
+    policy: ``insufficient_scope`` (``missing_scopes``), ``rate_limited``
+    (``retry_after_ms``) or ``usage_exhausted``.
+    """
+
+    code: Literal["insufficient_scope", "rate_limited", "usage_exhausted"]
+    id: str
+    missing_scopes: list[str]
+    retry_after_ms: int
+    remaining: int
 
 
 class _ApiKeyVerificationVariant2Required(TypedDict):
@@ -1726,6 +1822,8 @@ class ApiKeyVerificationVariant2(_ApiKeyVerificationVariant2Required, total=Fals
     usage: list[ApiKeyLimitState]
     last_used_at: int | None
     expires_at: int | None
+    #: Uses left after this verify (``None`` = unlimited).
+    remaining: int | None
 
 
 ApiKeyVerification = Union[ApiKeyVerificationVariant1, ApiKeyVerificationVariant2]
@@ -1761,6 +1859,18 @@ class ApiKey(_ApiKeyRequired, total=False):
     limits: list[ApiKeyLimit] | None
     #: Each cap with its current-window usage (empty when the key has no caps).
     usage: list[ApiKeyLimitState]
+    #: ``False`` for a disabled key (it verifies as invalid until re-enabled).
+    enabled: bool
+    #: The per-key verify throttle, or ``None``.
+    rate_limit: ApiKeyRateLimit | None
+    #: Uses left (each successful verify spends one); ``None`` = unlimited.
+    remaining: int | None
+
+
+class ApiKeyRateLimit(TypedDict):
+    #: At most ``max`` verifies per ``window_seconds``.
+    max: int
+    window_seconds: int
 
 
 class UpdateApiKeyBody(TypedDict, total=False):
@@ -1772,6 +1882,12 @@ class UpdateApiKeyBody(TypedDict, total=False):
     max_token_lifetime_seconds: float | None
     #: Replace the spend caps; ``None`` clears them (counters are kept).
     limits: list[ApiKeyLimit] | None
+    #: ``False`` disables the key without revoking it; ``True`` re-enables it.
+    enabled: bool
+    #: Set the verify throttle; ``None`` removes it.
+    rate_limit: ApiKeyRateLimit | None
+    #: Set the use budget; ``None`` makes it unlimited.
+    remaining: int | None
 
 
 class ApiKeyRevokeResult(TypedDict):
@@ -1862,6 +1978,13 @@ class CreateBillingPlanBody(_CreateBillingPlanBodyRequired, total=False):
     active: bool
     pricing_model: Literal["flat", "per_seat", "metered"]
     trial_days: int | None
+    #: The billing provider the plan sells through (default ``stripe``).
+    provider: Literal["stripe", "polar", "dodo", "creem"]
+    #: The plan's price at the provider (the neutral alias of ``stripe_price_id``).
+    provider_price_id: str
+    #: The yearly price at the provider, to offer the plan annually too.
+    annual_price_id: str | None
+    annual_amount: str | None
 
 
 class BillingPlanCreateResult(TypedDict, total=False):
@@ -1905,6 +2028,10 @@ class BillingPlan(_BillingPlanRequired, total=False):
     trial_days: int | None
     stripe_meter_id: str | None
     usage_unit: str | None
+    provider: Literal["stripe", "polar", "dodo", "creem"]
+    provider_price_id: str | None
+    annual_price_id: str | None
+    annual_amount: str | None
 
 
 class UpdateBillingPlanBody(TypedDict, total=False):
@@ -1922,6 +2049,13 @@ class UpdateBillingPlanBody(TypedDict, total=False):
     trial_days: float | None
     stripe_meter_id: str | None
     usage_unit: str | None
+    #: The billing provider the plan sells through (default ``stripe``).
+    provider: Literal["stripe", "polar", "dodo", "creem"]
+    #: The plan's price at the provider (the neutral alias of ``stripe_price_id``).
+    provider_price_id: str
+    #: The yearly price at the provider, to offer the plan annually too.
+    annual_price_id: str | None
+    annual_amount: str | None
 
 
 class BillingSeats(TypedDict):
@@ -1939,7 +2073,7 @@ class ImportSubscriptionBody(TypedDict, total=False):
     plan_id: Any
 
 
-class Subscription(TypedDict):
+class _SubscriptionRequired(TypedDict):
     object: Literal["billing_subscription"]
     id: str
     subject_type: Literal["user", "org"]
@@ -1953,6 +2087,68 @@ class Subscription(TypedDict):
     created_at: int
     #: Last updated (epoch ms).
     updated_at: int
+
+
+class Subscription(_SubscriptionRequired, total=False):
+    provider: Literal["stripe", "polar", "dodo", "creem"]
+    provider_subscription_id: str | None
+    provider_customer_id: str | None
+    #: ``instance`` (your own provider account) or ``platform`` (a legacy subscription on
+    #: the shared account: mirrored, not manageable).
+    account: Literal["instance", "platform"]
+    interval: Literal["month", "year"] | None
+    quantity: int | None
+    #: ``True`` while a cancellation is scheduled for the period end.
+    cancel_at_period_end: bool
+    scheduled_plan_id: str | None
+    scheduled_interval: str | None
+    scheduled_change_at: int | None
+    trial_end: int | None
+    canceled_at: int | None
+    #: On a change: ``True`` when the switch waits for the period end.
+    scheduled: bool
+
+
+class ChangeSubscriptionBody(TypedDict, total=False):
+    plan_id: str
+    interval: Literal["month", "year"]
+    #: Switch at the end of the current period instead of now (prorated).
+    schedule_at_period_end: bool
+
+
+class BillingProvider(TypedDict, total=False):
+    """One billing provider's settings. Secrets are never returned: ``secrets_set``
+    reports which are stored; ``webhook_url`` is the endpoint to register with the
+    provider."""
+
+    object: Literal["billing_provider"]
+    provider: Literal["stripe", "polar", "dodo", "creem"]
+    environment: Literal["live", "test"]
+    status: str
+    config: dict[str, str]
+    secrets_set: dict[str, bool]
+    webhook_url: str
+    capabilities: dict[str, Any] | None
+    last_verified_at: int | None
+    last_webhook_at: int | None
+    updated_at: int
+
+
+class SetBillingProviderBody(TypedDict, total=False):
+    """Merged onto what is stored. ``config`` keys: Stripe ``secret_key``,
+    ``webhook_secret``, ``publishable_key``; Polar ``access_token``, ``webhook_secret``;
+    Dodo and Creem ``api_key``, ``webhook_secret``."""
+
+    environment: Literal["live", "test"]
+    config: dict[str, str]
+
+
+class BillingProviderTest(TypedDict, total=False):
+    object: Literal["billing_provider_test"]
+    provider: str
+    ok: bool
+    error: str | None
+    account: str | None
 
 
 class RecordUsageBody(TypedDict, total=False):
@@ -6020,11 +6216,69 @@ class Usage(_UsageRequired, total=False):
     monthly_active_users: UsageMonthlyActiveUsers
 
 
+class ImportPhoneNumber(TypedDict, total=False):
+    phone_number: str
+    verified: bool
+
+
+class ImportOrganizationMembership(TypedDict, total=False):
+    """The organization by Atlas id, by its id in the old system or by slug; with the
+    job option ``create_organizations`` a missing one is created (``organization_name``)."""
+
+    organization_id: str
+    organization_external_id: str
+    organization_slug: str
+    organization_name: str
+    #: A role key (``org:admin``, ``admin``, ``member`` or a custom key).
+    role: str
+
+
+class ImportUserRow(TypedDict, total=False):
+    """One row of ``user_imports.create``. Rows are plain dicts; these are the keys."""
+
+    email_address: str
+    password: str
+    password_hash: str
+    password_hasher: str
+    #: The per-user salt for a hash whose parameters are given job-wide.
+    password_salt: str
+    email_verified: bool
+    first_name: str
+    last_name: str
+    username: str
+    public_metadata: dict[str, Any]
+    private_metadata: dict[str, Any]
+    unsafe_metadata: dict[str, Any]
+    external_accounts: list[dict[str, Any]]
+    #: The user's id in the system being migrated from.
+    external_id: str
+    #: When the account was originally created: ISO 8601, or epoch seconds/ms.
+    created_at: str | int
+    phone_number: str
+    phone_numbers: list[ImportPhoneNumber]
+    organization_memberships: list[ImportOrganizationMembership]
+
+
+class FirebaseScryptConfig(TypedDict):
+    signer_key: str
+    salt_separator: str
+    rounds: int
+    mem_cost: int
+
+
+class PasswordHashConfig(TypedDict, total=False):
+    firebase: FirebaseScryptConfig
+
+
 class CreateUserImportBody(TypedDict, total=False):
-    users: list[dict[str, Any]]
+    users: list[ImportUserRow] | list[dict[str, Any]]
     upsert: bool
     #: Whether the import may notify the imported users. ``False`` (the default) sends nothing.
     notify: bool
+    #: Create an organization a membership names that does not exist yet.
+    create_organizations: bool
+    #: Job-level hash parameters (Firebase scrypt).
+    password_hash_config: PasswordHashConfig
 
 
 class _UsersByEmailsBodyRequired(TypedDict):
@@ -6858,3 +7112,198 @@ class UpdateAtlasIdPublisherBody(TypedDict):
 class AtlasIdPublisherDeleteResult(TypedDict):
     object: Literal["atlas_id_publisher"]
     deleted: Literal[True]
+
+
+# --------------------------------------------------------------------------- #
+# App roles                                                                    #
+# --------------------------------------------------------------------------- #
+
+
+class _AppRoleRequired(TypedDict):
+    object: Literal["app_role"]
+    id: str
+    key: str
+    name: str
+    description: str | None
+    permissions: list[str]
+    created_at: int
+    updated_at: int
+
+
+class AppRole(_AppRoleRequired, total=False):
+    #: How many users hold the role (list and create only).
+    users_count: int
+
+
+class _CreateAppRoleRequired(TypedDict):
+    #: 2-64 lowercase letters, digits, ``_`` or ``-``, starting with a letter.
+    key: str
+    name: str
+
+
+class CreateAppRoleBody(_CreateAppRoleRequired, total=False):
+    description: str | None
+    #: ``resource:action`` keys (the ``org:`` namespace is reserved).
+    permissions: list[str]
+
+
+class UpdateAppRoleBody(TypedDict, total=False):
+    name: str
+    description: str | None
+    permissions: list[str]
+
+
+class UserAppRoles(TypedDict):
+    object: Literal["user_app_roles"]
+    user_id: str
+    roles: list[AppRole]
+    #: The ``app_roles`` session claim.
+    role_keys: list[str]
+    #: The union of the roles' permissions: the ``app_permissions`` session claim.
+    permissions: list[str]
+
+
+class SetUserAppRolesBody(TypedDict, total=False):
+    """``roles`` replaces the whole set; ``add`` / ``remove`` change it. Send one form."""
+
+    roles: list[str]
+    add: list[str]
+    remove: list[str]
+
+
+# --------------------------------------------------------------------------- #
+# Organization teams, org-scoped roles, slugs                                  #
+# --------------------------------------------------------------------------- #
+
+
+class Team(TypedDict):
+    object: Literal["team"]
+    id: str
+    organization_id: str
+    name: str
+    description: str | None
+    members_count: int
+    created_at: int
+    updated_at: int
+
+
+class TeamBody(TypedDict, total=False):
+    name: str
+    description: str | None
+
+
+class TeamMemberUser(TypedDict):
+    id: str
+    first_name: str | None
+    last_name: str | None
+    image_url: str | None
+
+
+class TeamMember(TypedDict, total=False):
+    object: Literal["team_membership"]
+    team_id: str
+    user_id: str
+    user: TeamMemberUser
+    deleted: bool
+
+
+class OrgRole(TypedDict):
+    object: Literal["role"]
+    id: str
+    key: str
+    name: str
+    description: str | None
+    is_system: bool
+    #: Set for the organization's own custom roles; ``None`` for instance roles.
+    organization_id: str | None
+    permissions: list[str]
+    member_count: int
+    created_at: int
+    updated_at: int
+
+
+class _CreateOrgRoleRequired(TypedDict):
+    key: str
+    name: str
+
+
+class CreateOrgRoleBody(_CreateOrgRoleRequired, total=False):
+    description: str | None
+    permissions: list[str]
+
+
+class UpdateOrgRoleBody(TypedDict, total=False):
+    name: str
+    description: str | None
+    permissions: list[str]
+
+
+class SlugCheck(TypedDict):
+    object: Literal["organization_slug_check"]
+    slug: str
+    valid: bool
+    available: bool
+
+
+# --------------------------------------------------------------------------- #
+# OAuth server: signing keys and initial access tokens                         #
+# --------------------------------------------------------------------------- #
+
+
+class SigningKey(TypedDict, total=False):
+    object: Literal["signing_key"]
+    kid: str
+    alg: Literal["RS256", "ES256"]
+    #: ``current`` signs new tokens; ``previous`` stays published until ``retires_at``.
+    status: Literal["current", "previous"]
+    #: ``main``, or ``secondary`` (the key of the other algorithm, for APIs set to it).
+    role: Literal["main", "secondary"]
+    #: Epoch ms.
+    retires_at: int | None
+
+
+class SigningKeyList(TypedDict):
+    object: Literal["list"]
+    data: list[SigningKey]
+
+
+class RotateSigningKeyBody(TypedDict, total=False):
+    alg: Literal["RS256", "ES256"]
+    #: Default 86400, at most 2592000.
+    grace_period_seconds: int
+    #: Publish ONLY the new key: every token signed by the old one stops verifying.
+    emergency: bool
+
+
+class SigningKeyRotation(TypedDict):
+    object: Literal["signing_key_rotation"]
+    kid: str
+    alg: Literal["RS256", "ES256"]
+    previous_kid: str | None
+    previous_retires_at: int | None
+    emergency: bool
+
+
+class _InitialAccessTokenRequired(TypedDict):
+    object: Literal["oauth_initial_access_token"]
+    id: str
+    token_prefix: str
+    description: str | None
+    status: Literal["active", "expired", "used_up", "revoked"]
+    max_uses: int | None
+    use_count: int
+    expires_at: int | None
+    revoked_at: int | None
+    last_used_at: int | None
+    created_at: int
+
+
+class InitialAccessToken(_InitialAccessTokenRequired, total=False):
+    #: Returned once, on create.
+    token: str
+
+
+class CreateInitialAccessTokenBody(TypedDict, total=False):
+    description: str
+    expires_in_seconds: int
+    max_uses: int
