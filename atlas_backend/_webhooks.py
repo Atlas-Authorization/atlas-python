@@ -65,17 +65,18 @@ def _header(headers: Mapping[str, Any], name: str) -> Optional[str]:
     return None
 
 
-def _signatures(header: str) -> list[str]:
-    """The ``v1`` signatures in an ``atlas-signature`` header.
+def _signatures(header: str, wanted: str = "v1") -> list[str]:
+    """The ``wanted`` (``v1`` or ``v2``) signatures in an ``atlas-signature`` header.
 
     The header carries one ``v1,<base64>`` entry, or several separated by spaces (while an
-    endpoint secret rotates, Atlas signs with the old and the new secret). Entries of another
-    version are skipped.
+    endpoint secret rotates, Atlas signs with the old and the new secret; an endpoint with
+    ``signature_versions`` including ``v2`` adds ``v2,<base64>`` entries that also cover the
+    URL). Entries of another version are skipped.
     """
     out = []
     for entry in header.split():
         version, _, value = entry.partition(",")
-        if version == "v1" and value:
+        if version == wanted and value:
             out.append(value)
     return out
 
@@ -87,8 +88,16 @@ def verify_webhook(
     *,
     now_ms: Optional[int] = None,
     tolerance_ms: int = REPLAY_TOLERANCE_MS,
+    url: Optional[str] = None,
+    require_v2: bool = False,
 ) -> WebhookVerification:
-    """Verify and parse an Atlas webhook delivery."""
+    """Verify and parse an Atlas webhook delivery.
+
+    ``url`` is the URL Atlas posted to (your endpoint's registered URL). With it, ``v2``
+    signatures (HMAC over ``<id>.<timestamp>.<url>.<body>``) are checked too, so a delivery
+    replayed to another URL fails. ``require_v2=True`` accepts only ``v2`` (an endpoint with
+    ``signature_versions: ["v2"]``); it needs ``url``. Unknown versions are ignored.
+    """
     raw = body.encode("utf-8") if isinstance(body, str) else bytes(body)
     delivery_id = _header(headers, HEADER_ID)
     ts_raw = _header(headers, HEADER_TIMESTAMP)
@@ -96,8 +105,9 @@ def verify_webhook(
     if not delivery_id or not ts_raw or not signature:
         return WebhookVerification(False, "missing_headers")
 
-    provided = _signatures(signature)
-    if not provided:
+    provided = [] if require_v2 else _signatures(signature)
+    provided_v2 = _signatures(signature, "v2") if url else []
+    if not provided and not provided_v2:
         return WebhookVerification(False, "malformed_signature")
 
     try:
@@ -115,6 +125,14 @@ def verify_webhook(
     for candidate in provided:
         if hmac.compare_digest(expected, candidate.encode("utf-8")):
             matched = True
+    if provided_v2:
+        signed_v2 = f"{delivery_id}.{timestamp}.{url}.".encode("utf-8") + raw
+        expected_v2 = base64.b64encode(
+            hmac.new(secret.encode("utf-8"), signed_v2, hashlib.sha256).digest()
+        )
+        for candidate in provided_v2:
+            if hmac.compare_digest(expected_v2, candidate.encode("utf-8")):
+                matched = True
     if not matched:
         return WebhookVerification(False, "signature_mismatch")
 

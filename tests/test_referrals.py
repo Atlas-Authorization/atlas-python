@@ -468,7 +468,7 @@ HOOK = {
 def test_v2_settings_fields_and_ping_test() -> None:
     settings = {
         **SETTINGS,
-        "provider": "referally",
+        "provider": "referalli",
         "tracking_token": "tt_public_1",
         "code_lookup_url": "https://referrals.example.com/lookup/{code}",
         "signup_code_field": True,
@@ -507,7 +507,7 @@ def test_v2_settings_fields_and_ping_test() -> None:
 
     referrals.update(
         {
-            "provider": "referally",
+            "provider": "referalli",
             "tracking_token": "tt_public_1",
             "code_lookup_url": None,
             "signup_code_field": True,
@@ -517,7 +517,7 @@ def test_v2_settings_fields_and_ping_test() -> None:
         }
     )
     assert body_of(patch) == {
-        "provider": "referally",
+        "provider": "referalli",
         "tracking_token": "tt_public_1",
         "code_lookup_url": None,
         "signup_code_field": True,

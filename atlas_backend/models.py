@@ -531,10 +531,29 @@ class WebhookEndpoint(_WebhookEndpointRequired, total=False):
     #: Start of the current failure streak (epoch ms), or ``None`` when the last delivery
     #: succeeded.
     failing_since: int | None
+    #: When the most recent failure streak began (epoch ms). Kept after the endpoint
+    #: recovers or is re-enabled, so ``since="failing_since"`` still resolves on replay.
+    last_failing_since: int | None
     #: While a secret rotation overlap is open: when the previous secret stops signing
     #: deliveries (epoch ms). Until then every delivery carries two signatures. ``None``
     #: otherwise.
     previous_secret_expires_at: int | None
+    #: ``canonical`` (default), ``legacy`` or ``both``: which event spellings are sent.
+    event_naming: Literal["canonical", "legacy", "both"]
+    #: ``["v1"]`` (default) or ``["v1", "v2"]``: ``v2`` signatures also cover the URL.
+    signature_versions: list[str]
+    #: Where deliveries go instead of an HTTPS URL (``type``, ..., ``credentials_set``).
+    destination: dict[str, Any] | None
+    description: str | None
+    #: ``healthy``, ``degraded`` or ``failing``.
+    health: str
+    last_success_at: int | None
+    consecutive_failures: int
+    success_rate_24h: float | None
+    attempts_24h: int
+    alert_contacts: list[str]
+    metadata: dict[str, Any]
+    external_ref: str | None
 
 
 class RotateWebhookSecretBody(TypedDict, total=False):
@@ -585,6 +604,16 @@ class _CreateWebhookEndpointRequired(TypedDict):
 
 class CreateWebhookEndpointBody(_CreateWebhookEndpointRequired, total=False):
     enabled_events: list[str]
+    event_naming: Literal["canonical", "legacy", "both"]
+    signature_versions: list[str]
+    #: A non-HTTPS destination (``url`` is then optional); its secrets go in
+    #: ``destination_credentials`` (write-only).
+    destination: dict[str, Any]
+    destination_credentials: dict[str, Any]
+    description: str
+    alert_contacts: list[str]
+    external_ref: str
+    metadata: dict[str, Any]
 
 
 # --------------------------------------------------------------------------- #
@@ -3727,7 +3756,8 @@ class ReferralProviderCapabilities(_ReferralProviderCapabilitiesRequired, total=
 class ReferralProvider(TypedDict):
     """A referral provider Atlas supports."""
 
-    #: ``webhook`` (the Atlas referral protocol), ``referally`` or another vendor
+    #: ``webhook`` (the Atlas referral protocol), ``referalli`` (the former ``referally`` is
+    #: accepted too) or another vendor
     #: adapter id.
     id: str
     name: str
@@ -3851,7 +3881,14 @@ class ReferralInboundStatus(TypedDict):
 
 #: A referral program whose script or cookie the browser reads.
 ReferralBrowserSource = Literal[
-    "referally", "rewardful", "tolt", "promotekit", "firstpromoter", "partnerstack", "dub"
+    "referalli",
+    "referally",
+    "rewardful",
+    "tolt",
+    "promotekit",
+    "firstpromoter",
+    "partnerstack",
+    "dub",
 ]
 
 #: Which consent manager decides on the tracking cookie's ids: ``auto`` (any common
@@ -3896,7 +3933,7 @@ class ReferralSettings(_ReferralSettingsRequired, total=False):
     link_template: str | None
     timeout_ms: int
     security: ReferralSecuritySettings
-    #: Public tracking token (the ``referally`` provider derives the code lookup from
+    #: Public tracking token (the ``referalli`` provider derives the code lookup from
     #: it). Not a secret.
     tracking_token: str | None
     #: Public, CORS-enabled URL template with ``{code}`` for "X invited you" on hosted
@@ -6865,6 +6902,13 @@ class UpdateWebhookEndpointBody(TypedDict, total=False):
     url: str
     enabled_events: list[str]
     active: bool
+    event_naming: Literal["canonical", "legacy", "both"]
+    signature_versions: list[str]
+    destination: dict[str, Any]
+    destination_credentials: dict[str, Any]
+    description: str
+    alert_contacts: list[str]
+    metadata: dict[str, Any]
 
 
 class WebhookDeliveryAttempt(TypedDict):
@@ -8429,3 +8473,208 @@ class PolicySourceSync(_PolicySourceSyncRequired, total=False):
     warnings: list[str]
     changes: PolicySourceChanges | None
     delivery: PolicySourceDelivery
+
+
+# --------------------------------------------------------------------------- #
+# Credentials: secret keys, platform keys, partner links                       #
+# --------------------------------------------------------------------------- #
+
+
+class SecretKey(TypedDict, total=False):
+    """A secret key (``/v1/secret_keys``). The secret itself (``secret``, or
+    ``sealed_secret`` when ``secret_recipient`` was sent) is returned once, on create and
+    rotate."""
+
+    object: Literal["secret_key"]
+    id: str
+    name: str
+    prefix: str
+    scopes: list[str]
+    #: Who the key belongs to: ``user:<id>``, ``api_key:<id>`` or ``platform_key:<id>``.
+    #: Defaults to the creator.
+    owner: str | None
+    #: When the key stops working (epoch ms). New keys default to one year; ``null`` is
+    #: refused at create.
+    expires_at: int | None
+    #: Browser origins the key may be used from, enforced when a request carries an
+    #: ``Origin`` header (a refusal is ``ORIGIN_NOT_ALLOWED``). Exact origins or a
+    #: one-level wildcard such as ``https://*.example.com``.
+    allowed_origins: list[str]
+    allowed_ips: list[str]
+    metadata: dict[str, Any]
+    external_ref: str | None
+    status: str
+    created_at: int
+    revoked_at: int | None
+    last_used_at: int | None
+    secret: str
+    sealed_secret: str
+    idempotent_replay: bool
+
+
+class CreateSecretKeyBody(TypedDict, total=False):
+    name: str
+    scopes: list[str]
+    #: Defaults to the creator (``user:<id>`` / ``api_key:<id>`` / ``platform_key:<id>``).
+    owner: str
+    #: Epoch ms or an ISO date; at most one year out. ``null`` and ``"never"`` are refused.
+    expires_at: int | str
+    #: Browser origins the key is locked to (``origin_allowlist`` is accepted as an alias).
+    allowed_origins: list[str]
+    allowed_ips: list[str]
+    #: ``"atlas"`` (default, ``atlas_<env>_sk_...``) or ``"legacy"`` (``sk_...``).
+    key_format: Literal["atlas", "legacy"]
+    #: ``x25519:<base64 public key>``: the secret comes back sealed to it.
+    secret_recipient: str
+    external_ref: str
+    metadata: dict[str, Any]
+
+
+class UpdateSecretKeyBody(TypedDict, total=False):
+    name: str
+    owner: str
+    expires_at: int | str
+    allowed_origins: list[str]
+    allowed_ips: list[str]
+    metadata: dict[str, Any]
+
+
+class PlatformKey(TypedDict, total=False):
+    """A platform key (``psk``) as listed by ``platform.keys``."""
+
+    object: str
+    id: str
+    name: str
+    prefix: str
+    scopes: list[str]
+    owner: str | None
+    expires_at: int | None
+    allowed_origins: list[str]
+    status: str
+    created_at: int
+    revoked_at: int | None
+    last_used_at: int | None
+
+
+class PartnerLink(TypedDict, total=False):
+    object: Literal["partner_link"]
+    id: str
+    client_id: str
+    #: Any lowercase id; ``cookiemunch``, ``chatly``, ``forumulate`` and ``referalli`` are presets.
+    partner: str
+    name: str
+    preset: bool
+    resource: str
+    scopes: list[str]
+    client_secret_prefix: str
+    token_endpoint: str
+    #: mTLS: client-certificate SHA-256 fingerprints (base64url) every use must present.
+    cert_fingerprints: list[str]
+    auth_methods: list[str]
+    #: The partner link request this link was approved from; ``None`` when created by hand.
+    request_id: str | None
+    status: Literal["active", "expired", "revoked"]
+    expires_at: int | None
+    revoked_at: int | None
+    last_used_at: int | None
+    last_used_ip: str | None
+    calls_30d: int
+    created_at: int
+    client_secret: str
+    sealed_client_secret: str
+
+
+class PartnerLinkRequest(TypedDict, total=False):
+    """A partner link request: a partner asking this instance (``inbound``), or Atlas asking a
+    partner (``outbound``)."""
+
+    object: Literal["partner_link_request"]
+    id: str
+    direction: Literal["inbound", "outbound"]
+    partner: str
+    name: str
+    preset: bool
+    resource: str | None
+    scopes: list[str]
+    callback_url: str | None
+    callback_host: str | None
+    cert_fingerprints: list[str]
+    status: Literal[
+        "pending", "approved", "denied", "expired", "delivery_failed", "installed", "failed"
+    ]
+    link_id: str | None
+    remote_request_id: str | None
+    decided_by: str | None
+    decided_at: int | None
+    delivery_attempts: int
+    delivered_at: int | None
+    last_error: str | None
+    expires_at: int
+    created_at: int
+
+
+class PartnerLinkRequestApproval(PartnerLinkRequest, total=False):
+    #: Whether Atlas delivered the credentials to the partner's callback.
+    delivered: bool
+    link: PartnerLink | None
+    note: str
+
+
+class ApprovePartnerLinkRequestBody(TypedDict, total=False):
+    #: Narrow the requested scopes (never wider than the request, nor than your own).
+    scopes: list[str]
+    expires_at: int | str
+
+
+class PartnerLinkRequestInput(TypedDict, total=False):
+    """What a partner product sends to ``request_partner_link``."""
+
+    #: Your product id (lowercase, 2-40 characters).
+    partner: str
+    name: str
+    #: The Atlas instance: its ``ins_...`` id or publishable key.
+    resource: str
+    scopes: list[str]
+    #: Where Atlas delivers the credentials (https).
+    callback_url: str
+    state: str
+    #: Ask for a certificate-locked (mTLS) link.
+    cert_fingerprints: list[str]
+
+
+class PartnerLinkRequestCreated(TypedDict, total=False):
+    object: Literal["partner_link_request"]
+    protocol: str
+    id: str
+    status: Literal["pending"]
+    resource: str
+    scopes: list[str]
+    #: Keep it: it verifies the delivery and reads the request. Shown once.
+    request_secret: str
+    expires_at: int
+
+
+class OidcOrganization(TypedDict):
+    """The organization a sign-in was made in (the ID token's ``org_*`` claims)."""
+
+    id: str
+    slug: str
+    role: str
+    permissions: list[str]
+
+
+class OidcOrganizationMembership(TypedDict):
+    """One entry of the ``orgs`` claim (the ``organizations`` scope)."""
+
+    id: str
+    slug: str
+    role: str
+
+
+class OidcSsoContext(TypedDict):
+    """The enterprise SSO context of a sign-in (the ID token's ``sso_*`` claims)."""
+
+    connection_id: str
+    tenant_id: str | None
+    issuer: str | None
+    domain: str | None

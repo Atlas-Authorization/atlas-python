@@ -2,6 +2,23 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.17.0 — 2026-10-24
+
+### Added
+
+- **Credentials.** `whoami`, `secret_keys` (`create` / `list` / `get` / `update` / `rotate` / `revoke`), `keys` (`list`, `revoke_leaked`, `operator`, `exchange_token`, `client_credentials`, `token_exchange`), `partner_links`, `atlas_id_grants`, and on the platform client `whoami`, `keys` and `audit` (+ `streams`). Typed `SecretKey`, `CreateSecretKeyBody`, `UpdateSecretKeyBody`, `PlatformKey`, `PartnerLink`. Keys carry `owner`, `expires_at` (a default one-year expiry; `null` is refused) and `allowed_origins`, a browser-origin lock refused with `ORIGIN_NOT_ALLOWED`.
+- **Partner link requests, no pasted key.** `partner_links.requests` (`list`, `get`, `approve`, `deny`), `partner_links.set_certificates` (mTLS `cert_fingerprints`), `partner_links.outbound` (`list`, `save`, `test`, `remove`, `request`). For a partner product: `request_partner_link`, `get_partner_link_request`, `verify_partner_link_delivery` (the signed `partner_link.credentials` / `partner_link.denied` delivery). Typed `PartnerLinkRequest`, `PartnerLinkRequestApproval`, `PartnerLinkRequestInput`, `PartnerLinkRequestCreated`.
+- **OIDC relying parties.** `oidc_organization_of` (`org_id`, `org_slug`, `org_role`, `org_permissions`), `oidc_organizations_of` (the `orgs` claim of the `organizations` scope), `oidc_sso_of` (`sso_connection_id`, `sso_tenant_id`, `sso_issuer`, `sso_domain`), `oidc_authorize_url_with_organization` (the `organization` authorize parameter), `OIDC_SCOPE_ORGANIZATIONS`. Typed `OidcOrganization`, `OidcOrganizationMembership`, `OidcSsoContext`.
+- **Webhooks.** `endpoints.get`, `put_by_url`, `test(wait=)`, `redeliver_window`, `replay`, `list(include_deprecated=, metadata=, starting_after=)`, delivery filters (`status`, `event_type`, `since`, `until`, `starting_after`), `webhooks.egress_ips`, `delivery_health`. Replay and window redelivery accept `since="failing_since"`; endpoints report `last_failing_since`, `event_naming`, `signature_versions`, `destination`, health and alert fields. `verify_webhook(url=, require_v2=)` verifies URL-bound `v2` signatures; unknown signature versions are ignored. `canonical_webhook_event`, `webhook_event_spellings`, `webhook_event_matches`, `WEBHOOK_EVENT_ALIASES` and the new event-name constants.
+- **Privacy executor.** `privacy` (`discover`, `preset`, `lookup`, `create_request`, `get_request`, `cancel_request`, `orchestrator`), `verify_privacy_case_request`, `verify_privacy_completion`, `valid_privacy_idempotency_key`, `is_privacy_event`.
+- **Integrations.** `integrations` and `sessions.get_token(session_id, for_=)`, `atlas_id_integration_token` / `aatlas_id_integration_token` (the browser `atlas_id_tokens` route for Sign in with Atlas users, Bearer or DPoP).
+- **Platform surface.** `status` (subscription, incidents, dependencies), `notices`, `security_advisories`, `audit_exports`, `sub_processors`, `entitlements`, `integration_health`, `embed`, `openapi.diff`, `instance.unknown_fields_report`, `instance.preflight(min_severity=, include_suppressed=)`, `messaging_providers.get_channel`, `instance.referrals.install`, `platform.apps` `create_secret_key` / `clone_config` / metadata filter, `users.list(updated_after=, updated_before=)`, `events.list(since=, until=, order=)`.
+- **Options.** `dry_run=True` on the provisioning calls, a W3C `traceparent` on the client and `with_options(traceparent=)`, `Traceparent` helpers, `KeyFormat` / `parse_key` for `atlas_<env>_<kind>_...` and the legacy `sk_` / `pk_` / `psk_` / `whsec_` formats.
+- **Errors.** `ErrorCode.INSUFFICIENT_SCOPE` (the former `SCOPE_MISSING` is still matched), `ORIGIN_NOT_ALLOWED`, `ROUTE_NOT_FOUND`, `NOT_A_LIVE_INSTANCE`, `TEST_MODE_ONLY`, `TESTING_UNAVAILABLE`, `PARTNER_LINK_UNAVAILABLE`; `AtlasError.is_insufficient_scope`, `required_scope`, `is_step_up_required`, `is_origin_not_allowed`, `did_you_mean`, `allowed_methods`, `docs_url`.
+- **Helpers.** `BackchannelLogoutApp` (WSGI) and `handle_backchannel_logout`, `OperatorLogin` / `AsyncOperatorLogin` (device flow, RFC 8693 exchange, `client_credentials`, leaked-key revocation), `SealedBox` for `sealed_*` secrets (needs the new `sealed` extra: PyNaCl).
+- Referral provider `referalli` (the former `referally` is still accepted).
+- API coverage list: 731 operations.
+
 ## 0.16.0 — 2026-10-24
 
 ### Added

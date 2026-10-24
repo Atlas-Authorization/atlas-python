@@ -478,7 +478,7 @@ attributed, who referred them; `None` when the user was never reported), `referr
 ```python
 atlas.instance.referrals.update({
     "enabled": True,
-    "provider": "webhook",  # the Atlas referral protocol; or "referally" or another built-in adapter
+    "provider": "webhook",  # the Atlas referral protocol; or "referalli" (the former "referally" is accepted) or another built-in adapter
     "endpoint_url": "https://referrals.example.com/atlas",
     "signing_secret": os.environ["REFERRAL_SIGNING_SECRET"],
     "auto_enroll_users": True,
@@ -617,6 +617,51 @@ returns `True` when it has seen it before (the token is then refused with reason
 `"replayed"`). Keep entries a few minutes — logout tokens live two. With several
 app servers, back it with a shared store such as Redis (`SET jti 1 NX EX 300`).
 
+## Integrator platform (0.17)
+
+```python
+from atlas_backend import AtlasClient, KeyFormat, Traceparent
+
+atlas = AtlasClient("atlas_live_sk_...", traceparent=Traceparent.generate())
+atlas.whoami.get()                                  # kind, scopes, expiry, owner
+KeyFormat.is_secret_key("atlas_live_sk_abc")        # True; "sk_live_abc" too
+```
+
+- **Keys.** `secret_keys` (`create` / `list` / `get` / `update` / `rotate` / `revoke`; `owner`,
+  `expires_at` (default one year, never longer), `allowed_origins` (browser-origin lock, refused
+  with `ORIGIN_NOT_ALLOWED`), `external_ref`, `metadata`, `secret_recipient` for a sealed secret
+  you open with `SealedBox`), `keys.list`, `keys.revoke_leaked`, `platform.keys`, `platform.whoami`.
+  `KeyFormat` accepts `atlas_<env>_<kind>_...` and the legacy `sk_` / `pk_` / `psk_` / `whsec_`.
+- **Partner links, no pasted key.** A partner calls `request_partner_link(...)`; you list
+  `partner_links.requests.list(direction="inbound")` and `approve(id)` / `deny(id)`; Atlas delivers
+  the credentials to the partner's callback, which checks them with `verify_partner_link_delivery`.
+  `partner_links.outbound.request(partner, {...})` asks a partner for a link;
+  `partner_links.set_certificates(id, [...])` locks one to client certificates (mTLS).
+- **Dry run, trace, idempotency.** `dry_run=True` on the provisioning calls, `external_ref` and
+  `metadata` in bodies, `idempotency_key=` on writes, a `traceparent` on the client (or
+  `atlas.with_options(traceparent=...)`).
+- **Webhooks.** Endpoint `get`, `put_by_url`, `test(wait=...)`, `redeliver_window`, `replay`
+  (`since="failing_since"` replays from the start of the last failure streak; endpoints report
+  `last_failing_since` after they recover), delivery filters and cursors, `webhooks.egress_ips()`,
+  `delivery_health`. `verify_webhook(..., url=, require_v2=)` checks URL-bound `v2` signatures.
+  `canonical_webhook_event(name)` maps the deprecated spellings.
+- **Privacy executor.** `privacy` (discover, lookup, requests), `verify_privacy_case_request`,
+  `verify_privacy_completion`, `valid_privacy_idempotency_key`.
+- **Integrations.** `integrations` and `sessions.get_token(session_id, for_="referalli")`;
+  `atlas_id_integration_token(frontend_api, publishable_key, "referalli", access_token)` is the
+  browser route (`POST /v1/client/integrations/{id}/atlas_id_tokens`) for Sign in with Atlas users.
+- **OIDC relying parties.** `oidc_organization_of(claims)` (`org_id` / `org_slug` / `org_role` /
+  `org_permissions`), `oidc_organizations_of(claims)` (`orgs`, from the `organizations` scope),
+  `oidc_sso_of(claims)` (`sso_connection_id` / `sso_tenant_id` / `sso_issuer` / `sso_domain`) and
+  `oidc_authorize_url_with_organization(url, "acme")`.
+- **Also.** `status`, `notices`, `security_advisories`, `audit_exports`, `sub_processors`,
+  `entitlements`, `integration_health`, `embed`, `openapi.diff`, `instance.unknown_fields_report`,
+  `instance.preflight(min_severity=...)`, `users.list(updated_after=...)`, `events.list(since=...)`,
+  `BackchannelLogoutApp` (WSGI) and `handle_backchannel_logout`, `OperatorLogin` (device flow,
+  token exchange), errors with `did_you_mean`, `is_insufficient_scope`, `is_step_up_required`.
+
+Sealed secrets need PyNaCl: `pip install "atlas-backend[sealed]"`.
+
 ## Namespaces
 
 `AtlasClient` / `AsyncAtlasClient`:
@@ -643,10 +688,13 @@ app servers, back it with a shared store such as Redis (`SET jti 1 NX EX 300`).
 (+ `stores`, `authorization_models`), `jwt_templates`, `legacy_auth_connection`,
 `network_acls`, `radius_clients`, `lti_platforms`, `rate_limit_policy`,
 `risk_based_mfa`, `bot_labels`, `bot_signals`, `captcha`, `managed_waf`,
-`diagnostics`, `mcp`, `mcp_connector`, `pca`, `testing`.
+`diagnostics`, `mcp`, `mcp_connector`, `pca`, `testing`, `whoami`, `secret_keys`, `keys`,
+`partner_links` (+ `requests`, `outbound`), `atlas_id_grants`, `privacy`, `integrations`, `status`,
+`notices`, `security_advisories`, `audit_exports`, `sub_processors`, `entitlements`,
+`integration_health`, `embed`, `openapi`, `delivery_health`, `meta`.
 
 `AtlasPlatformClient` / `AsyncAtlasPlatformClient`: `apps`, `accountless_apps`,
-`atlas_id_apps`, `design_assets`.
+`atlas_id_apps`, `design_assets`, `whoami`, `keys`, `audit` (+ `streams`).
 
 ## Pagination
 

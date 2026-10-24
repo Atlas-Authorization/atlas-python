@@ -43,6 +43,8 @@ class AtlasClient:
             ``422 UNKNOWN_FIELD`` instead of being ignored. ``False`` sends
             ``Atlas-Strict: false`` (opting out of an instance-wide strict
             default). ``None`` (the default) sends nothing.
+        traceparent: A W3C ``traceparent`` sent on every request. Atlas carries its trace id
+            onto the webhooks, back-channel logouts and privacy cases the call causes.
         on_unknown_fields: Called as ``hook(fields, method, path)`` when a write
             succeeded but Atlas ignored some body fields (the
             ``Atlas-Unknown-Fields`` response header). Without a hook the SDK
@@ -58,6 +60,7 @@ class AtlasClient:
         http_client: httpx.Client | None = None,
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
+        traceparent: str | None = None,
     ) -> None:
         if not secret_key:
             raise ValueError("AtlasClient requires a secret_key.")
@@ -70,6 +73,7 @@ class AtlasClient:
                 self._http,
                 strict=strict,
                 on_unknown_fields=on_unknown_fields,
+                traceparent=traceparent,
             )
         )
 
@@ -159,12 +163,31 @@ class AtlasClient:
         self.usage = r.Usage(transport)
         self.user_exports = r.UserExports(transport)
         self.user_imports = r.UserImports(transport)
+        self.whoami = r.Whoami(transport)
+        self.secret_keys = r.SecretKeys(transport)
+        self.keys = r.Keys(transport)
+        self.partner_links = r.PartnerLinks(transport)
+        self.atlas_id_grants = r.AtlasIdGrants(transport)
+        self.privacy = r.Privacy(transport)
+        self.integrations = r.Integrations(transport)
+        self.status = r.Status(transport)
+        self.notices = r.Notices(transport)
+        self.security_advisories = r.SecurityAdvisories(transport)
+        self.audit_exports = r.AuditExports(transport)
+        self.sub_processors = r.SubProcessors(transport)
+        self.entitlements = r.Entitlements(transport)
+        self.integration_health = r.IntegrationHealth(transport)
+        self.embed = r.Embed(transport)
+        self.openapi = r.OpenApi(transport)
+        self.delivery_health = r.DeliveryHealth(transport)
+        self.meta = r.Meta(transport)
 
     def with_options(
         self,
         *,
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
+        traceparent: str | None = None,
     ) -> AtlasClient:
         """A copy of this client with per-call overrides, sharing its connection.
 
@@ -175,7 +198,9 @@ class AtlasClient:
         clone._owns_client = False
         clone._http = self._http
         clone._wire(
-            self._transport.with_options(strict=strict, on_unknown_fields=on_unknown_fields)
+            self._transport.with_options(
+                strict=strict, on_unknown_fields=on_unknown_fields, traceparent=traceparent
+            )
         )
         return clone
 
@@ -208,6 +233,7 @@ class AsyncAtlasClient:
         http_client: httpx.AsyncClient | None = None,
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
+        traceparent: str | None = None,
     ) -> None:
         if not secret_key:
             raise ValueError("AsyncAtlasClient requires a secret_key.")
@@ -220,6 +246,7 @@ class AsyncAtlasClient:
                 self._http,
                 strict=strict,
                 on_unknown_fields=on_unknown_fields,
+                traceparent=traceparent,
             )
         )
 
@@ -309,19 +336,40 @@ class AsyncAtlasClient:
         self.usage = ar.AsyncUsage(transport)
         self.user_exports = ar.AsyncUserExports(transport)
         self.user_imports = ar.AsyncUserImports(transport)
+        self.whoami = ar.AsyncWhoami(transport)
+        self.secret_keys = ar.AsyncSecretKeys(transport)
+        self.keys = ar.AsyncKeys(transport)
+        self.partner_links = ar.AsyncPartnerLinks(transport)
+        self.atlas_id_grants = ar.AsyncAtlasIdGrants(transport)
+        self.privacy = ar.AsyncPrivacy(transport)
+        self.integrations = ar.AsyncIntegrations(transport)
+        self.status = ar.AsyncStatus(transport)
+        self.notices = ar.AsyncNotices(transport)
+        self.security_advisories = ar.AsyncSecurityAdvisories(transport)
+        self.audit_exports = ar.AsyncAuditExports(transport)
+        self.sub_processors = ar.AsyncSubProcessors(transport)
+        self.entitlements = ar.AsyncEntitlements(transport)
+        self.integration_health = ar.AsyncIntegrationHealth(transport)
+        self.embed = ar.AsyncEmbed(transport)
+        self.openapi = ar.AsyncOpenApi(transport)
+        self.delivery_health = ar.AsyncDeliveryHealth(transport)
+        self.meta = ar.AsyncMeta(transport)
 
     def with_options(
         self,
         *,
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
+        traceparent: str | None = None,
     ) -> AsyncAtlasClient:
         """A copy of this client with per-call overrides, sharing its connection."""
         clone = object.__new__(AsyncAtlasClient)
         clone._owns_client = False
         clone._http = self._http
         clone._wire(
-            self._transport.with_options(strict=strict, on_unknown_fields=on_unknown_fields)
+            self._transport.with_options(
+                strict=strict, on_unknown_fields=on_unknown_fields, traceparent=traceparent
+            )
         )
         return clone
 
@@ -360,6 +408,7 @@ class AtlasPlatformClient:
         http_client: httpx.Client | None = None,
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
+        traceparent: str | None = None,
     ) -> None:
         if not platform_key:
             raise ValueError("AtlasPlatformClient requires a platform_key.")
@@ -372,6 +421,7 @@ class AtlasPlatformClient:
                 self._http,
                 strict=strict,
                 on_unknown_fields=on_unknown_fields,
+                traceparent=traceparent,
             )
         )
 
@@ -383,19 +433,25 @@ class AtlasPlatformClient:
         self.atlas_id_publisher = r.PlatformAtlasIdPublisher(transport)
         self.config_changelog = r.PlatformConfigChangelog(transport)
         self.design_assets = r.PlatformDesignAssets(transport)
+        self.whoami = r.PlatformWhoami(transport)
+        self.keys = r.PlatformKeys(transport)
+        self.audit = r.PlatformAudit(transport)
 
     def with_options(
         self,
         *,
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
+        traceparent: str | None = None,
     ) -> AtlasPlatformClient:
         """A copy of this client with per-call overrides, sharing its connection."""
         clone = object.__new__(AtlasPlatformClient)
         clone._owns_client = False
         clone._http = self._http
         clone._wire(
-            self._transport.with_options(strict=strict, on_unknown_fields=on_unknown_fields)
+            self._transport.with_options(
+                strict=strict, on_unknown_fields=on_unknown_fields, traceparent=traceparent
+            )
         )
         return clone
 
@@ -428,6 +484,7 @@ class AsyncAtlasPlatformClient:
         http_client: httpx.AsyncClient | None = None,
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
+        traceparent: str | None = None,
     ) -> None:
         if not platform_key:
             raise ValueError("AsyncAtlasPlatformClient requires a platform_key.")
@@ -440,6 +497,7 @@ class AsyncAtlasPlatformClient:
                 self._http,
                 strict=strict,
                 on_unknown_fields=on_unknown_fields,
+                traceparent=traceparent,
             )
         )
 
@@ -451,19 +509,25 @@ class AsyncAtlasPlatformClient:
         self.atlas_id_publisher = ar.AsyncPlatformAtlasIdPublisher(transport)
         self.config_changelog = ar.AsyncPlatformConfigChangelog(transport)
         self.design_assets = ar.AsyncPlatformDesignAssets(transport)
+        self.whoami = ar.AsyncPlatformWhoami(transport)
+        self.keys = ar.AsyncPlatformKeys(transport)
+        self.audit = ar.AsyncPlatformAudit(transport)
 
     def with_options(
         self,
         *,
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
+        traceparent: str | None = None,
     ) -> AsyncAtlasPlatformClient:
         """A copy of this client with per-call overrides, sharing its connection."""
         clone = object.__new__(AsyncAtlasPlatformClient)
         clone._owns_client = False
         clone._http = self._http
         clone._wire(
-            self._transport.with_options(strict=strict, on_unknown_fields=on_unknown_fields)
+            self._transport.with_options(
+                strict=strict, on_unknown_fields=on_unknown_fields, traceparent=traceparent
+            )
         )
         return clone
 

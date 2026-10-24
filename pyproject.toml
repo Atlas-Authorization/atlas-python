@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "atlas-backend"
-version = "0.16.0"
+version = "0.17.0"
 description = "Official Python backend SDK for Atlas — a typed client over the sk_ Backend API and the psk_ Platform API."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -20,6 +20,8 @@ dependencies = ["httpx>=0.23", "pyjwt[crypto]>=2.8"]
 django = ["django>=4.2"]
 fastapi = ["fastapi>=0.110", "starlette"]
 flask = ["flask>=3.0"]
+# Sealed secret delivery (secret_recipient / sealed_secret) opens libsodium sealed boxes.
+sealed = ["pynacl>=1.5"]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
@@ -31,6 +33,7 @@ dev = [
     "fastapi>=0.110",
     "starlette",
     "flask>=3.0",
+    "pynacl>=1.5",
 ]
 
 [tool.hatch.build.targets.wheel]

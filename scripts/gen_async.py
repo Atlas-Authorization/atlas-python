@@ -32,6 +32,7 @@ import asyncio
 import time
 from collections.abc import Callable, Sequence
 from typing import Any, Literal
+from urllib.parse import urlencode
 
 from . import models as m
 from ._transport import _AsyncTransport
@@ -40,7 +41,10 @@ from .resources import (
     BETTER_AUTH_IMPORT_IN_FLIGHT,
     BETTER_AUTH_IMPORT_PART_BYTES,
     _csv,
+    _dry,
+    _enc,
     _json,
+    _meta,
     _q,
     _sniff_image_type,
     split_bundle_parts,

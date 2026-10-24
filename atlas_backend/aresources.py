@@ -11,6 +11,7 @@ import asyncio
 import time
 from collections.abc import Callable, Sequence
 from typing import Any, Literal
+from urllib.parse import urlencode
 
 from . import models as m
 from ._transport import _AsyncTransport
@@ -19,7 +20,10 @@ from .resources import (
     BETTER_AUTH_IMPORT_IN_FLIGHT,
     BETTER_AUTH_IMPORT_PART_BYTES,
     _csv,
+    _dry,
+    _enc,
     _json,
+    _meta,
     _q,
     _sniff_image_type,
     split_bundle_parts,
@@ -55,14 +59,25 @@ class AsyncUsers:
         organization_id: str | None = None,
         created_after: int | None = None,
         created_before: int | None = None,
-        order_by: Literal["created_at", "-created_at", "last_sign_in_at", "-last_sign_in_at"]
+        updated_after: int | None = None,
+        updated_before: int | None = None,
+        order_by: Literal[
+            "created_at",
+            "-created_at",
+            "updated_at",
+            "-updated_at",
+            "last_sign_in_at",
+            "-last_sign_in_at",
+        ]
         | None = None,
         include_total_count: bool | None = None,
     ) -> CursorPage:
         """List and search users. Every filter combines with AND. Page by cursor
         (``starting_after``) or, with ``offset``, by offset. ``query`` searches email,
         username, names, phone and ids; ``created_after`` / ``created_before`` are epoch
-        ms; ``include_total_count`` adds ``total_count`` to the page.
+        ms, as are ``updated_after`` / ``updated_before`` (sync users changed since a
+        checkpoint, with ``order_by="updated_at"``); ``include_total_count`` adds
+        ``total_count`` to the page.
         """
 
         def _b(v: bool | None) -> str | None:
@@ -85,6 +100,8 @@ class AsyncUsers:
                 organization_id=organization_id,
                 created_after=created_after,
                 created_before=created_before,
+                updated_after=updated_after,
+                updated_before=updated_before,
                 order_by=order_by,
                 include_total_count=_b(include_total_count),
             ),
@@ -725,6 +742,17 @@ class AsyncSessions:
             path=f"/v1/sessions/{session_id}/tokens/{template}",
         )
 
+    async def get_token(
+        self, session_id: str, for_: str, *, audience_hint: str | None = None
+    ) -> m.SessionToken:
+        """``getToken({for})`` on the server: mint an integration token for a session, for a
+        product that trusts Atlas sessions (e.g. ``for_="referalli"``)."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/sessions/{_enc(session_id)}/integration_tokens/{_enc(for_)}",
+            body={"audience_hint": audience_hint} if audience_hint else None,
+        )
+
     async def set_custom_data(
         self, session_id: str, custom_data: dict[str, Any] | None
     ) -> m.Session:
@@ -854,31 +882,107 @@ class _AsyncWebhookEndpoints:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    async def list(self) -> JSON:
-        return await self._t.request(method="GET", path="/v1/webhook_endpoints")
+    async def list(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+        include_deprecated: bool | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> JSON:
+        """List endpoints (cursor-paginated). ``include_deprecated`` adds the superseded
+        event spellings to the catalog; ``metadata`` filters on ``metadata[key]=value``."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/webhook_endpoints",
+            query=_meta(
+                metadata,
+                limit=limit,
+                starting_after=starting_after,
+                include_deprecated=include_deprecated,
+            )
+            or None,
+        )
+
+    async def get(self, endpoint_id: str) -> m.WebhookEndpoint:
+        """Read one endpoint, with its health fields (``failing_since``,
+        ``last_failing_since``, ``consecutive_failures``, ...)."""
+        return await self._t.request(
+            method="GET", path=f"/v1/webhook_endpoints/{_enc(endpoint_id)}"
+        )
 
     async def create(
         self,
         body: m.CreateWebhookEndpointBody,
         *,
         idempotency_key: str | None = None,
+        dry_run: bool = False,
     ) -> JSON:
         return await self._t.request(
             method="POST",
             path="/v1/webhook_endpoints",
             body=body,
             idempotency_key=idempotency_key,
+            query=_dry(dry_run),
+        )
+
+    async def put_by_url(self, body: dict[str, Any], *, idempotency_key: str | None = None) -> JSON:
+        """Create the endpoint for ``body["url"]`` or update it when one exists (idempotent
+        provisioning)."""
+        return await self._t.request(
+            method="PUT",
+            path="/v1/webhook_endpoints/by_url",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def redeliver_window(self, endpoint_id: str, body: dict[str, Any] | None = None) -> JSON:
+        """Redeliver every delivery in a window. ``body``: ``since`` (epoch ms, or
+        ``"failing_since"`` for the start of the endpoint's last failure streak), ``until``,
+        ``status``, ``event_type``."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/webhook_endpoints/{_enc(endpoint_id)}/redeliver",
+            body=body if body is not None else {},
+        )
+
+    async def replay(self, endpoint_id: str, body: dict[str, Any] | None = None) -> JSON:
+        """Replay the events an endpoint missed since ``body["since"]`` (epoch ms, or
+        ``"failing_since"`` to replay everything since it started failing)."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/webhook_endpoints/{_enc(endpoint_id)}/replay",
+            body=body if body is not None else {},
         )
 
     async def delete(self, endpoint_id: str) -> JSON:
         return await self._t.request(method="DELETE", path=f"/v1/webhook_endpoints/{endpoint_id}")
 
-    async def list_deliveries(self, endpoint_id: str, *, limit: int | None = None) -> ListPage:
-        """List an endpoint's recent deliveries, newest first (``limit`` 1-100)."""
+    async def list_deliveries(
+        self,
+        endpoint_id: str,
+        *,
+        limit: int | None = None,
+        status: str | None = None,
+        event_type: str | None = None,
+        since: int | str | None = None,
+        until: int | str | None = None,
+        starting_after: str | None = None,
+    ) -> ListPage:
+        """List an endpoint's recent deliveries, newest first (``limit`` 1-100), filtered by
+        ``status``, ``event_type`` and a ``since`` / ``until`` window; cursor-paginated. Each
+        delivery carries ``latency_ms``."""
         return await self._t.request(
             method="GET",
             path=f"/v1/webhook_endpoints/{endpoint_id}/deliveries",
-            query=_q(limit=limit),
+            query=_q(
+                limit=limit,
+                status=status,
+                event_type=event_type,
+                since=since,
+                until=until,
+                starting_after=starting_after,
+            ),
         )
 
     async def update(
@@ -918,11 +1022,13 @@ class _AsyncWebhookEndpoints:
             body=body,
         )
 
-    async def test(self, endpoint_id: str) -> m.WebhookDeliveryAttempt:
-        """Send a synthetic webhook.test event to this endpoint only."""
+    async def test(self, endpoint_id: str, *, wait: int | None = None) -> m.WebhookDeliveryAttempt:
+        """Send a synthetic webhook.test event to this endpoint only. With ``wait`` (seconds)
+        the call holds until the delivery finishes and returns its outcome."""
         return await self._t.request(
             method="POST",
             path=f"/v1/webhook_endpoints/{endpoint_id}/test",
+            query=_q(wait=wait),
         )
 
 
@@ -931,13 +1037,34 @@ class AsyncWebhooks:
         self._t = transport
         self.endpoints = _AsyncWebhookEndpoints(transport)
 
-    async def deliveries(self, endpoint_id: str, *, limit: int | None = None) -> JSON:
+    async def deliveries(
+        self,
+        endpoint_id: str,
+        *,
+        limit: int | None = None,
+        status: str | None = None,
+        event_type: str | None = None,
+        since: int | str | None = None,
+        until: int | str | None = None,
+        starting_after: str | None = None,
+    ) -> JSON:
         """List an endpoint's deliveries. Same as ``endpoints.list_deliveries``."""
         return await self._t.request(
             method="GET",
             path=f"/v1/webhook_endpoints/{endpoint_id}/deliveries",
-            query=_q(limit=limit),
+            query=_q(
+                limit=limit,
+                status=status,
+                event_type=event_type,
+                since=since,
+                until=until,
+                starting_after=starting_after,
+            ),
         )
+
+    async def egress_ips(self) -> JSON:
+        """The IP addresses Atlas delivers webhooks from (allow-list them)."""
+        return await self._t.request(method="GET", path="/v1/meta/egress_ips")
 
 
 class _AsyncOAuthClientGrants:
@@ -3085,9 +3212,14 @@ class AsyncEvents:
         to: str | int | None = None,
         limit: int | None = None,
         starting_after: str | None = None,
+        since: int | str | None = None,
+        until: int | str | None = None,
+        order: Literal["asc", "desc"] | None = None,
     ) -> CursorPage:
         """Read the product activity feed (events), filterable by type and time and cursor-
-        paginated, with the list of event types this instance has actually emitted.
+        paginated, with the list of event types this instance has actually emitted. ``since``
+        / ``until`` bound the window (epoch ms or ISO date); ``order="asc"`` reads forward
+        from a checkpoint.
         """
         return await self._t.request(
             method="GET",
@@ -3099,6 +3231,9 @@ class AsyncEvents:
                     "to": to,
                     "limit": limit,
                     "starting_after": starting_after,
+                    "since": since,
+                    "until": until,
+                    "order": order,
                 }
             ),
         )
@@ -3541,11 +3676,26 @@ class AsyncInstance:
             path=f"/v1/instance/ldap_connections/{connection_id}/bind_password",
         )
 
-    async def preflight(self) -> m.Preflight:
-        """Check your setup in one call."""
+    async def preflight(
+        self,
+        *,
+        min_severity: Literal["error", "warning", "info"] | None = None,
+        include_suppressed: bool | None = None,
+    ) -> m.Preflight:
+        """Check your setup in one call. ``min_severity`` keeps only findings at least that
+        severe (``ok`` still covers every finding); ``include_suppressed`` also lists the
+        suppressed ones."""
         return await self._t.request(
             method="GET",
             path="/v1/instance/preflight",
+            query=_q(min_severity=min_severity, include_suppressed=include_suppressed),
+        )
+
+    async def unknown_fields_report(self, *, days: int | None = None) -> JSON:
+        """Which unknown body fields your writes sent (ignored, or refused in strict mode),
+        aggregated over the last ``days``."""
+        return await self._t.request(
+            method="GET", path="/v1/instance/unknown_fields_report", query=_q(days=days)
         )
 
     async def move_origin(self, body: m.OriginMoveBody) -> m.OriginMove:
@@ -3730,6 +3880,15 @@ class _AsyncInstanceReferrals:
     async def get_call(self, call_id: str) -> m.ReferralCall:
         """One call of the delivery log, by id or the platform's request id."""
         return await self._t.request(method="GET", path=f"/v1/instance/referrals/calls/{call_id}")
+
+    async def install(self, provider: str, body: dict[str, Any] | None = None) -> JSON:
+        """One-click install of a referral platform (``referalli``; the old id ``referally``
+        is accepted): Atlas connects, registers its signing secret and enables referrals."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/instance/referrals/{_enc(provider)}/install",
+            body=body,
+        )
 
     async def retry_call(
         self, call_id: str, *, idempotency_key: str | None = None
@@ -4684,6 +4843,10 @@ class AsyncMessagingProviders:
             method="GET",
             path="/v1/messaging_providers",
         )
+
+    async def get_channel(self, channel: str) -> m.MessagingProvider:
+        """Read one channel's provider configuration (``email`` or ``sms``)."""
+        return await self._t.request(method="GET", path=f"/v1/messaging_providers/{_enc(channel)}")
 
     async def set_email(self, body: m.EmailProviderConfig) -> m.MessagingProvider:
         """Configure the email delivery provider."""
@@ -5777,25 +5940,61 @@ class AsyncPlatformApps:
         tag: str | None = None,
         archived: bool | None = None,
         include_archived: bool | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> ListPage:
-        """List the apps (instances) this platform owns."""
+        """List the apps (instances) this platform owns; ``metadata`` filters on
+        ``metadata[key]=value``."""
         return await self._t.request(
             method="GET",
             path="/v1/platform/apps",
-            query=_q(tag=tag, archived=archived, include_archived=include_archived),
+            query=_meta(metadata, tag=tag, archived=archived, include_archived=include_archived)
+            or None,
         )
 
     async def create(
-        self, body: m.CreatePlatformAppBody | None = None, *, idempotency_key: str | None = None
+        self,
+        body: m.CreatePlatformAppBody | None = None,
+        *,
+        idempotency_key: str | None = None,
+        dry_run: bool = False,
     ) -> m.PlatformAppProvisioned:
         """Provision a new app (instance) owned by the platform: mints its publishable key,
-        signing key and first secret key.
+        signing key and first secret key. ``external_ref`` makes the call idempotent per
+        reference; ``dry_run=True`` previews it.
         """
         return await self._t.request(
             method="POST",
             path="/v1/platform/apps",
             body=body,
             idempotency_key=idempotency_key,
+            query=_dry(dry_run),
+        )
+
+    async def create_secret_key(
+        self,
+        app_id: str,
+        body: dict[str, Any] | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> JSON:
+        """Mint another secret key for an owned app (scopes, ``owner``, ``expires_at``,
+        ``allowed_origins``, ``external_ref``)."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/platform/apps/{_enc(app_id)}/secret_keys",
+            body=body if body is not None else {},
+            idempotency_key=idempotency_key,
+        )
+
+    async def clone_config(
+        self, app_id: str, body: dict[str, Any], *, dry_run: bool = False
+    ) -> JSON:
+        """Copy another app's configuration (``from_app_id``) onto this one."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/platform/apps/{_enc(app_id)}/clone_config",
+            body=body,
+            query=_dry(dry_run),
         )
 
     async def accept_transfer(
@@ -6079,7 +6278,7 @@ class AsyncPlatformAtlasIdApps:
         )
 
     async def find_users(self, app_id: str, email: str) -> m.AtlasIdAppUserList:
-        """Privacy requests: is this person one of the app's users? Exact match on a
+        """AsyncPrivacy requests: is this person one of the app's users? Exact match on a
         verified email; anyone else gets the same empty list.
         """
         return await self._t.request(
@@ -6649,4 +6848,719 @@ class AsyncPolicySource:
             method="GET",
             path="/v1/instance/policy_source/deliveries",
             query=_q(limit=limit, starting_after=starting_after, kind=kind, status=status),
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Integrator platform                                                          #
+# --------------------------------------------------------------------------- #
+
+
+class AsyncWhoami:
+    """``GET /v1/whoami``: introspect the key this client authenticates with (kind, scopes,
+    expiry, owner, instance)."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self) -> JSON:
+        return await self._t.request(method="GET", path="/v1/whoami")
+
+
+class AsyncSecretKeys:
+    """``/v1/secret_keys``: mint, list, rotate and revoke the instance's secret keys. A new
+    secret is revealed exactly once (``secret``, or ``sealed_secret`` when
+    ``secret_recipient`` is sent; open it with :class:`SealedBox`). AsyncKeys default to a
+    one-year expiry, belong to their creator (``owner``) and can be locked to browser
+    ``allowed_origins``."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def create(
+        self,
+        body: m.CreateSecretKeyBody,
+        *,
+        idempotency_key: str | None = None,
+        dry_run: bool = False,
+    ) -> m.SecretKey:
+        return await self._t.request(
+            method="POST",
+            path="/v1/secret_keys",
+            body=body,
+            idempotency_key=idempotency_key,
+            query=_dry(dry_run),
+        )
+
+    async def list(self, *, metadata: dict[str, Any] | None = None) -> ListPage:
+        return await self._t.request(
+            method="GET", path="/v1/secret_keys", query=_meta(metadata) or None
+        )
+
+    async def get(self, key_id: str) -> m.SecretKey:
+        return await self._t.request(method="GET", path=f"/v1/secret_keys/{_enc(key_id)}")
+
+    async def update(self, key_id: str, body: m.UpdateSecretKeyBody) -> m.SecretKey:
+        return await self._t.request(
+            method="PATCH", path=f"/v1/secret_keys/{_enc(key_id)}", body=body
+        )
+
+    async def rotate(
+        self,
+        key_id: str,
+        body: dict[str, Any] | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> m.SecretKey:
+        """A new key with the same scopes; the old one keeps working for ``overlap_seconds``
+        (default 72 h, ``0`` revokes it now)."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/secret_keys/{_enc(key_id)}/rotate",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def revoke(self, key_id: str) -> m.SecretKey:
+        return await self._t.request(method="POST", path=f"/v1/secret_keys/{_enc(key_id)}/revoke")
+
+
+class AsyncKeys:
+    """AsyncKeys across kinds, the operator document, token exchange and leaked-key revocation."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self, *, kind: str | None = None) -> ListPage:
+        """``GET /v1/keys``: every credential on the instance, standard shape."""
+        return await self._t.request(method="GET", path="/v1/keys", query=_q(kind=kind))
+
+    async def revoke_leaked(self, body: dict[str, Any]) -> JSON:
+        """``POST /v1/keys/revoke_leaked``: revoke leaked Atlas credentials. Needs no key
+        (the leaked secret is the proof)."""
+        return await self._t.request(method="POST", path="/v1/keys/revoke_leaked", body=body)
+
+    async def operator(self) -> JSON:
+        """``GET /v1/operator``: where the operator device flow and token exchange live."""
+        return await self._t.request(method="GET", path="/v1/operator")
+
+    async def exchange_token(self, body: dict[str, Any]) -> JSON:
+        """``POST /v1/oauth/token`` (form-encoded): RFC 8693 token exchange or
+        ``client_credentials``."""
+        form = urlencode({k: v for k, v in body.items() if v is not None})
+        return await self._t.request(
+            method="POST",
+            path="/v1/oauth/token",
+            content=form.encode("utf-8"),
+            content_type="application/x-www-form-urlencoded",
+        )
+
+    async def client_credentials(
+        self,
+        *,
+        client_id: str,
+        client_secret: str,
+        scope: str | None = None,
+        audience: str | None = None,
+    ) -> JSON:
+        return await self.exchange_token(
+            {
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scope": scope,
+                "audience": audience,
+            }
+        )
+
+    async def token_exchange(
+        self,
+        *,
+        subject_token: str,
+        subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token",
+        resource: str | None = None,
+        scope: str | None = None,
+        audience: str | None = None,
+    ) -> JSON:
+        return await self.exchange_token(
+            {
+                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                "subject_token": subject_token,
+                "subject_token_type": subject_token_type,
+                "resource": resource,
+                "scope": scope,
+                "audience": audience,
+            }
+        )
+
+
+class _AsyncPartnerLinkRequests:
+    """Partner link requests: a partner asks, the owner approves or denies, and Atlas delivers
+    the credentials to the partner's callback (the owner never sees the secret)."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(
+        self,
+        *,
+        direction: Literal["inbound", "outbound"] | None = None,
+        status: str | Sequence[str] | None = None,
+    ) -> ListPage:
+        return await self._t.request(
+            method="GET",
+            path="/v1/partner_links/requests",
+            query=_q(direction=direction, status=_csv(status)),
+        )
+
+    async def get(self, request_id: str) -> m.PartnerLinkRequest:
+        return await self._t.request(
+            method="GET", path=f"/v1/partner_links/requests/{_enc(request_id)}"
+        )
+
+    async def approve(
+        self, request_id: str, body: m.ApprovePartnerLinkRequestBody | None = None
+    ) -> m.PartnerLinkRequestApproval:
+        """Approve: Atlas creates the link and delivers its credentials to the partner,
+        signed. ``scopes`` may narrow the request, never widen it."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/partner_links/requests/{_enc(request_id)}/approve",
+            body=body if body is not None else {},
+        )
+
+    async def deny(self, request_id: str) -> m.PartnerLinkRequest:
+        return await self._t.request(
+            method="POST", path=f"/v1/partner_links/requests/{_enc(request_id)}/deny"
+        )
+
+
+class _AsyncOutboundPartnerLinks:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self) -> ListPage:
+        return await self._t.request(method="GET", path="/v1/partner_links/outbound")
+
+    async def save(self, partner: str, body: dict[str, Any]) -> JSON:
+        return await self._t.request(
+            method="PUT", path=f"/v1/partner_links/outbound/{_enc(partner)}", body=body
+        )
+
+    async def test(self, partner: str) -> JSON:
+        return await self._t.request(
+            method="POST", path=f"/v1/partner_links/outbound/{_enc(partner)}/test"
+        )
+
+    async def remove(self, partner: str) -> JSON:
+        return await self._t.request(
+            method="DELETE", path=f"/v1/partner_links/outbound/{_enc(partner)}"
+        )
+
+    async def request(self, partner: str, body: dict[str, Any]) -> JSON:
+        """Ask a partner for a link; its credentials arrive by themselves once the partner
+        approves. ``body``: ``scopes``, optionally ``resource``, ``base_url``, ``token_url``,
+        ``name``."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/partner_links/outbound/{_enc(partner)}/request",
+            body=body,
+        )
+
+
+class AsyncPartnerLinks:
+    """``/v1/partner_links``: scoped credentials granted to a partner product, the requests
+    partners make, and the outbound links this instance holds into partner products."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+        self.requests = _AsyncPartnerLinkRequests(transport)
+        self.outbound = _AsyncOutboundPartnerLinks(transport)
+
+    async def create(
+        self, body: dict[str, Any], *, idempotency_key: str | None = None
+    ) -> m.PartnerLink:
+        """Create a link by hand (the secret is returned once). Prefer approving a partner's
+        request: there is no secret to hand over. ``body``: ``partner``, ``scopes``, optional
+        ``name``, ``expires_at``, ``cert_fingerprints``."""
+        return await self._t.request(
+            method="POST", path="/v1/partner_links", body=body, idempotency_key=idempotency_key
+        )
+
+    async def list(self) -> ListPage:
+        return await self._t.request(method="GET", path="/v1/partner_links")
+
+    async def get(self, link_id: str) -> m.PartnerLink:
+        return await self._t.request(method="GET", path=f"/v1/partner_links/{_enc(link_id)}")
+
+    async def set_certificates(
+        self, link_id: str, cert_fingerprints: Sequence[str]
+    ) -> m.PartnerLink:
+        """Lock a link to client certificates (mTLS); an empty list removes the lock."""
+        return await self._t.request(
+            method="PATCH",
+            path=f"/v1/partner_links/{_enc(link_id)}",
+            body={"cert_fingerprints": list(cert_fingerprints)},
+        )
+
+    async def rotate_secret(self, link_id: str) -> m.PartnerLink:
+        return await self._t.request(
+            method="POST", path=f"/v1/partner_links/{_enc(link_id)}/rotate_secret"
+        )
+
+    async def revoke(self, link_id: str) -> m.PartnerLink:
+        return await self._t.request(method="DELETE", path=f"/v1/partner_links/{_enc(link_id)}")
+
+
+class AsyncAtlasIdGrants:
+    """``/v1/atlas_id_apps`` on the secret-key surface: the Sign in with Atlas apps this
+    instance manages and their grants."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list_apps(self) -> ListPage:
+        return await self._t.request(method="GET", path="/v1/atlas_id_apps")
+
+    async def lookup(self, app_id: str, email: str) -> ListPage:
+        """Is this verified email a user of the app? An empty list otherwise."""
+        return await self._t.request(
+            method="GET", path=f"/v1/atlas_id_apps/{_enc(app_id)}/users", query={"email": email}
+        )
+
+    async def revoke_grant(self, app_id: str, grant_id: str) -> JSON:
+        return await self._t.request(
+            method="DELETE", path=f"/v1/atlas_id_apps/{_enc(app_id)}/grants/{_enc(grant_id)}"
+        )
+
+
+class _AsyncPrivacyOrchestrator:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self) -> JSON:
+        return await self._t.request(method="GET", path="/v1/instance/privacy_orchestrator")
+
+    async def set(self, body: dict[str, Any]) -> JSON:
+        return await self._t.request(
+            method="PUT", path="/v1/instance/privacy_orchestrator", body=body
+        )
+
+    async def delete(self) -> JSON:
+        return await self._t.request(method="DELETE", path="/v1/instance/privacy_orchestrator")
+
+
+class AsyncPrivacy:
+    """The privacy-executor client: discovery, subject lookup, and idempotent privacy
+    requests (restriction / deletion / export) a data-rights orchestrator executes; plus the
+    instance's orchestrator setting."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+        self.orchestrator = _AsyncPrivacyOrchestrator(transport)
+
+    async def discover(self) -> JSON:
+        return await self._t.request(method="GET", path="/v1/privacy")
+
+    async def preset(self, preset_id: str) -> JSON:
+        return await self._t.request(method="GET", path=f"/v1/privacy/presets/{_enc(preset_id)}")
+
+    async def lookup(self, body: dict[str, Any]) -> JSON:
+        return await self._t.request(method="POST", path="/v1/privacy/lookup", body=body)
+
+    async def create_request(
+        self, body: dict[str, Any], *, idempotency_key: str | None = None
+    ) -> JSON:
+        """Open a privacy request. Always send an ``Idempotency-Key`` (16-255 characters)."""
+        return await self._t.request(
+            method="POST",
+            path="/v1/privacy/requests",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_request(self, request_id: str) -> JSON:
+        return await self._t.request(method="GET", path=f"/v1/privacy/requests/{_enc(request_id)}")
+
+    async def cancel_request(self, request_id: str, *, idempotency_key: str | None = None) -> JSON:
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/privacy/requests/{_enc(request_id)}/cancel",
+            idempotency_key=idempotency_key,
+        )
+
+
+class AsyncIntegrations:
+    """``/v1/instance/integrations/{product}``: identity integrations (a product that trusts
+    Atlas sessions), their deliveries, the server-side token mint
+    (``get_token(session_id, for_=...)``) and the integration card."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self) -> ListPage:
+        return await self._t.request(method="GET", path="/v1/instance/integrations")
+
+    async def get(self, product: str) -> JSON:
+        return await self._t.request(
+            method="GET", path=f"/v1/instance/integrations/{_enc(product)}"
+        )
+
+    async def set(self, product: str, body: dict[str, Any], *, dry_run: bool = False) -> JSON:
+        return await self._t.request(
+            method="PUT",
+            path=f"/v1/instance/integrations/{_enc(product)}",
+            body=body,
+            query=_dry(dry_run),
+        )
+
+    async def delete(self, product: str) -> JSON:
+        return await self._t.request(
+            method="DELETE", path=f"/v1/instance/integrations/{_enc(product)}"
+        )
+
+    async def deliveries(
+        self,
+        product: str,
+        *,
+        trace: str | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> ListPage:
+        """The integration's outbound deliveries; ``trace`` filters by W3C trace id."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/instance/integrations/{_enc(product)}/deliveries",
+            query=_q(trace=trace, limit=limit, starting_after=starting_after),
+        )
+
+    async def events_secret(self, product: str) -> JSON:
+        return await self._t.request(
+            method="POST", path=f"/v1/instance/integrations/{_enc(product)}/events_secret"
+        )
+
+    async def atlas_id_tokens(self, product: str) -> JSON:
+        return await self._t.request(
+            method="POST", path=f"/v1/instance/integrations/{_enc(product)}/atlas_id_tokens"
+        )
+
+    async def get_token(
+        self, session_id: str, for_: str, *, audience_hint: str | None = None
+    ) -> m.SessionToken:
+        """Mint an integration token for a session on the server (``getToken({for})``)."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/sessions/{_enc(session_id)}/integration_tokens/{_enc(for_)}",
+            body={"audience_hint": audience_hint} if audience_hint else None,
+        )
+
+    async def report_verify_error(self, body: dict[str, Any]) -> JSON:
+        return await self._t.request(
+            method="POST", path="/v1/integrations/verify_errors", body=body
+        )
+
+    async def card(self, product: str) -> JSON:
+        return await self._t.request(method="GET", path=f"/v1/integrations/{_enc(product)}/card")
+
+    async def card_revoke_sessions(self, product: str) -> JSON:
+        return await self._t.request(
+            method="POST", path=f"/v1/integrations/{_enc(product)}/card/actions/revoke_sessions"
+        )
+
+    async def public_instance(self, instance_id: str) -> JSON:
+        return await self._t.request(method="GET", path=f"/v1/public/instances/{_enc(instance_id)}")
+
+
+class _AsyncStatusSubscription:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self) -> JSON:
+        return await self._t.request(method="GET", path="/v1/instance/status_subscription")
+
+    async def set(self, body: dict[str, Any]) -> JSON:
+        return await self._t.request(
+            method="PUT", path="/v1/instance/status_subscription", body=body
+        )
+
+    async def delete(self) -> JSON:
+        return await self._t.request(method="DELETE", path="/v1/instance/status_subscription")
+
+    async def rotate_feed(self) -> JSON:
+        return await self._t.request(
+            method="POST", path="/v1/instance/status_subscription/rotate_feed"
+        )
+
+
+class _AsyncStatusDependencies:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self) -> ListPage:
+        return await self._t.request(method="GET", path="/v1/instance/status_dependencies")
+
+    async def create(self, body: dict[str, Any]) -> JSON:
+        return await self._t.request(
+            method="POST", path="/v1/instance/status_dependencies", body=body
+        )
+
+    async def get(self, dependency_id: str) -> JSON:
+        return await self._t.request(
+            method="GET", path=f"/v1/instance/status_dependencies/{_enc(dependency_id)}"
+        )
+
+    async def update(self, dependency_id: str, body: dict[str, Any]) -> JSON:
+        return await self._t.request(
+            method="PATCH",
+            path=f"/v1/instance/status_dependencies/{_enc(dependency_id)}",
+            body=body,
+        )
+
+    async def delete(self, dependency_id: str) -> JSON:
+        return await self._t.request(
+            method="DELETE", path=f"/v1/instance/status_dependencies/{_enc(dependency_id)}"
+        )
+
+    async def refresh(self, dependency_id: str) -> JSON:
+        return await self._t.request(
+            method="POST", path=f"/v1/instance/status_dependencies/{_enc(dependency_id)}/refresh"
+        )
+
+
+class AsyncStatus:
+    """The Atlas status feed, this instance's subscription to it, its incidents and the
+    upstream status dependencies it watches. Webhook events: ``status.incident.created`` /
+    ``.updated`` / ``.resolved``."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+        self.subscription = _AsyncStatusSubscription(transport)
+        self.dependencies = _AsyncStatusDependencies(transport)
+
+    async def get(self, *, region: str | None = None) -> JSON:
+        """``GET /v1/status`` (Statuspage-compatible); ``region`` narrows it."""
+        return await self._t.request(method="GET", path="/v1/status", query=_q(region=region))
+
+    async def incidents(self, *, open: bool | None = None, limit: int | None = None) -> ListPage:
+        return await self._t.request(
+            method="GET", path="/v1/instance/status_incidents", query=_q(open=open, limit=limit)
+        )
+
+
+class AsyncNotices:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self, *, all: bool | None = None) -> ListPage:
+        return await self._t.request(method="GET", path="/v1/instance/notices", query=_q(all=all))
+
+    async def acknowledge(self, notice_id: str) -> JSON:
+        return await self._t.request(
+            method="POST", path=f"/v1/instance/notices/{_enc(notice_id)}/acknowledge"
+        )
+
+
+class AsyncSecurityAdvisories:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self) -> ListPage:
+        return await self._t.request(method="GET", path="/v1/security_advisories")
+
+    async def acknowledge(self, advisory_id: str) -> JSON:
+        return await self._t.request(
+            method="POST", path=f"/v1/security_advisories/{_enc(advisory_id)}/acknowledge"
+        )
+
+    async def list_public(self) -> ListPage:
+        return await self._t.request(method="GET", path="/v1/public/security_advisories")
+
+
+class AsyncAuditExports:
+    """Audit-log exports to your SIEM as CloudEvents over a signed webhook."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self) -> ListPage:
+        return await self._t.request(method="GET", path="/v1/audit_exports")
+
+    async def get(self, export_id: str) -> JSON:
+        return await self._t.request(method="GET", path=f"/v1/audit_exports/{_enc(export_id)}")
+
+    async def create(self, body: dict[str, Any]) -> JSON:
+        return await self._t.request(method="POST", path="/v1/audit_exports", body=body)
+
+    async def update(self, export_id: str, body: dict[str, Any]) -> JSON:
+        return await self._t.request(
+            method="PATCH", path=f"/v1/audit_exports/{_enc(export_id)}", body=body
+        )
+
+    async def delete(self, export_id: str) -> JSON:
+        return await self._t.request(method="DELETE", path=f"/v1/audit_exports/{_enc(export_id)}")
+
+    async def test(self, export_id: str) -> JSON:
+        return await self._t.request(
+            method="POST", path=f"/v1/audit_exports/{_enc(export_id)}/test"
+        )
+
+    async def rotate_secret(self, export_id: str) -> JSON:
+        return await self._t.request(
+            method="POST", path=f"/v1/audit_exports/{_enc(export_id)}/rotate_secret"
+        )
+
+
+class AsyncSubProcessors:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self) -> ListPage:
+        return await self._t.request(method="GET", path="/v1/instance/sub_processors")
+
+
+class AsyncEntitlements:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self) -> JSON:
+        return await self._t.request(method="GET", path="/v1/entitlements")
+
+
+class AsyncIntegrationHealth:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self) -> JSON:
+        return await self._t.request(method="GET", path="/v1/integration-health")
+
+    async def providers(self) -> JSON:
+        return await self._t.request(method="GET", path="/v1/integration-health/providers")
+
+
+class AsyncEmbed:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self, *, instance: str | None = None) -> JSON:
+        return await self._t.request(method="GET", path="/v1/embed", query=_q(instance=instance))
+
+    async def csp(self) -> JSON:
+        return await self._t.request(method="GET", path="/v1/instance/csp")
+
+
+class AsyncOpenApi:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def diff(self, *, since: str | None = None, surface: str | None = None) -> JSON:
+        """What changed in the API since a date (``x-since`` ledger)."""
+        return await self._t.request(
+            method="GET", path="/v1/openapi/diff", query=_q(since=since, surface=surface)
+        )
+
+    async def api_catalog(self) -> JSON:
+        return await self._t.request(method="GET", path="/.well-known/api-catalog")
+
+
+class AsyncDeliveryHealth:
+    """Delivery health of the instance's outbound targets (webhooks, back-channel logout
+    receivers, referral connections, integrations) and their alert contacts."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self, *, kind: str | None = None) -> JSON:
+        return await self._t.request(method="GET", path="/v1/delivery_health", query=_q(kind=kind))
+
+    async def set_alert_contacts(
+        self, kind: str, target_id: str, alert_contacts: Sequence[str]
+    ) -> JSON:
+        return await self._t.request(
+            method="PUT",
+            path=f"/v1/delivery_health/{_enc(kind)}/{_enc(target_id)}/alert_contacts",
+            body={"alert_contacts": list(alert_contacts)},
+        )
+
+
+class AsyncMeta:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def egress_ips(self) -> JSON:
+        """The IP addresses Atlas sends webhooks and other outbound calls from."""
+        return await self._t.request(method="GET", path="/v1/meta/egress_ips")
+
+
+class AsyncPlatformWhoami:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self) -> JSON:
+        return await self._t.request(method="GET", path="/v1/platform/whoami")
+
+
+class AsyncPlatformKeys:
+    """``/v1/platform/keys``: the platform's own keys (``owner``, ``expires_at``,
+    ``allowed_origins``)."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self, *, kind: str | None = None) -> ListPage:
+        return await self._t.request(method="GET", path="/v1/platform/keys", query=_q(kind=kind))
+
+    async def create(self, body: dict[str, Any]) -> m.PlatformKey:
+        return await self._t.request(method="POST", path="/v1/platform/keys", body=body)
+
+    async def update(self, key_id: str, body: dict[str, Any]) -> m.PlatformKey:
+        return await self._t.request(
+            method="PATCH", path=f"/v1/platform/keys/{_enc(key_id)}", body=body
+        )
+
+    async def revoke(self, key_id: str) -> m.PlatformKey:
+        return await self._t.request(method="POST", path=f"/v1/platform/keys/{_enc(key_id)}/revoke")
+
+
+class _AsyncPlatformAuditStreams:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self) -> ListPage:
+        return await self._t.request(method="GET", path="/v1/platform/audit_streams")
+
+    async def create(self, body: dict[str, Any]) -> JSON:
+        return await self._t.request(method="POST", path="/v1/platform/audit_streams", body=body)
+
+    async def update(self, stream_id: str, body: dict[str, Any]) -> JSON:
+        return await self._t.request(
+            method="PATCH", path=f"/v1/platform/audit_streams/{_enc(stream_id)}", body=body
+        )
+
+    async def delete(self, stream_id: str) -> JSON:
+        return await self._t.request(
+            method="DELETE", path=f"/v1/platform/audit_streams/{_enc(stream_id)}"
+        )
+
+    async def test(self, stream_id: str) -> JSON:
+        return await self._t.request(
+            method="POST", path=f"/v1/platform/audit_streams/{_enc(stream_id)}/test"
+        )
+
+
+class AsyncPlatformAudit:
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+        self.streams = _AsyncPlatformAuditStreams(transport)
+
+    async def list(
+        self,
+        *,
+        action: str | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> ListPage:
+        return await self._t.request(
+            method="GET",
+            path="/v1/platform/audit_logs",
+            query=_q(action=action, limit=limit, starting_after=starting_after),
         )

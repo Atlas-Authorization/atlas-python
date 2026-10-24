@@ -161,11 +161,13 @@ class _BaseTransport:
         *,
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
+        traceparent: str | None = None,
     ) -> None:
         self._secret_key = secret_key
         self._base_url = base_url
         self._strict = strict
         self._on_unknown_fields = on_unknown_fields
+        self._traceparent = traceparent
 
     def _prepare(
         self,
@@ -188,6 +190,10 @@ class _BaseTransport:
             strict=self._strict if strict is None else strict,
             method=method,
         )
+        if self._traceparent:
+            # W3C Trace Context: Atlas carries the trace id onto the webhooks, logouts and
+            # privacy cases the call causes.
+            built["traceparent"] = self._traceparent
         if headers:
             # Extra per-call headers (e.g. the end user's forwarded IP). They can
             # never replace the Bearer secret.
@@ -218,8 +224,15 @@ class _SyncTransport(_BaseTransport):
         *,
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
+        traceparent: str | None = None,
     ) -> None:
-        super().__init__(secret_key, base_url, strict=strict, on_unknown_fields=on_unknown_fields)
+        super().__init__(
+            secret_key,
+            base_url,
+            strict=strict,
+            on_unknown_fields=on_unknown_fields,
+            traceparent=traceparent,
+        )
         self._client = client
 
     def with_options(
@@ -227,6 +240,7 @@ class _SyncTransport(_BaseTransport):
         *,
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
+        traceparent: str | None = None,
     ) -> _SyncTransport:
         return _SyncTransport(
             self._secret_key,
@@ -234,6 +248,7 @@ class _SyncTransport(_BaseTransport):
             self._client,
             strict=self._strict if strict is None else strict,
             on_unknown_fields=on_unknown_fields or self._on_unknown_fields,
+            traceparent=traceparent or self._traceparent,
         )
 
     def request(
@@ -269,8 +284,15 @@ class _AsyncTransport(_BaseTransport):
         *,
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
+        traceparent: str | None = None,
     ) -> None:
-        super().__init__(secret_key, base_url, strict=strict, on_unknown_fields=on_unknown_fields)
+        super().__init__(
+            secret_key,
+            base_url,
+            strict=strict,
+            on_unknown_fields=on_unknown_fields,
+            traceparent=traceparent,
+        )
         self._client = client
 
     def with_options(
@@ -278,6 +300,7 @@ class _AsyncTransport(_BaseTransport):
         *,
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
+        traceparent: str | None = None,
     ) -> _AsyncTransport:
         return _AsyncTransport(
             self._secret_key,
@@ -285,6 +308,7 @@ class _AsyncTransport(_BaseTransport):
             self._client,
             strict=self._strict if strict is None else strict,
             on_unknown_fields=on_unknown_fields or self._on_unknown_fields,
+            traceparent=traceparent or self._traceparent,
         )
 
     async def request(

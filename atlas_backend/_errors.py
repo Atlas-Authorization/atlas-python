@@ -53,7 +53,23 @@ class ErrorCode:
     #: The key is valid but for another surface (e.g. a platform key on an instance route).
     WRONG_KEY_SURFACE = "WRONG_KEY_SURFACE"
     FORBIDDEN = "FORBIDDEN"
+    #: The key is valid but lacks a scope the call needs (``meta.required_scope``). Older
+    #: servers sent ``SCOPE_MISSING``; :attr:`AtlasError.is_insufficient_scope` accepts both.
+    INSUFFICIENT_SCOPE = "INSUFFICIENT_SCOPE"
+    #: The former spelling of ``INSUFFICIENT_SCOPE``, still accepted.
     SCOPE_MISSING = "SCOPE_MISSING"
+    #: A key locked to ``allowed_origins`` was used from another browser origin (403).
+    ORIGIN_NOT_ALLOWED = "ORIGIN_NOT_ALLOWED"
+    #: No such route; ``did_you_mean`` lists close matches, ``allowed_methods`` the verbs the
+    #: path does take.
+    ROUTE_NOT_FOUND = "ROUTE_NOT_FOUND"
+    #: The call needs a live (production) instance.
+    NOT_A_LIVE_INSTANCE = "NOT_A_LIVE_INSTANCE"
+    #: The call works on a test-mode instance only.
+    TEST_MODE_ONLY = "TEST_MODE_ONLY"
+    TESTING_UNAVAILABLE = "TESTING_UNAVAILABLE"
+    #: Partner links are not available for this partner or deployment.
+    PARTNER_LINK_UNAVAILABLE = "PARTNER_LINK_UNAVAILABLE"
     IDENTIFIER_EXISTS = "IDENTIFIER_EXISTS"
     IDENTIFIER_NOT_FOUND = "IDENTIFIER_NOT_FOUND"
     VERIFICATION_EXPIRED = "VERIFICATION_EXPIRED"
@@ -153,6 +169,12 @@ class ErrorItem(TypedDict, total=False):
     message: str
     param: str
     meta: dict[str, Any]
+    #: ``ROUTE_NOT_FOUND``: close route matches.
+    did_you_mean: list[str]
+    #: ``ROUTE_NOT_FOUND``: the HTTP methods the path does accept.
+    allowed_methods: list[str]
+    #: A link to the error's documentation page.
+    docs_url: str
 
 
 class AtlasError(Exception):
@@ -188,3 +210,52 @@ class AtlasError(Exception):
     def has_code(self, code: str) -> bool:
         """True when any error in the envelope carries the given stable code."""
         return any(e.get("code") == code for e in self.errors)
+
+    @property
+    def is_insufficient_scope(self) -> bool:
+        """The key lacks a scope (``INSUFFICIENT_SCOPE``, or the former ``SCOPE_MISSING``)."""
+        return self.has_code(ErrorCode.INSUFFICIENT_SCOPE) or self.has_code(ErrorCode.SCOPE_MISSING)
+
+    @property
+    def required_scope(self) -> str | None:
+        """The scope an ``INSUFFICIENT_SCOPE`` error says is missing (``meta.required_scope``)."""
+        for e in self.errors:
+            if e.get("code") in (ErrorCode.INSUFFICIENT_SCOPE, ErrorCode.SCOPE_MISSING):
+                scope = (e.get("meta") or {}).get("required_scope")
+                if isinstance(scope, str):
+                    return scope
+        return None
+
+    @property
+    def is_step_up_required(self) -> bool:
+        """The call needs a recent second factor (``STEP_UP_REQUIRED``)."""
+        return self.has_code(ErrorCode.STEP_UP_REQUIRED)
+
+    @property
+    def is_origin_not_allowed(self) -> bool:
+        """The key is locked to other browser origins (``ORIGIN_NOT_ALLOWED``)."""
+        return self.has_code(ErrorCode.ORIGIN_NOT_ALLOWED)
+
+    @property
+    def did_you_mean(self) -> list[str]:
+        """``ROUTE_NOT_FOUND``: close route matches (empty otherwise)."""
+        for e in self.errors:
+            if e.get("did_you_mean"):
+                return list(e["did_you_mean"])
+        return []
+
+    @property
+    def allowed_methods(self) -> list[str]:
+        """``ROUTE_NOT_FOUND``: the HTTP methods the path accepts (empty otherwise)."""
+        for e in self.errors:
+            if e.get("allowed_methods"):
+                return list(e["allowed_methods"])
+        return []
+
+    @property
+    def docs_url(self) -> str | None:
+        """A link to the first error's documentation page, when Atlas sent one."""
+        for e in self.errors:
+            if e.get("docs_url"):
+                return e["docs_url"]
+        return None
