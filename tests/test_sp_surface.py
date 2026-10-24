@@ -830,6 +830,8 @@ def test_oidc_org_and_sso_claims() -> None:
         "org_permissions": ["org:read", 3],
         "orgs": [{"id": "org_1", "slug": "acme", "role": "admin"}, {"slug": "x"}],
         "sso_connection_id": "sso_1",
+        "sso_organization_id": "org_1",
+        "sso_connection_type": "saml",
         "sso_tenant_id": "tid",
         "sso_issuer": "https://idp",
         "sso_domain": "acme.com",
@@ -843,6 +845,8 @@ def test_oidc_org_and_sso_claims() -> None:
     assert oidc_organizations_of(claims) == [{"id": "org_1", "slug": "acme", "role": "admin"}]
     assert oidc_sso_of(claims) == {
         "connection_id": "sso_1",
+        "organization_id": "org_1",
+        "type": "saml",
         "tenant_id": "tid",
         "issuer": "https://idp",
         "domain": "acme.com",

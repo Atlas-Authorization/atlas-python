@@ -13,6 +13,81 @@ from typing import Any, Literal, TypedDict, Union
 
 from ._types import Metadata
 
+class SecretsSealed(TypedDict):
+    """Says a response was sealed to your ``X-Secret-Recipient`` key: each listed field
+    arrives as ``sealed_<field>`` (open it with ``SealedBox.open``) instead of in plaintext."""
+
+    algorithm: str
+    recipient: str
+    fields: list[str]
+
+
+class SealedSecrets(TypedDict, total=False):
+    """The ``sealed_*`` fields any shown-once secret response can carry when the request
+    named a recipient (``X-Secret-Recipient``, or ``secret_recipient`` on the client). The
+    plaintext field is then absent."""
+
+    sealed_secret: str
+    sealed_client_secret: str
+    sealed_webhook_secret: str
+    secrets_sealed: SecretsSealed
+
+
+class AtlasIdOriginSeen(TypedDict):
+    """A page origin the Sign in with Atlas button script ran on (last 7 days)."""
+
+    origin: str
+    last_seen_at: int
+    requests: int
+
+
+class DryRunChange(TypedDict):
+    section: str
+    before: Any
+    after: Any
+
+
+class DryRunWarning(TypedDict, total=False):
+    code: str
+    message: str
+
+
+class DryRunValidationSkipped(TypedDict):
+    reason: Literal["external_call", "database", "unsupported_response"]
+    detail: str
+
+
+class _DryRunResultRequired(TypedDict):
+    object: Literal["dry_run"]
+    dry_run: Literal[True]
+    #: ``native``: the endpoint's own dry run, validated in full. ``rollback``: the real
+    #: write ran in a transaction that was rolled back, every side effect held back,
+    #: validated in full. ``plan``: validation could not run to the end (see
+    #: ``validation_skipped``).
+    mode: Literal["native", "rollback", "plan"]
+    validated: bool
+    method: str
+    path: str
+    changes: list[DryRunChange]
+    note: str
+
+
+class DryRunResult(_DryRunResultRequired, total=False):
+    """What a write answers with ``dry_run=True``."""
+
+    #: The same non-fatal warnings the real write returns (e.g. ``origin_still_referenced``).
+    warnings: list[DryRunWarning]
+    #: What the real write would return (secrets redacted).
+    would_return: Any
+    #: The status the real write would answer with (``rollback`` mode).
+    would_return_status: int
+    #: Side effects held back: ``email``, ``sms``, ``voice``, ``push``, ``outbound_network``,
+    #: ``redis``, ``cache``, ``file``.
+    suppressed: list[str]
+    #: ``plan`` mode: why validation did not run to the end.
+    validation_skipped: DryRunValidationSkipped
+
+
 # --------------------------------------------------------------------------- #
 # Users                                                                        #
 # --------------------------------------------------------------------------- #
@@ -640,7 +715,7 @@ class _OAuthClientRequired(TypedDict):
     updated_at: int
 
 
-class OAuthClient(_OAuthClientRequired, total=False):
+class OAuthClient(_OAuthClientRequired, SealedSecrets, total=False):
     #: After a rotation with overlap: when the previous secret stops working (epoch ms).
     #: ``None`` when only the current secret is accepted.
     previous_secret_expires_at: int | None
@@ -700,7 +775,7 @@ class _OAuthClientSecretRotationRequired(_OAuthClientRequired):
     previous_secret_expires_at: int | None
 
 
-class OAuthClientSecretRotation(_OAuthClientSecretRotationRequired, total=False):
+class OAuthClientSecretRotation(_OAuthClientSecretRotationRequired, SealedSecrets, total=False):
     """The rotate response: the client, its new secret (shown once) and the overlap."""
 
     note: str
@@ -1031,7 +1106,7 @@ class ScimRoleMapping(TypedDict):
     role: str
 
 
-class ScimToken(_ScimTokenRequired, total=False):
+class ScimToken(_ScimTokenRequired, SealedSecrets, total=False):
     #: ``None`` = read and write; ``["read"]`` = read-only.
     scopes: list[str] | None
     role_mappings: list[ScimRoleMapping]
@@ -1309,7 +1384,7 @@ class _AtlasIdAppRequired(TypedDict):
     updated_at: int
 
 
-class AtlasIdApp(_AtlasIdAppRequired, total=False):
+class AtlasIdApp(_AtlasIdAppRequired, SealedSecrets, total=False):
     """A Sign in with Atlas app (an OpenID Connect client on https://atlasauth.net)."""
 
     logo_url: str | None
@@ -1317,6 +1392,11 @@ class AtlasIdApp(_AtlasIdAppRequired, total=False):
     branding: AtlasIdAppBranding
     secret_prefix: str | None
     managed_by_instance_id: str | None
+    #: ``instance_toggle``: an instance's Sign in with Atlas toggle app; ``adopted``: handed
+    #: to an instance with ``atlas_id_apps.set_managed_by``.
+    managed_via: Literal["instance_toggle", "adopted"] | None
+    #: The page origins the Sign in with Atlas button script ran on in the last 7 days.
+    button_rendered_origins: list[AtlasIdOriginSeen]
     #: How many people have signed in to this app (on reads).
     user_count: int
     #: Confidential apps only; returned exactly once (on create and rotate_secret).
@@ -1339,6 +1419,19 @@ class AtlasIdApp(_AtlasIdAppRequired, total=False):
     secret_issued_at: int | None
     #: On a rotation: the overlap applied, in seconds.
     overlap_seconds: int
+
+
+class SetAtlasIdAppManagedByBody(TypedDict):
+    """Body of ``atlas_id_apps.set_managed_by``: the instance to hand grant management to,
+    or ``None`` to take it back."""
+
+    instance_id: str | None
+
+
+class AtlasIdAppManagedBy(AtlasIdApp):
+    """``PUT /v1/platform/atlas_id_apps/{id}/managed_by``: the app, plus whether anything changed."""
+
+    changed: bool
 
 
 class RotateAtlasIdAppSecretBody(TypedDict, total=False):
@@ -1901,7 +1994,7 @@ class _ApiKeyCreateRequired(TypedDict):
     secret: str
 
 
-class ApiKeyCreate(_ApiKeyCreateRequired, total=False):
+class ApiKeyCreate(_ApiKeyCreateRequired, SealedSecrets, total=False):
     #: Tenant-defined scopes embedded into tokens minted from this key.
     scopes: list[str] | None
     #: Arbitrary constraint claims (e.g. desk_ids, cwd, run_as) embedded into minted tokens.
@@ -3708,7 +3801,7 @@ class ProxySecret(TypedDict):
     client_ip_header: Literal["X-Atlas-Client-IP"]
 
 
-class ProxySecretCreated(ProxySecret):
+class ProxySecretCreated(ProxySecret, SealedSecrets):
     """Create / rotate result: the secret, shown only here."""
 
     #: ``aps_...``. Store it in your proxy's environment; Atlas keeps only a hash.
@@ -4582,7 +4675,7 @@ class _MachineWithSecretRequired(TypedDict):
     secret: str
 
 
-class MachineWithSecret(_MachineWithSecretRequired, total=False):
+class MachineWithSecret(_MachineWithSecretRequired, SealedSecrets, total=False):
     #: Owning org, when org-scoped.
     organization_id: str | None
     #: Owning user, when a user-owned device.
@@ -5754,7 +5847,7 @@ class _PlatformAppWithSecretRequired(TypedDict):
     secret: str
 
 
-class PlatformAppWithSecret(_PlatformAppWithSecretRequired, total=False):
+class PlatformAppWithSecret(_PlatformAppWithSecretRequired, SealedSecrets, total=False):
     note: str
     #: The declared integration per allowed origin (``redirect`` | ``embedded``).
     allowed_origin_integrations: dict[str, Literal["redirect", "embedded"]]
@@ -5846,7 +5939,7 @@ class CreatePlatformAppInstanceBody(TypedDict, total=False):
     allowed_origins: Any
 
 
-class AppSecret(TypedDict):
+class AppSecret(SealedSecrets):
     object: Literal["app_secret"]
     id: str
     secret: str
@@ -5876,7 +5969,7 @@ class _PlatformInstanceSecretRotationRequired(TypedDict):
     note: str
 
 
-class PlatformInstanceSecretRotation(_PlatformInstanceSecretRotationRequired, total=False):
+class PlatformInstanceSecretRotation(_PlatformInstanceSecretRotationRequired, SealedSecrets, total=False):
     """``apps.rotate_instance_secret`` response."""
 
 
@@ -5888,7 +5981,7 @@ class _PlatformAppRotateSecretResultRequired(TypedDict):
     note: str
 
 
-class PlatformAppRotateSecretResult(_PlatformAppRotateSecretResultRequired, total=False):
+class PlatformAppRotateSecretResult(_PlatformAppRotateSecretResultRequired, SealedSecrets, total=False):
     previous_keys_expire_at: int | None
 
 
@@ -6919,7 +7012,7 @@ class WebhookDeliveryAttempt(TypedDict):
     note: str
 
 
-class WebhookSecret(TypedDict):
+class WebhookSecret(SealedSecrets):
     object: Literal["webhook_secret"]
     #: The current whsec_ signing secret.
     secret: str
@@ -6930,7 +7023,7 @@ class _WebhookSecretRotationRequired(TypedDict):
     secret: str
 
 
-class WebhookSecretRotation(_WebhookSecretRotationRequired, total=False):
+class WebhookSecretRotation(_WebhookSecretRotationRequired, SealedSecrets, total=False):
     warning: str
     #: The overlap applied, in seconds.
     overlap_seconds: int
@@ -7335,6 +7428,29 @@ class AtlasIdAppPreflight(TypedDict):
     #: People who have approved the app.
     user_count: int
     findings: list[PreflightFindingsItem]
+
+
+class AtlasIdAppAuthorizeRequests7d(TypedDict):
+    """How the last 7 days' sign-ins started."""
+
+    button: int
+    js: int
+    fedcm: int
+    fallback: int
+    unmarked: int
+
+
+class AtlasIdAppPreflightDetail(AtlasIdAppPreflight, total=False):
+    """The D08 fields of an app's setup check."""
+
+    #: The page origins the Sign in with Atlas button script ran on in the last 7 days.
+    button_rendered_origins: list[AtlasIdOriginSeen]
+    #: How the last 7 days' sign-ins started.
+    authorize_requests_7d: AtlasIdAppAuthorizeRequests7d
+    #: Origins of sign-ins that came through the no-script fallback link.
+    fallback_origins: list[AtlasIdOriginSeen]
+    #: Whether the app's homepage references the button script (``None`` = could not check).
+    homepage_includes_script: bool | None
 
 
 class AtlasIdAppUser(TypedDict):
@@ -8480,7 +8596,7 @@ class PolicySourceSync(_PolicySourceSyncRequired, total=False):
 # --------------------------------------------------------------------------- #
 
 
-class SecretKey(TypedDict, total=False):
+class SecretKey(TypedDict, SealedSecrets, total=False):
     """A secret key (``/v1/secret_keys``). The secret itself (``secret``, or
     ``sealed_secret`` when ``secret_recipient`` was sent) is returned once, on create and
     rotate."""
@@ -8539,7 +8655,7 @@ class UpdateSecretKeyBody(TypedDict, total=False):
     metadata: dict[str, Any]
 
 
-class PlatformKey(TypedDict, total=False):
+class PlatformKey(TypedDict, SealedSecrets, total=False):
     """A platform key (``psk``) as listed by ``platform.keys``."""
 
     object: str
@@ -8675,6 +8791,11 @@ class OidcSsoContext(TypedDict):
     """The enterprise SSO context of a sign-in (the ID token's ``sso_*`` claims)."""
 
     connection_id: str
+    #: The Atlas organization that owns the connection (``sso_organization_id``), or ``None``
+    #: for an instance-wide connection. Independent of ``org_id``.
+    organization_id: str | None
+    #: The connection protocol (``sso_connection_type``).
+    type: Literal["saml", "oidc"] | None
     tenant_id: str | None
     issuer: str | None
     domain: str | None

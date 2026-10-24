@@ -2,6 +2,18 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.18.0 — 2026-10-24
+
+### Added
+
+- **Enterprise SSO claims.** `SessionClaims` reads `sso_connection_id`, `sso_organization_id` and `sso_connection_type`; `oidc_sso_of` returns `organization_id` and `type` next to `connection_id`. `OidcSsoContext` gains both. Scope a per-organization "require SSO" rule on `sso_organization_id`, never on "signed in via SSO".
+- **Adopting a Sign in with Atlas app.** `atlas_id_apps.set_managed_by(app_id, instance_id | None)` (`PUT /v1/platform/atlas_id_apps/{id}/managed_by`, sync and async) hands an app's grants to an instance, or takes them back; typed `AtlasIdAppManagedBy`. `AtlasIdApp` gains `managed_via` (`instance_toggle` | `adopted`) and `button_rendered_origins`.
+- **Instance-surface app setup check.** `atlas_id_grants.preflight(app_id)` (`GET /v1/atlas_id_apps/{id}/preflight`). The app setup check type `AtlasIdAppPreflightDetail` adds `button_rendered_origins`, `authorize_requests_7d`, `fallback_origins` and `homepage_includes_script`.
+- **Dry run.** `DryRunResult` types the answer to `dry_run=True`: `mode` (`native` | `rollback` | `plan`), `validated`, `warnings`, `would_return_status`, `would_return`, `suppressed`, `validation_skipped`.
+- **Sealed secrets.** `secret_recipient=` on `AtlasClient`, `AsyncAtlasClient`, the platform clients and `with_options(...)` sends `X-Secret-Recipient` on every request, so every route that returns a shown-once secret answers sealed. `SealedSecrets` (`sealed_secret`, `sealed_client_secret`, `sealed_webhook_secret`, `secrets_sealed`) and `SecretsSealed` are mixed into the secret-bearing response types.
+- `CursorPage` accepts `object: "list"`.
+- API coverage list: 733 operations.
+
 ## 0.17.0 — 2026-10-24
 
 ### Added

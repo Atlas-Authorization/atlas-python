@@ -6245,7 +6245,7 @@ class PlatformAtlasIdApps:
             path=f"/v1/platform/atlas_id_apps/{app_id}/backchannel_logout/test",
         )
 
-    def preflight(self, app_id: str) -> m.AtlasIdAppPreflight:
+    def preflight(self, app_id: str) -> m.AtlasIdAppPreflightDetail:
         """Check one app's setup, in the instance preflight's finding shape."""
         return self._t.request(
             method="GET",
@@ -6269,6 +6269,20 @@ class PlatformAtlasIdApps:
         return self._t.request(
             method="DELETE",
             path=f"/v1/platform/atlas_id_apps/{app_id}/grants/{grant_id}",
+        )
+
+    def set_managed_by(
+        self, app_id: str, instance_id: str | None
+    ) -> m.AtlasIdAppManagedBy:
+        """Hand the app's grant management to an instance of the same account
+        (``managed_via: "adopted"``), or take it back with ``None``. That instance's secret
+        key, scoped to ``privacy:grants:revoke`` or ``atlas_id_grants:*``, then lists and
+        revokes the app's grants, so a data-rights tool never needs the platform key.
+        """
+        return self._t.request(
+            method="PUT",
+            path=f"/v1/platform/atlas_id_apps/{app_id}/managed_by",
+            body={"instance_id": instance_id},
         )
 
     def move_origin(self, app_id: str, body: m.OriginMoveBody) -> m.OriginMove:
@@ -7076,6 +7090,10 @@ class AtlasIdGrants:
         return self._t.request(
             method="GET", path=f"/v1/atlas_id_apps/{_enc(app_id)}/users", query={"email": email}
         )
+
+    def preflight(self, app_id: str) -> m.AtlasIdAppPreflightDetail:
+        """The setup check of an app this instance manages (``diagnostics:read`` is enough)."""
+        return self._t.request(method="GET", path=f"/v1/atlas_id_apps/{_enc(app_id)}/preflight")
 
     def revoke_grant(self, app_id: str, grant_id: str) -> JSON:
         return self._t.request(

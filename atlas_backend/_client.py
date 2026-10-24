@@ -61,6 +61,7 @@ class AtlasClient:
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
+        secret_recipient: str | None = None,
     ) -> None:
         if not secret_key:
             raise ValueError("AtlasClient requires a secret_key.")
@@ -74,6 +75,7 @@ class AtlasClient:
                 strict=strict,
                 on_unknown_fields=on_unknown_fields,
                 traceparent=traceparent,
+                secret_recipient=secret_recipient,
             )
         )
 
@@ -188,6 +190,7 @@ class AtlasClient:
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
+        secret_recipient: str | None = None,
     ) -> AtlasClient:
         """A copy of this client with per-call overrides, sharing its connection.
 
@@ -199,7 +202,10 @@ class AtlasClient:
         clone._http = self._http
         clone._wire(
             self._transport.with_options(
-                strict=strict, on_unknown_fields=on_unknown_fields, traceparent=traceparent
+                strict=strict,
+                on_unknown_fields=on_unknown_fields,
+                traceparent=traceparent,
+                secret_recipient=secret_recipient,
             )
         )
         return clone
@@ -234,6 +240,7 @@ class AsyncAtlasClient:
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
+        secret_recipient: str | None = None,
     ) -> None:
         if not secret_key:
             raise ValueError("AsyncAtlasClient requires a secret_key.")
@@ -247,6 +254,7 @@ class AsyncAtlasClient:
                 strict=strict,
                 on_unknown_fields=on_unknown_fields,
                 traceparent=traceparent,
+                secret_recipient=secret_recipient,
             )
         )
 
@@ -361,6 +369,7 @@ class AsyncAtlasClient:
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
+        secret_recipient: str | None = None,
     ) -> AsyncAtlasClient:
         """A copy of this client with per-call overrides, sharing its connection."""
         clone = object.__new__(AsyncAtlasClient)
@@ -368,7 +377,10 @@ class AsyncAtlasClient:
         clone._http = self._http
         clone._wire(
             self._transport.with_options(
-                strict=strict, on_unknown_fields=on_unknown_fields, traceparent=traceparent
+                strict=strict,
+                on_unknown_fields=on_unknown_fields,
+                traceparent=traceparent,
+                secret_recipient=secret_recipient,
             )
         )
         return clone
@@ -409,6 +421,7 @@ class AtlasPlatformClient:
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
+        secret_recipient: str | None = None,
     ) -> None:
         if not platform_key:
             raise ValueError("AtlasPlatformClient requires a platform_key.")
@@ -422,6 +435,7 @@ class AtlasPlatformClient:
                 strict=strict,
                 on_unknown_fields=on_unknown_fields,
                 traceparent=traceparent,
+                secret_recipient=secret_recipient,
             )
         )
 
@@ -443,6 +457,7 @@ class AtlasPlatformClient:
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
+        secret_recipient: str | None = None,
     ) -> AtlasPlatformClient:
         """A copy of this client with per-call overrides, sharing its connection."""
         clone = object.__new__(AtlasPlatformClient)
@@ -450,7 +465,10 @@ class AtlasPlatformClient:
         clone._http = self._http
         clone._wire(
             self._transport.with_options(
-                strict=strict, on_unknown_fields=on_unknown_fields, traceparent=traceparent
+                strict=strict,
+                on_unknown_fields=on_unknown_fields,
+                traceparent=traceparent,
+                secret_recipient=secret_recipient,
             )
         )
         return clone
@@ -485,6 +503,7 @@ class AsyncAtlasPlatformClient:
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
+        secret_recipient: str | None = None,
     ) -> None:
         if not platform_key:
             raise ValueError("AsyncAtlasPlatformClient requires a platform_key.")
@@ -498,6 +517,7 @@ class AsyncAtlasPlatformClient:
                 strict=strict,
                 on_unknown_fields=on_unknown_fields,
                 traceparent=traceparent,
+                secret_recipient=secret_recipient,
             )
         )
 
@@ -519,6 +539,7 @@ class AsyncAtlasPlatformClient:
         strict: bool | None = None,
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
+        secret_recipient: str | None = None,
     ) -> AsyncAtlasPlatformClient:
         """A copy of this client with per-call overrides, sharing its connection."""
         clone = object.__new__(AsyncAtlasPlatformClient)
@@ -526,7 +547,10 @@ class AsyncAtlasPlatformClient:
         clone._http = self._http
         clone._wire(
             self._transport.with_options(
-                strict=strict, on_unknown_fields=on_unknown_fields, traceparent=traceparent
+                strict=strict,
+                on_unknown_fields=on_unknown_fields,
+                traceparent=traceparent,
+                secret_recipient=secret_recipient,
             )
         )
         return clone

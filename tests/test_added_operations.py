@@ -27,6 +27,12 @@ MOVE = {"from": "https://old.example.com", "to": "https://new.example.com", "dry
 Row = tuple[str, str, Any, Callable[[Any], Any]]
 
 BAPI: list[Row] = [
+    (
+        "GET",
+        "/v1/atlas_id_apps/app_1/preflight",
+        None,
+        lambda c: c.atlas_id_grants.preflight("app_1"),
+    ),
     ("POST", "/v1/instance/move_origin", MOVE, lambda c: c.instance.move_origin(MOVE)),
     ("GET", "/v1/instance/connections", None, lambda c: c.instance.connections()),
     (
@@ -180,6 +186,18 @@ PLATFORM: list[Row] = [
         "/v1/platform/atlas_id_apps/app_1/move_origin",
         MOVE,
         lambda c: c.atlas_id_apps.move_origin("app_1", MOVE),
+    ),
+    (
+        "PUT",
+        "/v1/platform/atlas_id_apps/app_1/managed_by",
+        {"instance_id": "ins_1"},
+        lambda c: c.atlas_id_apps.set_managed_by("app_1", "ins_1"),
+    ),
+    (
+        "PUT",
+        "/v1/platform/atlas_id_apps/app_1/managed_by",
+        {"instance_id": None},
+        lambda c: c.atlas_id_apps.set_managed_by("app_1", None),
     ),
     (
         "POST",

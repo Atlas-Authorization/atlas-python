@@ -78,6 +78,14 @@ class SessionClaims:
     org_slug: str = ""
     org_role: str = ""
     org_permissions: list[str] = field(default_factory=list)
+    #: ``sso_connection_id``: the enterprise SSO connection the session was made through.
+    sso_connection_id: str = ""
+    #: ``sso_organization_id``: the Atlas organization that owns that connection ("" for an
+    #: instance-wide connection). Independent of ``org_id``: scope a per-organization
+    #: "require SSO" rule on this, never on "signed in via SSO".
+    sso_organization_id: str = ""
+    #: ``sso_connection_type``: ``"saml"`` or ``"oidc"`` ("" when absent).
+    sso_connection_type: str = ""
 
     #: The full claim set, including any not modelled above.
     raw: dict[str, Any] = field(default_factory=dict)
@@ -143,6 +151,13 @@ class SessionClaims:
             org_slug=str(claims.get("org_slug", "")),
             org_role=str(claims.get("org_role", "")),
             org_permissions=list(perms) if isinstance(perms, (list, tuple)) else [],
+            sso_connection_id=str(claims.get("sso_connection_id", "") or ""),
+            sso_organization_id=str(claims.get("sso_organization_id", "") or ""),
+            sso_connection_type=(
+                claims["sso_connection_type"]
+                if claims.get("sso_connection_type") in ("saml", "oidc")
+                else ""
+            ),
             raw=dict(claims),
         )
 

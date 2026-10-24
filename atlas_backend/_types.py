@@ -23,7 +23,7 @@ Metadata = dict[str, Any]
 JSON = dict[str, Any]
 
 
-class CursorPage(TypedDict):
+class _CursorPageRequired(TypedDict):
     """The ``GET /v1/users``-style cursor page.
 
     No total, a boolean ``has_more``, and an opaque ``next_cursor`` to pass back
@@ -33,6 +33,11 @@ class CursorPage(TypedDict):
     data: list[Any]
     has_more: bool
     next_cursor: str | None
+
+
+class CursorPage(_CursorPageRequired, total=False):
+    #: ``"list"`` on the lists that carry the envelope.
+    object: str
 
 
 class ListPage(TypedDict, total=False):

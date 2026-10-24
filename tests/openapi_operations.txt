@@ -363,6 +363,7 @@ GET /v1/platform/atlas_id_apps/{id}/backchannel_deliveries
 POST /v1/platform/atlas_id_apps/{id}/backchannel_logout/test
 DELETE /v1/platform/atlas_id_apps/{id}/grants/{grantId}
 POST /v1/platform/atlas_id_apps/{id}/move_origin
+PUT /v1/platform/atlas_id_apps/{id}/managed_by
 GET /v1/platform/atlas_id_apps/{id}/preflight
 POST /v1/platform/atlas_id_apps/{id}/rotate_secret
 GET /v1/platform/atlas_id_apps/{id}/users
@@ -635,6 +636,7 @@ DELETE /v1/partner_links/{id}
 DELETE /v1/platform/audit_streams/{id}
 GET /.well-known/api-catalog
 GET /v1/atlas_id_apps
+GET /v1/atlas_id_apps/{app_id}/preflight
 GET /v1/atlas_id_apps/{app_id}/users
 GET /v1/audit_exports
 GET /v1/audit_exports/{id}

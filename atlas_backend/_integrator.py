@@ -470,8 +470,10 @@ def oidc_organizations_of(claims: Mapping[str, Any]) -> Optional[list[dict[str, 
 
 def oidc_sso_of(claims: Mapping[str, Any]) -> Optional[dict[str, Optional[str]]]:
     """The enterprise SSO connection the user signed in through (``sso_connection_id``,
-    ``sso_tenant_id``, ``sso_issuer``, ``sso_domain``), or ``None``. Returns
-    ``{"connection_id", "tenant_id", "issuer", "domain"}``."""
+    ``sso_organization_id``, ``sso_connection_type``, ``sso_tenant_id``, ``sso_issuer``,
+    ``sso_domain``), or ``None``. Returns ``{"connection_id", "organization_id", "type",
+    "tenant_id", "issuer", "domain"}``. ``organization_id`` is the Atlas organization that
+    owns the connection (``None`` for an instance-wide one), independent of ``org_id``."""
     cid = claims.get("sso_connection_id")
     if not isinstance(cid, str):
         return None
@@ -480,8 +482,11 @@ def oidc_sso_of(claims: Mapping[str, Any]) -> Optional[dict[str, Optional[str]]]
         v = claims.get(key)
         return v if isinstance(v, str) else None
 
+    ctype = claims.get("sso_connection_type")
     return {
         "connection_id": cid,
+        "organization_id": s("sso_organization_id"),
+        "type": ctype if ctype in ("saml", "oidc") else None,
         "tenant_id": s("sso_tenant_id"),
         "issuer": s("sso_issuer"),
         "domain": s("sso_domain"),
