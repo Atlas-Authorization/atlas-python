@@ -8799,3 +8799,224 @@ class OidcSsoContext(TypedDict):
     tenant_id: str | None
     issuer: str | None
     domain: str | None
+
+
+# --------------------------------------------------------------------------- #
+# Partner platforms, per-call audiences, privacy orchestrator, operator        #
+# --------------------------------------------------------------------------- #
+
+
+class PartnerPlatformRegistrationState(TypedDict):
+    status: Literal["unregistered", "registered"]
+    registered_at: int | None
+
+
+class PartnerPlatform(TypedDict, total=False):
+    """A product that signs its partner deliveries with a published Ed25519 key set. The
+    partner token is write-only: only ``token_set`` and ``token_prefix`` are ever returned."""
+
+    object: Literal["partner_platform"]
+    id: str
+    partner: str
+    name: str
+    preset: bool
+    platform_id: str
+    enabled: bool
+    jwks_url: str
+    signature_header: str
+    signature_scheme: Literal["t_kid_ed25519"]
+    tolerance_seconds: int
+    allowed_sources: list[str]
+    record_consents: bool
+    receiver_url: str
+    receiver_url_template: str
+    serves_deployment: bool
+    registration: PartnerPlatformRegistrationState
+    token_set: bool
+    token_prefix: str | None
+    last_delivery_at: int | None
+    last_delivery_error: str | None
+    created_at: int
+    updated_at: int
+
+
+class PartnerPlatformList(TypedDict, total=False):
+    object: str
+    data: list[PartnerPlatform]
+    has_more: bool
+    #: The ready-made partner defaults a ``partner`` id can pick.
+    presets: list[dict[str, Any]]
+
+
+class PartnerPlatformInput(TypedDict, total=False):
+    """Body of ``partner_platforms.set``; every field is optional (a preset fills defaults)."""
+
+    name: str | None
+    platform_id: str
+    enabled: bool
+    jwks_url: str
+    signature_header: str
+    signature_scheme: Literal["t_kid_ed25519"]
+    tolerance_seconds: int
+    allowed_sources: list[str]
+    record_consents: bool
+    serves_deployment: bool
+
+
+class PartnerPlatformDeleted(TypedDict):
+    object: Literal["partner_platform"]
+    partner: str
+    deleted: Literal[True]
+
+
+class PartnerPlatformSignature(TypedDict):
+    header: str
+    scheme: str
+    format: str
+    jwks_url: str
+    tolerance_seconds: int
+
+
+class PartnerPlatformSendTo(TypedDict):
+    contact: str
+    docs: str
+
+
+class PartnerPlatformRegistration(TypedDict):
+    """What to send the partner so it can register this instance as a receiver."""
+
+    object: Literal["partner_platform_registration"]
+    partner: str
+    platform_id: str
+    receiver_url: str
+    receiver_url_is_template: bool
+    external_id: str | None
+    events: list[str]
+    signature: PartnerPlatformSignature
+    send_to: PartnerPlatformSendTo | None
+    token_prefix: str | None
+    next_step: str
+
+
+class PartnerDelivery(TypedDict):
+    object: Literal["partner_delivery"]
+    event_id: str | None
+    event_type: str | None
+    outcome: Literal[
+        "recorded", "unchanged", "no_subject", "no_user", "source_not_allowed", "ignored"
+    ]
+    user_id: str | None
+    received_at: int
+
+
+class PerCallAudience(TypedDict, total=False):
+    """An integration's ``per_call_audience``: ``sessions.get_token(..., audience_params=
+    {param: value})`` mints a token whose ``aud`` is ``template`` with ``{<param>}`` filled
+    in, when the value is the configured one, listed in ``allowed``, or ``any_matching`` is on.
+    Set it to ``None`` on ``integrations.set`` to mint for the configured audience only."""
+
+    #: The per-call parameter, e.g. ``cbid``, ``channel``, ``org_id`` or your own.
+    param: str
+    #: The audience with ``{<param>}`` in it once (required for a custom integration).
+    template: str
+    #: Further permitted values of the parameter (not whole audiences).
+    allowed: list[str]
+    #: Any value of the format is permitted.
+    any_matching: bool
+    #: Read only: true when this is the preset default.
+    default: bool
+
+
+class PrivacyOrchestrator(TypedDict, total=False):
+    object: Literal["privacy_orchestrator"]
+    configured: bool
+    enabled: bool
+    provider: str | None
+    name: str | None
+    case_url: str | None
+    cancel_url: str | None
+    auth_header: str
+    auth_scheme: str
+    api_key_set: bool
+    signing_secret_set: bool
+    use_partner_link: bool
+    #: The partner link the orchestrator's owner granted this instance (sent as ``X-Partner-Link``).
+    partner_link_id: str | None
+    #: The orchestrator-side site a case is for.
+    site_id: str | None
+    open_closure_cases: bool
+    #: Cancel a self-scheduled deletion when the person signs back in during the grace period.
+    cancel_deletion_on_sign_in: bool
+    completion_webhook: dict[str, Any] | None
+    last_case_at: int | None
+    last_error: str | None
+    last_error_at: int | None
+    #: Ready-made orchestrator presets; each may carry a ``case_format``.
+    presets: list[dict[str, Any]]
+    #: Only on the write that minted it.
+    signing_secret: str
+    #: Only on the write that created the completion endpoint.
+    completion_webhook_secret: str
+
+
+class PrivacyOrchestratorInput(TypedDict, total=False):
+    provider: str
+    name: str
+    enabled: bool
+    case_url: str | None
+    #: Must contain ``{id}``.
+    cancel_url: str | None
+    auth_header: str
+    auth_scheme: Literal["bearer", "raw"]
+    api_key: str | None
+    use_partner_link: bool
+    #: Implies ``use_partner_link``.
+    partner_link_id: str | None
+    site_id: str | None
+    open_closure_cases: bool
+    cancel_deletion_on_sign_in: bool
+    sign_requests: bool
+    completion_webhook_url: str | None
+
+
+class OperatorConfiguration(TypedDict, total=False):
+    """``GET /v1/operator``."""
+
+    issuer: str
+    device_authorization_endpoint: str
+    token_endpoint: str
+    client_id: str
+    scope: str
+    token_exchange_endpoint: str
+    token_exchange_audience: Literal["atlas"]
+    root_action_max_mfa_age_seconds: int
+    #: Other products that accept Atlas operators (pass one as the device login ``audience``).
+    audiences: list[str]
+    #: The claims an operator access token carries.
+    access_token_claims: list[str]
+
+
+class OutboundPartnerLink(TypedDict, total=False):
+    object: Literal["outbound_partner_link"]
+    id: str
+    partner: str
+    name: str
+    preset: bool
+    resource: str | None
+    scopes: list[str]
+    base_url: str
+    token_url: str
+    client_id: str
+    auth_method: Literal["client_credentials", "bearer_secret"]
+    has_client_secret: Literal[True]
+    #: ``manual``, ``oauth_install`` (delivered by the partner) or ``registration`` (a partner
+    #: platform's stored partner token).
+    source: Literal["manual", "oauth_install", "registration"]
+    status: Literal["active", "revoked", "failing"]
+    expires_at: int | None
+    last_used_at: int | None
+    last_error: str | None
+    last_error_at: int | None
+    calls_30d: int
+    created_at: int
+    updated_at: int

@@ -40,6 +40,7 @@ from ._types import JSON, CursorPage, DeletedObject, ListPage
 from .resources import (
     BETTER_AUTH_IMPORT_IN_FLIGHT,
     BETTER_AUTH_IMPORT_PART_BYTES,
+    _audience_query,
     _csv,
     _dry,
     _enc,

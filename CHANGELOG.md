@@ -2,6 +2,19 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.19.0 — 2026-10-25
+
+### Added
+
+- **Partner platforms.** `partner_platforms` (`list`, `get`, `set`, `delete`, `registration`, `store_token(partner, token, rotate=, api_base_url=)`, `deliveries(limit=)`), sync and async. Typed `PartnerPlatform`, `PartnerPlatformInput`, `PartnerPlatformRegistration`, `PartnerDelivery`, `PartnerPlatformList`. The partner token is write-only: no response carries it, only `token_set` and `token_prefix`.
+- **Per-call audience.** `sessions.get_token` and `integrations.get_token` take `audience=`, `cbid=` and `audience_params=` (the integration's own parameter), sent as query parameters; the integration's `per_call_audience` (`param`, `template`, `allowed`, `any_matching`; `None` turns it off) decides what is permitted. Typed `PerCallAudience`.
+- **Privacy orchestrator.** Typed `PrivacyOrchestrator` / `PrivacyOrchestratorInput` with `site_id`, `partner_link_id` and `cancel_deletion_on_sign_in`; presets may carry `case_format`. `OutboundPartnerLink.source` gains `registration`.
+- **Operator.** `keys.operator()` returns the typed `OperatorConfiguration`, with `audiences` and `access_token_claims`.
+- `users.list(include_deleted=True)` returns soft-deleted users, which the list leaves out by default.
+- `ErrorCode.MANAGED_WAF_NOT_CONFIGURED` (422, `meta.action`).
+- The Sign in with Atlas grant routes (`atlas_id_apps.find_users`, `revoke_grant`) also accept the secret key of the instance that manages the app; `atlas_id_grants` is the same on the instance client.
+- API coverage list: 740 operations.
+
 ## 0.18.0 — 2026-10-24
 
 ### Added

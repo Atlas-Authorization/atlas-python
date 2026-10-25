@@ -617,6 +617,29 @@ returns `True` when it has seen it before (the token is then refused with reason
 `"replayed"`). Keep entries a few minutes — logout tokens live two. With several
 app servers, back it with a shared store such as Redis (`SET jti 1 NX EX 300`).
 
+## Partner platforms and per-call audiences (0.19)
+
+```python
+from atlas_backend import AtlasClient
+
+atlas = AtlasClient("atlas_live_sk_...")
+
+# This instance as a partner platform: what to send the partner, then the token it hands back.
+reg = atlas.partner_platforms.registration("acme-consent")
+atlas.partner_platforms.store_token("acme-consent", partner_token)  # write-only, never returned
+atlas.partner_platforms.deliveries("acme-consent", limit=20)
+
+# A per-call audience on the integration token mint.
+atlas.sessions.get_token(session_id, "acme", audience_params={"tenant": "t1"})
+atlas.sessions.get_token(session_id, "acme", audience="acme:t1")
+```
+
+`partner_platforms` (`list`, `get`, `set`, `delete`, `registration`, `store_token`, `deliveries`)
+is typed (`PartnerPlatform`, `PartnerPlatformRegistration`, `PartnerDelivery`). The partner token
+is write-only: no response, model or error carries it. `users.list(include_deleted=True)` also
+returns soft-deleted users. The privacy orchestrator takes `site_id`, `partner_link_id` and
+`cancel_deletion_on_sign_in`.
+
 ## Integrator platform (0.17)
 
 ```python
@@ -689,7 +712,7 @@ Sealed secrets need PyNaCl: `pip install "atlas-backend[sealed]"`.
 `network_acls`, `radius_clients`, `lti_platforms`, `rate_limit_policy`,
 `risk_based_mfa`, `bot_labels`, `bot_signals`, `captcha`, `managed_waf`,
 `diagnostics`, `mcp`, `mcp_connector`, `pca`, `testing`, `whoami`, `secret_keys`, `keys`,
-`partner_links` (+ `requests`, `outbound`), `atlas_id_grants`, `privacy`, `integrations`, `status`,
+`partner_links` (+ `requests`, `outbound`), `partner_platforms`, `atlas_id_grants`, `privacy`, `integrations`, `status`,
 `notices`, `security_advisories`, `audit_exports`, `sub_processors`, `entitlements`,
 `integration_health`, `embed`, `openapi`, `delivery_health`, `meta`.
 

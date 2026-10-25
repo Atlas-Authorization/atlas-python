@@ -48,6 +48,18 @@ def _meta(metadata: dict[str, Any] | None, **rest: Any) -> dict[str, Any]:
     return out
 
 
+def _audience_query(
+    audience: str | None, cbid: str | None, params: dict[str, str] | None
+) -> dict[str, Any]:
+    """The query of a per-call audience: the integration's parameters, ``cbid``, ``audience``."""
+    out: dict[str, Any] = {k: v for k, v in (params or {}).items() if v}
+    if cbid:
+        out["cbid"] = cbid
+    if audience:
+        out["audience"] = audience
+    return out
+
+
 def _enc(value: str) -> str:
     """Percent-encode one path segment."""
     return quote(value, safe="")
@@ -146,13 +158,15 @@ class Users:
         ]
         | None = None,
         include_total_count: bool | None = None,
+        include_deleted: bool | None = None,
     ) -> CursorPage:
         """List and search users. Every filter combines with AND. Page by cursor
         (``starting_after``) or, with ``offset``, by offset. ``query`` searches email,
         username, names, phone and ids; ``created_after`` / ``created_before`` are epoch
         ms, as are ``updated_after`` / ``updated_before`` (sync users changed since a
         checkpoint, with ``order_by="updated_at"``); ``include_total_count`` adds
-        ``total_count`` to the page.
+        ``total_count`` to the page. Soft-deleted users are left out unless
+        ``include_deleted=True``.
         """
 
         def _b(v: bool | None) -> str | None:
@@ -179,6 +193,7 @@ class Users:
                 updated_before=updated_before,
                 order_by=order_by,
                 include_total_count=_b(include_total_count),
+                include_deleted=_b(include_deleted),
             ),
         )
 
@@ -798,13 +813,27 @@ class Sessions:
         )
 
     def get_token(
-        self, session_id: str, for_: str, *, audience_hint: str | None = None
+        self,
+        session_id: str,
+        for_: str,
+        *,
+        audience_hint: str | None = None,
+        audience: str | None = None,
+        cbid: str | None = None,
+        audience_params: dict[str, str] | None = None,
     ) -> m.SessionToken:
         """``getToken({for})`` on the server: mint an integration token for a session, for a
-        product that trusts Atlas sessions (e.g. ``for_="referalli"``)."""
+        product that trusts Atlas sessions (e.g. ``for_="referalli"``).
+
+        A per-call audience picks the token's ``aud`` for this one mint, when the integration's
+        ``per_call_audience`` permits it (otherwise 403): ``audience`` is the whole audience,
+        ``cbid`` is the site id of an integration whose parameter is ``cbid``, and
+        ``audience_params`` carries any integration's own parameter (``{"tenant": "t1"}``).
+        """
         return self._t.request(
             method="POST",
             path=f"/v1/sessions/{_enc(session_id)}/integration_tokens/{_enc(for_)}",
+            query=_audience_query(audience, cbid, audience_params) or None,
             body={"audience_hint": audience_hint} if audience_hint else None,
         )
 
@@ -6254,7 +6283,9 @@ class PlatformAtlasIdApps:
 
     def find_users(self, app_id: str, email: str) -> m.AtlasIdAppUserList:
         """Privacy requests: is this person one of the app's users? Exact match on a
-        verified email; anyone else gets the same empty list.
+        verified email; anyone else gets the same empty list. An instance secret key of the
+        instance that manages the app (see ``set_managed_by``) can call this route too, and
+        ``atlas_id_grants.lookup`` is the same call on the instance client.
         """
         return self._t.request(
             method="GET",
@@ -6264,7 +6295,8 @@ class PlatformAtlasIdApps:
 
     def revoke_grant(self, app_id: str, grant_id: str) -> m.AtlasIdGrantRevocation:
         """Revoke one user's grant (``grant_id`` from ``find_users``); the next sign-in shows
-        the consent screen again.
+        the consent screen again. An instance secret key of the instance that manages the app
+        can call this route too (``atlas_id_grants.revoke_grant`` on the instance client).
         """
         return self._t.request(
             method="DELETE",
@@ -6911,8 +6943,10 @@ class Keys:
         (the leaked secret is the proof)."""
         return self._t.request(method="POST", path="/v1/keys/revoke_leaked", body=body)
 
-    def operator(self) -> JSON:
-        """``GET /v1/operator``: where the operator device flow and token exchange live."""
+    def operator(self) -> m.OperatorConfiguration:
+        """``GET /v1/operator``: where the operator device flow and token exchange live, the
+        other products that accept Atlas operators (``audiences``) and the claims an
+        operator access token carries (``access_token_claims``)."""
         return self._t.request(method="GET", path="/v1/operator")
 
     def exchange_token(self, body: dict[str, Any]) -> JSON:
@@ -7035,6 +7069,62 @@ class _OutboundPartnerLinks:
         )
 
 
+class PartnerPlatforms:
+    """``/v1/partner_platforms``: this instance as a partner platform of another product, a
+    product that signs its partner deliveries with a published Ed25519 key set. The partner
+    delivers signed consent events to this instance's receiver; registering is done by the
+    partner from ``registration(...)``, and the partner token it hands back is stored once,
+    encrypted, and never returned by any call."""
+
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def list(self) -> m.PartnerPlatformList:
+        return self._t.request(method="GET", path="/v1/partner_platforms")
+
+    def get(self, partner: str) -> m.PartnerPlatform:
+        return self._t.request(method="GET", path=f"/v1/partner_platforms/{_enc(partner)}")
+
+    def set(self, partner: str, body: m.PartnerPlatformInput | None = None) -> m.PartnerPlatform:
+        """Set up or change a partner platform (a preset id fills the defaults)."""
+        return self._t.request(
+            method="PUT", path=f"/v1/partner_platforms/{_enc(partner)}", body=body or {}
+        )
+
+    def delete(self, partner: str) -> m.PartnerPlatformDeleted:
+        return self._t.request(method="DELETE", path=f"/v1/partner_platforms/{_enc(partner)}")
+
+    def registration(self, partner: str) -> m.PartnerPlatformRegistration:
+        """What to send the partner to be registered: receiver URL, signature expectations."""
+        return self._t.request(
+            method="GET", path=f"/v1/partner_platforms/{_enc(partner)}/registration"
+        )
+
+    def store_token(
+        self,
+        partner: str,
+        token: str,
+        *,
+        rotate: bool | None = None,
+        api_base_url: str | None = None,
+    ) -> m.PartnerPlatform:
+        """Store the partner token the partner handed over (once; ``rotate=True`` replaces it).
+        The token is write-only: no response carries it, only ``token_set`` and ``token_prefix``."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/partner_platforms/{_enc(partner)}/token",
+            body=_q(token=token, rotate=rotate, api_base_url=api_base_url),
+        )
+
+    def deliveries(self, partner: str, *, limit: int | None = None) -> ListPage:
+        """The partner's recent deliveries and what became of each."""
+        return self._t.request(
+            method="GET",
+            path=f"/v1/partner_platforms/{_enc(partner)}/deliveries",
+            query=_q(limit=limit),
+        )
+
+
 class PartnerLinks:
     """``/v1/partner_links``: scoped credentials granted to a partner product, the requests
     partners make, and the outbound links this instance holds into partner products."""
@@ -7105,10 +7195,14 @@ class _PrivacyOrchestrator:
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
-    def get(self) -> JSON:
+    def get(self) -> m.PrivacyOrchestrator:
         return self._t.request(method="GET", path="/v1/instance/privacy_orchestrator")
 
-    def set(self, body: dict[str, Any]) -> JSON:
+    def set(self, body: m.PrivacyOrchestratorInput) -> m.PrivacyOrchestrator:
+        """Set the orchestrator. ``site_id`` is the orchestrator-side site a case is for,
+        ``partner_link_id`` calls through a partner link (implies ``use_partner_link``) and
+        ``cancel_deletion_on_sign_in`` cancels a self-scheduled deletion when the person signs
+        back in during the grace period."""
         return self._t.request(method="PUT", path="/v1/instance/privacy_orchestrator", body=body)
 
     def delete(self) -> JSON:
@@ -7204,12 +7298,22 @@ class Integrations:
         )
 
     def get_token(
-        self, session_id: str, for_: str, *, audience_hint: str | None = None
+        self,
+        session_id: str,
+        for_: str,
+        *,
+        audience_hint: str | None = None,
+        audience: str | None = None,
+        cbid: str | None = None,
+        audience_params: dict[str, str] | None = None,
     ) -> m.SessionToken:
-        """Mint an integration token for a session on the server (``getToken({for})``)."""
+        """Mint an integration token for a session on the server (``getToken({for})``). A
+        per-call audience (``audience``, ``cbid`` or ``audience_params``) follows the
+        integration's ``per_call_audience``; one it does not permit is refused with 403."""
         return self._t.request(
             method="POST",
             path=f"/v1/sessions/{_enc(session_id)}/integration_tokens/{_enc(for_)}",
+            query=_audience_query(audience, cbid, audience_params) or None,
             body={"audience_hint": audience_hint} if audience_hint else None,
         )
 

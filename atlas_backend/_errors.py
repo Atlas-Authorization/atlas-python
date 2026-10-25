@@ -159,6 +159,9 @@ class ErrorCode:
     REFERRALS_NOT_CONFIGURED = "REFERRALS_NOT_CONFIGURED"
     #: Another user on the instance already holds that referral code (409).
     REFERRAL_CODE_TAKEN = "REFERRAL_CODE_TAKEN"
+    #: Managed WAF provision or deprovision on an instance with no WAF configuration saved
+    #: (422; ``meta.action``).
+    MANAGED_WAF_NOT_CONFIGURED = "MANAGED_WAF_NOT_CONFIGURED"
     INTERNAL = "INTERNAL"
 
 

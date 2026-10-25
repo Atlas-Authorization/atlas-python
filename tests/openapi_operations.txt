@@ -731,3 +731,10 @@ PUT /v1/instance/privacy_orchestrator
 PUT /v1/instance/status_subscription
 PUT /v1/partner_links/outbound/{partner}
 PUT /v1/webhook_endpoints/by_url
+GET /v1/partner_platforms
+GET /v1/partner_platforms/{partner}
+PUT /v1/partner_platforms/{partner}
+DELETE /v1/partner_platforms/{partner}
+GET /v1/partner_platforms/{partner}/registration
+POST /v1/partner_platforms/{partner}/token
+GET /v1/partner_platforms/{partner}/deliveries
