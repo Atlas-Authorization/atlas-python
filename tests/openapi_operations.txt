@@ -738,3 +738,12 @@ DELETE /v1/partner_platforms/{partner}
 GET /v1/partner_platforms/{partner}/registration
 POST /v1/partner_platforms/{partner}/token
 GET /v1/partner_platforms/{partner}/deliveries
+GET /v1/platform/atlas_id_apps/{id}/provisioned_accounts
+POST /v1/platform/atlas_id_apps/{id}/provisioned_accounts
+GET /v1/platform/atlas_id_apps/{id}/provisioned_accounts/{acct}
+DELETE /v1/platform/atlas_id_apps/{id}/provisioned_accounts/{acct}
+POST /v1/platform/atlas_id_apps/{id}/provisioned_accounts/{acct}/password
+GET /v1/platform/domains
+POST /v1/platform/domains
+POST /v1/platform/domains/{id}/verify
+DELETE /v1/platform/domains/{id}

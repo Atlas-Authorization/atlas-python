@@ -6184,6 +6184,7 @@ class PlatformAccountlessApps:
 class PlatformAtlasIdApps:
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
+        self.provisioned_accounts = PlatformAtlasIdProvisionedAccounts(transport)
 
     def list(self) -> m.AtlasIdAppList:
         """List the Sign in with Atlas apps registered to this platform's account, with the
@@ -6303,9 +6304,7 @@ class PlatformAtlasIdApps:
             path=f"/v1/platform/atlas_id_apps/{app_id}/grants/{grant_id}",
         )
 
-    def set_managed_by(
-        self, app_id: str, instance_id: str | None
-    ) -> m.AtlasIdAppManagedBy:
+    def set_managed_by(self, app_id: str, instance_id: str | None) -> m.AtlasIdAppManagedBy:
         """Hand the app's grant management to an instance of the same account
         (``managed_via: "adopted"``), or take it back with ``None``. That instance's secret
         key, scoped to ``privacy:grants:revoke`` or ``atlas_id_grants:*``, then lists and
@@ -6337,6 +6336,102 @@ class PlatformAtlasIdApps:
             path=f"/v1/platform/atlas_id_apps/{app_id}/webhook/rotate_secret",
             body=body,
         )
+
+
+def _secret_recipient_headers(secret_recipient: str | None) -> dict[str, str] | None:
+    """Ask Atlas to seal the shown-once password to this key (``x25519:<base64>``)."""
+    return {"X-Secret-Recipient": secret_recipient} if secret_recipient else None
+
+
+class PlatformAtlasIdProvisionedAccounts:
+    """Test and review accounts for one Sign in with Atlas app (reviewer logins, CI,
+    demos). Needs the ``platform:atlas_id_apps:provision`` scope, or the per-app
+    ``atlas_id_apps:<app id>:provision`` scope. The password comes back exactly once, on
+    ``create`` and ``rotate_password``: as ``password``, or as ``sealed_password`` when a
+    ``secret_recipient`` is sent (per call, or on the client).
+    """
+
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def list(self, app_id: str) -> m.AtlasIdProvisionedAccountList:
+        """The app's test accounts, with the account-wide cap (``limit``) and ``total``."""
+        return self._t.request(
+            method="GET",
+            path=f"/v1/platform/atlas_id_apps/{_enc(app_id)}/provisioned_accounts",
+        )
+
+    def create(
+        self,
+        app_id: str,
+        body: m.CreateAtlasIdProvisionedAccountBody,
+        *,
+        idempotency_key: str | None = None,
+        secret_recipient: str | None = None,
+    ) -> m.AtlasIdProvisionedAccount:
+        """Create a test account confined to this app. The password is returned once."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/platform/atlas_id_apps/{_enc(app_id)}/provisioned_accounts",
+            body=body,
+            idempotency_key=idempotency_key,
+            headers=_secret_recipient_headers(secret_recipient),
+        )
+
+    def get(self, app_id: str, account_id: str) -> m.AtlasIdProvisionedAccount:
+        return self._t.request(
+            method="GET",
+            path=f"/v1/platform/atlas_id_apps/{_enc(app_id)}/provisioned_accounts/{_enc(account_id)}",
+        )
+
+    def remove(self, app_id: str, account_id: str) -> m.AtlasIdProvisionedAccountDeleted:
+        """Delete the account and end every session and grant it holds."""
+        return self._t.request(
+            method="DELETE",
+            path=f"/v1/platform/atlas_id_apps/{_enc(app_id)}/provisioned_accounts/{_enc(account_id)}",
+        )
+
+    def rotate_password(
+        self,
+        app_id: str,
+        account_id: str,
+        body: m.RotateAtlasIdProvisionedPasswordBody | None = None,
+        *,
+        secret_recipient: str | None = None,
+    ) -> m.AtlasIdProvisionedAccount:
+        """A new password (yours, or one Atlas generates), returned once."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/platform/atlas_id_apps/{_enc(app_id)}/provisioned_accounts/{_enc(account_id)}/password",
+            body=body,
+            headers=_secret_recipient_headers(secret_recipient),
+        )
+
+
+class PlatformDomains:
+    """Domains the account verified by DNS; they gate test sign-in mode and the
+    test-account domain restriction."""
+
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def list(self) -> m.AccountDomainList:
+        return self._t.request(method="GET", path="/v1/platform/domains")
+
+    def claim(self, domain: str) -> m.AccountDomain:
+        """Claim a domain; returns the TXT record to publish."""
+        return self._t.request(method="POST", path="/v1/platform/domains", body={"domain": domain})
+
+    def check(self, domain_id: str) -> m.AccountDomain:
+        """Check the DNS record now (``POST /v1/platform/domains/{id}/verify``)."""
+        return self._t.request(method="POST", path=f"/v1/platform/domains/{_enc(domain_id)}/verify")
+
+    def verify(self, domain_id: str) -> m.AccountDomain:
+        """Alias of :meth:`check`."""
+        return self.check(domain_id)
+
+    def remove(self, domain_id: str) -> Any:
+        return self._t.request(method="DELETE", path=f"/v1/platform/domains/{_enc(domain_id)}")
 
 
 class PlatformAtlasIdPublisher:

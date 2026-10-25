@@ -617,6 +617,26 @@ returns `True` when it has seen it before (the token is then refused with reason
 `"replayed"`). Keep entries a few minutes — logout tokens live two. With several
 app servers, back it with a shared store such as Redis (`SET jti 1 NX EX 300`).
 
+## Test and review accounts (0.20)
+
+Make logins for app-store reviewers, CI and demos that are confined to one Sign in
+with Atlas app. Needs the `platform:atlas_id_apps:provision` scope (or the per-app
+`atlas_id_apps:<app id>:provision` scope) on the platform key.
+
+```python
+acct = platform.atlas_id_apps.provisioned_accounts.create(
+    app["id"], {"email": "review@acme.example", "label": "app-store reviewer"}
+)
+print(acct["password"])  # shown once; pass secret_recipient=... to get sealed_password
+
+platform.domains.claim("acme.example")   # publish the TXT record, then:
+platform.domains.check(domain_id)
+platform.atlas_id_apps.update(app["id"], {"test_mode": True})
+```
+
+Errors: `TEST_ACCOUNT_RESTRICTED`, `PROVISIONED_ACCOUNT_LIMIT_REACHED`,
+`DOMAIN_NOT_VERIFIED` on `ErrorCode`.
+
 ## Partner platforms and per-call audiences (0.19)
 
 ```python

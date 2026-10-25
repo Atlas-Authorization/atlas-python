@@ -162,6 +162,13 @@ class ErrorCode:
     #: Managed WAF provision or deprovision on an instance with no WAF configuration saved
     #: (422; ``meta.action``).
     MANAGED_WAF_NOT_CONFIGURED = "MANAGED_WAF_NOT_CONFIGURED"
+    #: A Sign in with Atlas test or review account used something outside the app(s) it
+    #: was made for: another app, the dashboard, account settings (403).
+    TEST_ACCOUNT_RESTRICTED = "TEST_ACCOUNT_RESTRICTED"
+    #: The account's cap of test and review accounts is reached (409).
+    PROVISIONED_ACCOUNT_LIMIT_REACHED = "PROVISIONED_ACCOUNT_LIMIT_REACHED"
+    #: A setting or address needs a verified domain the account does not have (422).
+    DOMAIN_NOT_VERIFIED = "DOMAIN_NOT_VERIFIED"
     INTERNAL = "INTERNAL"
 
 

@@ -1419,6 +1419,124 @@ class AtlasIdApp(_AtlasIdAppRequired, SealedSecrets, total=False):
     secret_issued_at: int | None
     #: On a rotation: the overlap applied, in seconds.
     overlap_seconds: int
+    #: Test sign-in mode: ``+atlas_test`` addresses on a verified domain sign in to this app
+    #: with the fixed code 424242.
+    test_mode: bool
+    #: Test and review accounts must use an address on a domain you verified.
+    provisioned_verified_domains_only: bool
+
+
+class _AtlasIdProvisionedAccountApp(TypedDict):
+    id: str
+    client_id: str
+    name: str
+
+
+class _AtlasIdProvisionedAccountRequired(TypedDict):
+    object: Literal["atlas_id_provisioned_account"]
+    id: str
+    #: The Atlas ID subject the app sees.
+    sub: str
+    email: str | None
+    email_verified: bool
+    label: str
+    kind: Literal["provisioned", "test_mode", "developer"]
+    provisioned_by: Literal["app", "staff"]
+    app_ids: list[str]
+    apps: list[_AtlasIdProvisionedAccountApp]
+    any_app: bool
+    two_factor_exempt: bool
+    #: Epoch ms; ``None`` = never expires.
+    expires_at: int | None
+    expired: bool
+    developer_account_id: str | None
+    created_by: dict[str, str]
+    last_sign_in_at: int | None
+    password_rotated_at: int | None
+    created_at: int
+    updated_at: int
+
+
+class AtlasIdProvisionedAccount(_AtlasIdProvisionedAccountRequired, total=False):
+    """A Sign in with Atlas test or review account, confined to the app(s) it was made for.
+
+    ``password`` is a shown-once secret (create and rotation only): never log it. With a
+    ``secret_recipient`` it is absent and ``sealed_password`` carries it, sealed to your key
+    (open it with ``SealedBox``).
+    """
+
+    password: str
+    sealed_password: str
+    secrets_sealed: SecretsSealed
+    note: str
+
+
+class AtlasIdProvisionedAccountList(TypedDict):
+    object: Literal["list"]
+    data: list[AtlasIdProvisionedAccount]
+    #: The account-wide cap (default 25).
+    limit: int
+    #: Test accounts the account holds across all its apps.
+    total: int
+
+
+class AtlasIdProvisionedAccountDeleted(TypedDict):
+    object: Literal["atlas_id_provisioned_account"]
+    id: str
+    deleted: Literal[True]
+    sessions_ended: int
+
+
+class _CreateAtlasIdProvisionedAccountRequired(TypedDict):
+    email: str
+    #: What the account is for, e.g. "app-store reviewer".
+    label: str
+
+
+class CreateAtlasIdProvisionedAccountBody(_CreateAtlasIdProvisionedAccountRequired, total=False):
+    #: At least 12 characters. Omit it and Atlas generates one. Returned once either way.
+    password: str
+    #: Default ``True``.
+    email_verified: bool
+    #: Never asked for a second factor when signing in to this app. A risk you opt into.
+    two_factor_exempt: bool
+    #: Epoch ms or ISO 8601; omit or ``None`` for a non-expiring account.
+    expires_at: int | str | None
+
+
+class RotateAtlasIdProvisionedPasswordBody(TypedDict, total=False):
+    #: At least 12 characters; omit it and Atlas generates one.
+    password: str
+
+
+class AccountDomainVerification(TypedDict):
+    type: Literal["TXT"]
+    #: The TXT record to publish.
+    name: str
+    value: str
+
+
+class _AccountDomainRequired(TypedDict):
+    object: Literal["account_domain"]
+    id: str
+    domain: str
+    verified: bool
+    verified_at: int | None
+    last_checked_at: int | None
+    verification: AccountDomainVerification
+    created_at: int
+
+
+class AccountDomain(_AccountDomainRequired, total=False):
+    """A domain the account claimed; verified ones gate test sign-in mode."""
+
+    record_found: bool
+
+
+class AccountDomainList(TypedDict):
+    object: Literal["list"]
+    data: list[AccountDomain]
+    verified_domains: list[str]
 
 
 class SetAtlasIdAppManagedByBody(TypedDict):
@@ -6075,6 +6193,10 @@ class UpdateAtlasIdAppBody(TypedDict, total=False):
     #: Per-app webhook (public https): user.updated, user.deleted and grant.revoked for this
     #: app's users. The first set returns ``webhook_secret`` once; ``None`` removes it.
     webhook_url: str | None
+    #: Test sign-in mode for this app (needs a verified domain; 422 ``DOMAIN_NOT_VERIFIED``).
+    test_mode: bool
+    #: Test and review accounts must use an address on a domain you verified.
+    provisioned_verified_domains_only: bool
 
 
 class CreateRadiusClientBody(TypedDict, total=False):

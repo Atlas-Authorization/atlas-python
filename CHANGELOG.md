@@ -2,6 +2,16 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.20.0 — 2026-10-25
+
+### Added
+
+- **Test and review accounts for Sign in with Atlas apps.** `atlas_id_apps.provisioned_accounts` (`list`, `create`, `get`, `remove`, `rotate_password`), sync and async, on `/v1/platform/atlas_id_apps/{id}/provisioned_accounts`. Needs the `platform:atlas_id_apps:provision` scope, or the per-app `atlas_id_apps:<app id>:provision` scope. The password is returned once, on `create` and `rotate_password`; pass `secret_recipient=` (per call, or on the client) to receive it as `sealed_password` instead. Typed `AtlasIdProvisionedAccount`, `AtlasIdProvisionedAccountList`, `CreateAtlasIdProvisionedAccountBody`, `RotateAtlasIdProvisionedPasswordBody`.
+- **Verified domains.** `platform.domains` (`list`, `claim`, `check`, with `verify` as an alias, `remove`), typed `AccountDomain`. Verified domains gate test sign-in mode and the test-account domain restriction.
+- `AtlasIdApp` and `UpdateAtlasIdAppBody` gain `test_mode` and `provisioned_verified_domains_only`.
+- `ErrorCode.TEST_ACCOUNT_RESTRICTED` (403), `PROVISIONED_ACCOUNT_LIMIT_REACHED` (409) and `DOMAIN_NOT_VERIFIED` (422).
+- API coverage list: 749 operations.
+
 ## 0.19.0 — 2026-10-25
 
 ### Added
