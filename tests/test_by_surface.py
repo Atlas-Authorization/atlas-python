@@ -626,3 +626,37 @@ async def test_async_device_authorizations() -> None:
     assert seen[-1].url.path == "/v1/client/me/device_authorizations/da_1/approve"
     await d.deny(auth)
     assert seen[-1].url.path == "/v1/client/me/device_authorizations/da_1/deny"
+
+
+@respx.mock
+async def test_risk_events_and_fraud_lookup() -> None:
+    lst = respx.get(f"{API_URL}/v1/risk_events").mock(return_value=httpx.Response(200, json=OK))
+    met = respx.get(f"{API_URL}/v1/risk_events/metrics").mock(
+        return_value=httpx.Response(200, json={"object": "risk_event_metrics", "days": 14})
+    )
+    fb = respx.post(f"{API_URL}/v1/risk_events/re_1/feedback").mock(
+        return_value=httpx.Response(200, json={"object": "risk_event", "feedback": "fraud"})
+    )
+    fl = respx.post(f"{API_URL}/v1/fraud/lookup").mock(
+        return_value=httpx.Response(200, json={"object": "fraud_lookup", "verdict": "allow"})
+    )
+    c = client()
+    c.risk_based_mfa.list_events(
+        user_id="u_1", level="high", limit=10, before="2026-02-01T00:00:00Z"
+    )
+    assert parse_qs(lst.calls.last.request.url.query.decode()) == {
+        "user_id": ["u_1"],
+        "level": ["high"],
+        "limit": ["10"],
+        "before": ["2026-02-01T00:00:00Z"],
+    }
+    assert c.risk_based_mfa.event_metrics(days=14)["days"] == 14
+    assert met.calls.last.request.url.params["days"] == "14"
+    assert c.risk_based_mfa.event_feedback("re_1", {"verdict": "fraud"})["feedback"] == "fraud"
+    assert body_of(fb) == {"verdict": "fraud"}
+    assert c.risk_based_mfa.fraud_lookup({"ip": "1.2.3.4"})["verdict"] == "allow"
+    assert body_of(fl) == {"ip": "1.2.3.4"}
+    async with AsyncAtlasClient(SECRET, base_url=API_URL) as ac:
+        await ac.risk_based_mfa.list_events()
+        await ac.risk_based_mfa.event_feedback("re_1", {"verdict": "legit"})
+    assert body_of(fb) == {"verdict": "legit"}

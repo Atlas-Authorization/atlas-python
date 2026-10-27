@@ -730,7 +730,7 @@ Sealed secrets need PyNaCl: `pip install "atlas-backend[sealed]"`.
 `connectors`, `directory`, `fga` (+ `stores`, `authorization_models`), `openfga`
 (+ `stores`, `authorization_models`), `jwt_templates`, `legacy_auth_connection`,
 `network_acls`, `radius_clients`, `lti_platforms`, `rate_limit_policy`,
-`risk_based_mfa`, `bot_labels`, `bot_signals`, `captcha`, `managed_waf`,
+`risk_based_mfa` (+ `list_events`, `event_metrics`, `event_feedback`, `fraud_lookup`), `bot_labels`, `bot_signals`, `captcha`, `managed_waf`,
 `diagnostics`, `mcp`, `mcp_connector`, `pca`, `testing`, `whoami`, `secret_keys`, `keys`,
 `partner_links` (+ `requests`, `outbound`), `partner_platforms`, `atlas_id_grants`, `privacy`, `integrations`, `status`,
 `notices`, `security_advisories`, `audit_exports`, `sub_processors`, `entitlements`,
