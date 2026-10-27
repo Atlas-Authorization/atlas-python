@@ -5185,3 +5185,18 @@ def test_listen_stream_asks_for_event_stream_and_returns_the_text() -> None:
         out = AtlasClient("sk_test", base_url=API_URL).listen.stream_session("s1")
         assert out == ": keep-alive\n\n"
         assert route.calls.last.request.headers["accept"] == "text/event-stream"
+
+
+def test_delivery_health_get_keeps_its_original_signature_and_route() -> None:
+    # The two-segment route got its own name; the original one-segment call is unchanged.
+    async def run() -> None:
+        with respx.mock(base_url=API_URL) as mock:
+            route = mock.get("/v1/delivery_health").mock(return_value=httpx.Response(200, json={}))
+            await AsyncAtlasClient("sk_test", base_url=API_URL).delivery_health.get(kind="email")
+            assert route.calls.last.request.url.params["kind"] == "email"
+
+    with respx.mock(base_url=API_URL) as mock:
+        route = mock.get("/v1/delivery_health").mock(return_value=httpx.Response(200, json={}))
+        AtlasClient("sk_test", base_url=API_URL).delivery_health.get(kind="email")
+        assert route.calls.last.request.url.params["kind"] == "email"
+    asyncio.run(run())
