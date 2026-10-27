@@ -212,11 +212,13 @@ class _BaseTransport:
             "headers": built,
         }
 
-    def _finish(self, response: httpx.Response, method: str, path: str, raw: bool) -> Any:
+    def _finish(self, response: httpx.Response, method: str, path: str, raw: bool | str) -> Any:
         if not response.is_success:
             raise _to_error(response.status_code, response.text)
+        if raw == "bytes":
+            return response.content  # binary download (e.g. a gzip archive): never decode as text
         _report_unknown_fields(response, method, path, self._on_unknown_fields)
-        return _parse_success(response.status_code, response.text, raw=raw)
+        return _parse_success(response.status_code, response.text, raw=bool(raw))
 
 
 class _SyncTransport(_BaseTransport):
@@ -269,7 +271,7 @@ class _SyncTransport(_BaseTransport):
         query: QueryParams | None = None,
         body: Any = None,
         idempotency_key: str | None = None,
-        raw: bool = False,
+        raw: bool | str = False,
         content: bytes | None = None,
         content_type: str | None = None,
         strict: bool | None = None,
@@ -333,7 +335,7 @@ class _AsyncTransport(_BaseTransport):
         query: QueryParams | None = None,
         body: Any = None,
         idempotency_key: str | None = None,
-        raw: bool = False,
+        raw: bool | str = False,
         content: bytes | None = None,
         content_type: str | None = None,
         strict: bool | None = None,

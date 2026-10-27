@@ -62,7 +62,8 @@ def convert(src: str) -> str:
     body = src[src.index("\nclass ") + 1 :]
     names = re.findall(r"^class (\w+)\b", body, re.M)
     for name in sorted(names, key=len, reverse=True):
-        body = re.sub(rf"(?<![.\w]){re.escape(name)}\b", async_name(name), body)
+        # Only the definition and constructor calls: the same word in a docstring stays as written.
+        body = re.sub(rf"(?<![.\w])(class )?{re.escape(name)}\b(?=\(|:)", lambda mo: (mo.group(1) or "") + async_name(name), body)
     body = body.replace("_SyncTransport", "_AsyncTransport")
     body = re.sub(r"^    def (?!__init__)", "    async def ", body, flags=re.M)
     body = body.replace("return self._t.request(", "return await self._t.request(")
