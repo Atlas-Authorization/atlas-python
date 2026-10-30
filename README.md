@@ -617,6 +617,48 @@ returns `True` when it has seen it before (the token is then refused with reason
 `"replayed"`). Keep entries a few minutes — logout tokens live two. With several
 app servers, back it with a shared store such as Redis (`SET jti 1 NX EX 300`).
 
+## Application webhooks, browser tickets and instance settings (0.21)
+
+Send your app's own events to endpoints your customers (organizations) register. Atlas
+signs each delivery the Standard Webhooks way, retries, tracks health and keeps the
+delivery log.
+
+```python
+atlas.app_events.types.create({"type": "call.completed", "description": "A call finished."})
+ep = atlas.app_events.endpoints.create("org_1", {"url": "https://hooks.acme.example/atlas"})
+print(ep["secret"])  # whsec_..., in this response only (or endpoints.reveal_secret)
+
+sent = atlas.app_events.publish(
+    {"organization_id": "org_1", "type": "call.completed", "data": {"call_id": "c1"}},
+    idempotency_key="c1",  # a repeat returns the first event with idempotent_replay=True
+)
+atlas.app_events.endpoints.app_event_types("org_1")  # what the endpoint picker offers
+```
+
+The receiving side verifies with `verify_standard_webhook` (`webhook-id`,
+`webhook-timestamp` in seconds, `webhook-signature` as a space-separated `v1,<base64>`
+list):
+
+```python
+from atlas_backend import verify_standard_webhook
+
+result = verify_standard_webhook(request.body, request.headers, "whsec_...")
+if not result.verified:
+    return 400  # result.reason: missing_headers, malformed_signature, stale_timestamp, signature_mismatch
+```
+
+**Browser tickets.** `sessions.create_browser_ticket(user_id, redirect_url=,
+expires_in_seconds=)` mints a one-time ticket that signs a browser in as the user and,
+with `redirect_url`, a ready `url` to open. It replaces `sign_in_tokens.create`
+(deprecated, sunset 2027-04-01). The ticket exchange's 10-second same-client replay
+allowance applies to development instances only. On development instances,
+`testing.create_sign_in_url(user_id, redirect_url=)` does the same for end-to-end tests.
+
+**Instance settings.** `instance.sign_in_with_atlas` and `instance.hosted_pages` (`get`,
+`update`); `privacy.integration` (`get`, `connect`) wires a consent manager, orchestrator,
+completion webhook and executor key in one idempotent call. `instance.update` and
+`instance.referrals.update` results may carry `warnings`.
+
 ## Test and review accounts (0.20)
 
 Make logins for app-store reviewers, CI and demos that are confined to one Sign in
@@ -720,7 +762,7 @@ Sealed secrets need PyNaCl: `pip install "atlas-backend[sealed]"`.
 `invitations`, `attack_protection`, `actor_tokens`, `sign_in_tokens`,
 `api_keys`, `tokens`, `m2m_tokens`, `machines`, `machine_enrolment_tokens`,
 `tickets`, `grants`, `session_exchange_apps`, `instance` (+ `cookie_consent`,
-`security`), `design` (+ `assets`), `branding`, `localizations`,
+`security`, `sign_in_with_atlas`, `hosted_pages`), `design` (+ `assets`), `branding`, `localizations`,
 `email_templates`, `sms_templates`, `messaging_providers`, `notifications` (+
 `categories`, `templates`), `webhooks` (+ `endpoints`), `log_streams`,
 `audit_logs`, `audit_events`, `config_changelog`, `events`, `usage`, `jobs`,
@@ -732,7 +774,8 @@ Sealed secrets need PyNaCl: `pip install "atlas-backend[sealed]"`.
 `network_acls`, `radius_clients`, `lti_platforms`, `rate_limit_policy`,
 `risk_based_mfa` (+ `list_events`, `event_metrics`, `event_feedback`, `fraud_lookup`), `bot_labels`, `bot_signals`, `captcha`, `managed_waf`,
 `diagnostics`, `mcp`, `mcp_connector`, `pca`, `testing`, `whoami`, `secret_keys`, `keys`,
-`partner_links` (+ `requests`, `outbound`), `partner_platforms`, `atlas_id_grants`, `privacy`, `integrations`, `status`,
+`partner_links` (+ `requests`, `outbound`), `partner_platforms`, `atlas_id_grants`, `privacy` (+ `orchestrator`, `integration`),
+`app_events` (+ `types`, `endpoints`), `integrations`, `status`,
 `notices`, `security_advisories`, `audit_exports`, `sub_processors`, `entitlements`,
 `integration_health`, `embed`, `openapi`, `delivery_health`, `meta`.
 

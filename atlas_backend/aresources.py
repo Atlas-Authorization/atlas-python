@@ -878,12 +878,39 @@ class AsyncSessions:
 
     async def create(self, body: m.CreateSessionBody) -> m.SessionCreated:
         """Establish a session for a user in one call — returns jwt + refresh_token, audited as
-        a first-party sign-in (not impersonation unless actor.sub is set).
+        a first-party sign-in (not impersonation unless actor.sub is set). With
+        ``mode: "browser_ticket"`` it answers a :class:`~atlas_backend.models.BrowserTicket`
+        instead (see :meth:`create_browser_ticket`).
         """
         return await self._t.request(
             method="POST",
             path="/v1/sessions",
             body=body,
+        )
+
+    async def create_browser_ticket(
+        self,
+        user_id: str,
+        *,
+        redirect_url: str | None = None,
+        expires_in_seconds: int | None = None,
+    ) -> m.BrowserTicket:
+        """``POST /v1/sessions`` with ``mode: "browser_ticket"``: a one-time ticket that signs
+        a BROWSER in as the user (support handoffs, end-to-end tests). No session is minted
+        here; the browser gets one through the normal ticket exchange. ``redirect_url`` (an
+        allowed origin) makes the response carry a ready ``url``; ``expires_in_seconds`` is
+        1 to 300 (default 60). The successor of the deprecated ``sign_in_tokens.create``.
+        The ticket is single use; the exchange's 10-second same-client replay allowance
+        applies to development instances only.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/sessions",
+            body={
+                "user_id": user_id,
+                "mode": "browser_ticket",
+                **_q(redirect_url=redirect_url, expires_in_seconds=expires_in_seconds),
+            },
         )
 
     async def touch(self, session_id: str) -> m.TouchedSession:
@@ -1843,9 +1870,9 @@ class AsyncSignInTokens:
     """The ``/v1/sign_in_tokens`` resource.
 
     .. deprecated::
-        ``POST /v1/sign_in_tokens`` is deprecated (Sunset 2026-04-01). Use
-        ``Sessions.create`` (``POST /v1/sessions``), which mints a real
-        redeemable session in one call.
+        The sign-in token API is deprecated (Sunset 2027-04-01). Use
+        ``sessions.create_browser_ticket``: the same one-time ticket, plus a ready
+        URL (or ``sessions.create`` for a server-side session).
     """
 
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -1854,6 +1881,12 @@ class AsyncSignInTokens:
     async def create(
         self, body: m.CreateSignInTokenBody, *, idempotency_key: str | None = None
     ) -> m.SignInToken:
+        """DEPRECATED (Sunset 2027-04-01): use ``sessions.create_browser_ticket``.
+
+        .. deprecated::
+            Use ``sessions.create_browser_ticket``: the same one-time ticket, plus a
+            ready URL.
+        """
         return await self._t.request(
             method="POST",
             path="/v1/sign_in_tokens",
@@ -1864,6 +1897,10 @@ class AsyncSignInTokens:
     async def revoke(self, token_id: str) -> m.SignInTokenRevokeResult:
         """DEPRECATED (Sunset 2027-04-01) — revoke an unused sign-in token before its 60s
         window elapses.
+
+        .. deprecated::
+            Use ``sessions.create_browser_ticket`` (or ``sessions.create`` for a
+            server-side session).
         """
         return await self._t.request(
             method="POST",
@@ -3938,6 +3975,37 @@ class AsyncGrants:
         )
 
 
+class _AsyncInstanceSignInWithAtlas:
+    """Sign in with Atlas on the instance: read it, or turn it on or off."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self) -> m.SignInWithAtlasSettings:
+        return await self._t.request(method="GET", path="/v1/instance/sign_in_with_atlas")
+
+    async def update(self, body: m.UpdateSignInWithAtlasBody) -> m.SignInWithAtlasSettings:
+        """``enabled: True`` links an existing connection to the Atlas issuer (or the one
+        named by ``connection_id``), else creates one."""
+        return await self._t.request(
+            method="PATCH", path="/v1/instance/sign_in_with_atlas", body=body
+        )
+
+
+class _AsyncInstanceHostedPages:
+    """Send the hosted sign-in, sign-up and account pages to your app's own pages (302)."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self) -> m.HostedPagesSettings:
+        return await self._t.request(method="GET", path="/v1/instance/hosted_pages")
+
+    async def update(self, body: m.UpdateHostedPagesBody) -> m.HostedPagesSettings:
+        """Each URL https on one of the instance's allowed origins; ``None`` clears it."""
+        return await self._t.request(method="PATCH", path="/v1/instance/hosted_pages", body=body)
+
+
 class AsyncInstance:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -3947,6 +4015,8 @@ class AsyncInstance:
         self.integrations = _AsyncInstanceIntegrations(transport)
         self.referrals = _AsyncInstanceReferrals(transport)
         self.hooks = _AsyncInstanceHooks(transport)
+        self.sign_in_with_atlas = _AsyncInstanceSignInWithAtlas(transport)
+        self.hosted_pages = _AsyncInstanceHostedPages(transport)
 
     async def get(self) -> m.Instance:
         """Read instance configuration."""
@@ -3957,7 +4027,9 @@ class AsyncInstance:
 
     async def update(self, body: m.UpdateInstanceBody | None = None) -> m.Instance:
         """Update allowed origins and auth_config (a partial, validated, merged patch — not a
-        replace).
+        replace). The result may carry ``warnings``: what the write did not do as sent
+        (``origin_still_referenced``, or ``unknown_field`` for an ignored ``auth_config`` key
+        on a lenient instance; strict instances answer 422 instead).
         """
         return await self._t.request(
             method="PATCH",
@@ -4266,7 +4338,8 @@ class _AsyncInstanceReferrals:
         idempotency_key: str | None = None,
     ) -> m.ReferralSettings:
         """Update the referral settings; only the fields sent change, ``None`` clears.
-        Enabling without what the provider needs is 422 ``REFERRALS_NOT_CONFIGURED``.
+        Enabling without what the provider needs is 422 ``REFERRALS_NOT_CONFIGURED``. The
+        result's ``warnings`` lists what was stored differently from what was sent.
         """
         return await self._t.request(
             method="PATCH",
@@ -6423,6 +6496,27 @@ class AsyncTesting:
             path="/v1/testing_tokens",
         )
 
+    async def create_sign_in_url(
+        self,
+        user_id: str,
+        *,
+        redirect_url: str,
+        expires_in_seconds: int | None = None,
+    ) -> m.TestingSignInUrl:
+        """A ready one-time URL that signs a browser in as ``user_id`` and lands on
+        ``redirect_url`` (an allowed origin or localhost). Development instances only
+        (403 ``TESTING_UNAVAILABLE`` otherwise).
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/testing/sign_in_url",
+            body={
+                "user_id": user_id,
+                "redirect_url": redirect_url,
+                **_q(expires_in_seconds=expires_in_seconds),
+            },
+        )
+
 
 class AsyncTickets:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -7567,7 +7661,7 @@ class AsyncSecretKeys:
     secret is revealed exactly once (``secret``, or ``sealed_secret`` when
     ``secret_recipient`` is sent; open it with :class:`SealedBox`). Keys default to a
     one-year expiry, belong to their creator (``owner``) and can be locked to browser
-    ``allowed_origins``."""
+    ``allowed_origins``. ``/v1/instance/secret_keys`` is an alias of the same routes."""
 
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -7915,14 +8009,237 @@ class _AsyncPrivacyOrchestrator:
         return await self._t.request(method="DELETE", path="/v1/instance/privacy_orchestrator")
 
 
+class _AsyncAppEventTypes:
+    """``/v1/app_event_types``: your app's event catalog. ``id_or_type`` is the ``aet_`` id
+    or the type name (``call.completed``)."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self) -> ListPage:
+        return await self._t.request(method="GET", path="/v1/app_event_types")
+
+    async def create(
+        self, body: m.CreateAppEventTypeBody, *, idempotency_key: str | None = None
+    ) -> m.AppEventType:
+        """Add a type. ``schema`` (JSON Schema) is checked against every published ``data``."""
+        return await self._t.request(
+            method="POST",
+            path="/v1/app_event_types",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get(self, id_or_type: str) -> m.AppEventType:
+        return await self._t.request(method="GET", path=f"/v1/app_event_types/{_enc(id_or_type)}")
+
+    async def update(self, id_or_type: str, body: m.UpdateAppEventTypeBody) -> m.AppEventType:
+        return await self._t.request(
+            method="PATCH", path=f"/v1/app_event_types/{_enc(id_or_type)}", body=body
+        )
+
+    async def delete(self, id_or_type: str) -> DeletedObject:
+        return await self._t.request(
+            method="DELETE", path=f"/v1/app_event_types/{_enc(id_or_type)}"
+        )
+
+
+class _AsyncAppWebhookEndpoints:
+    """``/v1/organizations/{id}/app_webhook_endpoints``: one organization's endpoints for your
+    app's events, signed the Standard Webhooks way (verify with
+    :func:`~atlas_backend.verify_standard_webhook`). Organization members manage them from
+    the frontend with the ``org:webhooks:manage`` permission."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(self, id: str) -> ListPage:
+        return await self._t.request(
+            method="GET", path=f"/v1/organizations/{_enc(id)}/app_webhook_endpoints"
+        )
+
+    async def create(
+        self, id: str, body: m.AppWebhookEndpointBody, *, idempotency_key: str | None = None
+    ) -> JSON:
+        """Register an endpoint. The ``whsec_`` secret is in this response only (or
+        :meth:`reveal_secret`)."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/organizations/{_enc(id)}/app_webhook_endpoints",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get(self, id: str, endpoint_id: str) -> JSON:
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/organizations/{_enc(id)}/app_webhook_endpoints/{_enc(endpoint_id)}",
+        )
+
+    async def update(self, id: str, endpoint_id: str, body: m.AppWebhookEndpointBody) -> JSON:
+        return await self._t.request(
+            method="PATCH",
+            path=f"/v1/organizations/{_enc(id)}/app_webhook_endpoints/{_enc(endpoint_id)}",
+            body=body,
+        )
+
+    async def delete(self, id: str, endpoint_id: str) -> DeletedObject:
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/organizations/{_enc(id)}/app_webhook_endpoints/{_enc(endpoint_id)}",
+        )
+
+    async def rotate_secret(self, id: str, endpoint_id: str) -> m.AppWebhookEndpointSecretRotation:
+        """The previous secret keeps signing for 24 hours."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/organizations/{_enc(id)}/app_webhook_endpoints/{_enc(endpoint_id)}"
+            "/rotate_secret",
+        )
+
+    async def reveal_secret(self, id: str, endpoint_id: str) -> m.AppWebhookEndpointSecret:
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/organizations/{_enc(id)}/app_webhook_endpoints/{_enc(endpoint_id)}"
+            "/reveal_secret",
+        )
+
+    async def test(self, id: str, endpoint_id: str, *, wait: str | None = None) -> JSON:
+        """Send a test event. ``wait`` (e.g. ``"10s"``) attempts it now and returns the
+        result; otherwise it is queued."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/organizations/{_enc(id)}/app_webhook_endpoints/{_enc(endpoint_id)}/test",
+            query=_q(wait=wait),
+        )
+
+    async def deliveries(
+        self,
+        id: str,
+        endpoint_id: str,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+        status: Literal["pending", "success", "failed"] | None = None,
+        event_type: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        trace: str | None = None,
+    ) -> CursorPage:
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/organizations/{_enc(id)}/app_webhook_endpoints/{_enc(endpoint_id)}"
+            "/deliveries",
+            query=_q(
+                limit=limit,
+                starting_after=starting_after,
+                status=status,
+                event_type=event_type,
+                since=since,
+                until=until,
+                trace=trace,
+            ),
+        )
+
+    async def redeliver(self, id: str, endpoint_id: str, delivery_id: str) -> JSON:
+        """Redeliver one past delivery as a fresh attempt."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/organizations/{_enc(id)}/app_webhook_endpoints/{_enc(endpoint_id)}"
+            f"/deliveries/{_enc(delivery_id)}/redeliver",
+        )
+
+    async def replay(self, id: str, endpoint_id: str, body: dict[str, Any] | None = None) -> JSON:
+        """Re-send what the endpoint missed. Body: ``since`` (``"failing_since"`` or epoch),
+        ``until``, ``event_type``."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/organizations/{_enc(id)}/app_webhook_endpoints/{_enc(endpoint_id)}"
+            "/replay",
+            body=body or {},
+        )
+
+    async def app_event_types(self, id: str) -> ListPage:
+        """The event types the organization's endpoints can subscribe to (the picker list)."""
+        return await self._t.request(
+            method="GET", path=f"/v1/organizations/{_enc(id)}/app_event_types"
+        )
+
+
+class AsyncAppEvents:
+    """Application webhooks: send YOUR app's own events (``call.completed``) to endpoints your
+    customers (organizations) register. Atlas signs, retries, tracks health, auto-disables a
+    dead endpoint and keeps the delivery log."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+        self.types = _AsyncAppEventTypes(transport)
+        self.endpoints = _AsyncAppWebhookEndpoints(transport)
+
+    async def publish(
+        self, body: m.PublishAppEventBody, *, idempotency_key: str | None = None
+    ) -> m.PublishedAppEvent:
+        """Publish one event to one organization's subscribed endpoints. A repeat with the same
+        idempotency key (header or body) returns the first event with
+        ``idempotent_replay: True`` and queues nothing."""
+        return await self._t.request(
+            method="POST",
+            path="/v1/app_events",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def list(
+        self,
+        organization_id: str,
+        *,
+        type: str | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> ListPage:
+        """One organization's published events, newest first."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/app_events",
+            query=_q(
+                organization_id=organization_id,
+                type=type,
+                limit=limit,
+                starting_after=starting_after,
+            ),
+        )
+
+    async def get(self, event_id: str) -> m.AppEvent:
+        return await self._t.request(method="GET", path=f"/v1/app_events/{_enc(event_id)}")
+
+
+class _AsyncPrivacyIntegration:
+    """``/v1/instance/privacy_integrations``: the consent manager, orchestrator, completion
+    webhook and executor key in one view."""
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(self) -> m.PrivacyIntegration:
+        return await self._t.request(method="GET", path="/v1/instance/privacy_integrations")
+
+    async def connect(self, body: m.PrivacyIntegrationConnectInput) -> m.PrivacyIntegration:
+        """Wire all of it in one idempotent call. ``executor_key.secret`` comes back once; a
+        re-run answers ``executor_key.idempotent_replay``."""
+        return await self._t.request(
+            method="POST", path="/v1/instance/privacy_integrations/connect", body=body
+        )
+
+
 class AsyncPrivacy:
     """The privacy-executor client: discovery, subject lookup, and idempotent privacy
     requests (restriction / deletion / export) a data-rights orchestrator executes; plus the
-    instance's orchestrator setting."""
+    instance's orchestrator setting and one-call integration."""
 
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
         self.orchestrator = _AsyncPrivacyOrchestrator(transport)
+        self.integration = _AsyncPrivacyIntegration(transport)
 
     async def discover(self) -> JSON:
         return await self._t.request(method="GET", path="/v1/privacy")

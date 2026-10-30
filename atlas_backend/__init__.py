@@ -205,13 +205,13 @@ from ._integrator import (
     webhook_event_matches,
     webhook_event_spellings,
 )
-from ._webhooks import WebhookVerification, verify_webhook
+from ._webhooks import WebhookVerification, verify_standard_webhook, verify_webhook
 from .resources import (
     BETTER_AUTH_IMPORT_PART_BYTES,
     split_bundle_parts,
 )
 
-__version__ = "0.20.0"
+__version__ = "0.21.0"
 
 __all__ = [
     "OIDC_ORGANIZATION_PARAM",
@@ -369,6 +369,7 @@ __all__ = [
     "REFETCH_INTERVAL_MS",
     "DEFAULT_TTL_MS",
     "verify_webhook",
+    "verify_standard_webhook",
     "WebhookVerification",
     "verify_referral_request",
     "referral_op_for_path",

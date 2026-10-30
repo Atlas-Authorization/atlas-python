@@ -146,3 +146,70 @@ def verify_webhook(
         delivery_id=delivery_id,
         timestamp=timestamp,
     )
+
+
+STANDARD_HEADER_ID = "webhook-id"
+STANDARD_HEADER_TIMESTAMP = "webhook-timestamp"
+STANDARD_HEADER_SIGNATURE = "webhook-signature"
+
+
+def verify_standard_webhook(
+    body: Union[bytes, str],
+    headers: Mapping[str, Any],
+    secret: str,
+    *,
+    now_s: Optional[int] = None,
+    tolerance_s: int = REPLAY_TOLERANCE_MS // 1000,
+) -> WebhookVerification:
+    """Verify an application webhook (``app_events``) the Standard Webhooks way.
+
+    ``webhook-signature`` is a space-separated ``v1,<base64>`` list (more than one while a
+    secret rotates) of HMAC-SHA256 over ``<webhook-id>.<webhook-timestamp>.<raw body>``,
+    keyed with the base64-decoded ``whsec_`` secret; ``webhook-timestamp`` is epoch
+    SECONDS. Returns the same :class:`WebhookVerification` as :func:`verify_webhook`
+    (``timestamp`` in seconds). Matches ``verifyStandardWebhook`` in ``@atlasauth/backend``.
+    """
+    raw = body.encode("utf-8") if isinstance(body, str) else bytes(body)
+    delivery_id = _header(headers, STANDARD_HEADER_ID)
+    ts_raw = _header(headers, STANDARD_HEADER_TIMESTAMP)
+    signature = _header(headers, STANDARD_HEADER_SIGNATURE)
+    if not delivery_id or not ts_raw or not signature:
+        return WebhookVerification(False, "missing_headers")
+
+    provided = _signatures(signature)
+    if not provided:
+        return WebhookVerification(False, "malformed_signature")
+
+    ts_raw = ts_raw.strip()
+    if not ts_raw.isdigit():
+        return WebhookVerification(False, "stale_timestamp")
+    timestamp = int(ts_raw)
+    now = int(time.time()) if now_s is None else now_s
+    if abs(now - timestamp) > tolerance_s:
+        return WebhookVerification(False, "stale_timestamp")
+
+    encoded = secret[len("whsec_") :] if secret.startswith("whsec_") else secret
+    try:
+        key = base64.b64decode(encoded)
+    except ValueError:
+        return WebhookVerification(False, "signature_mismatch")
+    signed = f"{delivery_id}.{timestamp}.".encode("utf-8") + raw
+    expected = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest())
+    # Compare every entry (no early exit), each in constant time.
+    matched = False
+    for candidate in provided:
+        if hmac.compare_digest(expected, candidate.encode("utf-8")):
+            matched = True
+    if not matched:
+        return WebhookVerification(False, "signature_mismatch")
+
+    try:
+        event = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        event = None
+    return WebhookVerification(
+        True,
+        event=event if isinstance(event, dict) else None,
+        delivery_id=delivery_id,
+        timestamp=timestamp,
+    )

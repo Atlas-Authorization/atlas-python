@@ -2,9 +2,29 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
-## Unreleased
+## 0.21.0 — 2026-10-30
 
 ### Added
+
+- **Application webhooks.** `app_events` (`publish`, `list`, `get`), `app_events.types` (the event catalog: `list`, `create`, `get`, `update`, `delete`, by `aet_` id or type name) and `app_events.endpoints` (one organization's endpoints: `list`, `create`, `get`, `update`, `delete`, `rotate_secret`, `reveal_secret`, `test(wait=)`, `deliveries`, `redeliver`, `replay`, plus `app_event_types(org_id)`, the organization's picker list), sync and async. Typed `AppEvent`, `PublishedAppEvent` (`idempotent_replay`, `deliveries_queued`, `endpoint_ids`), `AppEventType`, `AppWebhookEndpointBody`, secret and rotation results.
+- **Standard Webhooks verifier.** `verify_standard_webhook(body, headers, secret, now_s=, tolerance_s=)` for application webhooks (`webhook-id`, `webhook-timestamp` in seconds, `webhook-signature`, base64 `whsec_` key). Returns the same `WebhookVerification` as `verify_webhook`.
+- **Browser tickets.** `sessions.create_browser_ticket(user_id, redirect_url=, expires_in_seconds=)` (`POST /v1/sessions` with `mode: "browser_ticket"`), typed `BrowserTicket`; `CreateSessionBody` gains `mode`, `redirect_url`, `expires_in_seconds`.
+- **Sign-in URL for tests.** `testing.create_sign_in_url(user_id, redirect_url=, expires_in_seconds=)` (`POST /v1/testing/sign_in_url`, development instances only), typed `TestingSignInUrl`.
+- **Sign in with Atlas and hosted pages.** `instance.sign_in_with_atlas` and `instance.hosted_pages` (`get`, `update`), typed settings and bodies.
+- **Privacy integration.** `privacy.integration` (`get`, `connect`), typed `PrivacyIntegration` and `PrivacyIntegrationConnectInput`.
+- `Instance.warnings` and `ReferralSettings.warnings` (update results only).
+- API keys: limit periods `second` and `minute`; `effective_scopes` on the verify result.
+- Users: `image_url` and its alias `profile_image_url` on create, update and import rows; `User.external_accounts` with the new `UserExternalAccount`.
+- `CreateWebhookEndpointBody.active`.
+- Managed email: `dns` is a typed `ManagedEmailDnsAutomation` (`status`, `last_error`, `attempts`, `next_check_at`, `started_at`; `create` with `dns` may answer 202 while it runs); `feedback_webhook_id` and `feedback_webhook_error`. The create-only `dns_result` is gone.
+- `DeclaredCookie` gains `purposes` (by locale) and `lifetime_range`.
+- API coverage list: 1,232 operations.
+
+### Deprecated
+
+- `sign_in_tokens.create` and `revoke` (sunset 2027-04-01): use `sessions.create_browser_ticket`.
+
+### Added (full Backend API coverage)
 
 - **Catch-up with the live Backend API: 452 more operations**, sync and async, each with a typed request body (`<Resource><Method>Body`) and response (`<Resource><Method>Response`) in `atlas_backend.models`. New namespaces: `app_catalog`, `ldap_server_clients`, `journeys`, `groups` (with `groups.rules`), `migrations` (with `migrations.imports`), `managed_grants`, `least_privilege`, `flags`, `mfa_factors` (with `yubikeys` and `smart_card_mappings`), `analytics` (with `reports` and `alert_rules`), `marketing`, `audit_event_schemas`, `directory_pull_sources` (with `sync_runs`), `relay_agents`, `oauth_client_profiles`, `passkey_api`, `vc` (credential types, credentials, presentation requests), `listen`, `agent_registration`, `agents`, `agent_access_requests`, `workflows`, `page_templates`, `service_connectors`, `desktop_mfa`, `identity_verification`, `iga` (entitlements, requests, grants, delegations, sod, lifecycle, campaigns), `scim_provisioning_presets`, `vault`, `connections`, `ssf` (streams, receivers), `network_zones`, `access_policies`, `abac` (templates, links, schema), `resources` (types, assignments), `org_role_grants`, `devices`, `authz_decisions`, `policy_bundles`, `proxy_apps` and `mcp_gateways` (with `budgets`). Further methods on `users` (required actions, notes, guardians, saved searches), `organizations` (webhook endpoints), `oauth_clients` (app settings, workload identity, trusted issuers, login and consent requests), `org_ldap_connections` (sync runs), `fga`, `openfga`, `attack_protection`, `risk_based_mfa`, `delivery_health`, `actions`, `instance` and `integrations`.
 - `policy_bundles.archive` returns the raw gzip bytes; `listen.stream_session` asks for `text/event-stream` and returns the stream text once it closes. `delivery_health.get_for_target` reads `GET /v1/delivery_health/{kind}/{target_id}`.

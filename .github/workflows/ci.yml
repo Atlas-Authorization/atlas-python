@@ -8,8 +8,10 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # shortcut: ubuntu-24.04 pinned because 26.04 images have no Python 3.9; drop 3.9 or unpin when support for it ends
+    runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         python: ["3.9", "3.12"]
     steps:
