@@ -94,6 +94,28 @@ class DryRunResult(_DryRunResultRequired, total=False):
 # --------------------------------------------------------------------------- #
 
 
+class _UserExternalAccountRequired(TypedDict):
+    object: Literal["external_account"]
+    id: str
+    provider: str
+    provider_user_id: str
+    #: The provider's address at the last sign-in or import: a snapshot, not proof of
+    #: ownership.
+    provider_email: str | None
+    email_verified: bool
+    #: Epoch ms.
+    connected_at: int
+
+
+class UserExternalAccount(_UserExternalAccountRequired, total=False):
+    """A provider identity linked to a user. Tokens are never included."""
+
+    first_name: str | None
+    last_name: str | None
+    #: The provider's avatar for this identity.
+    image_url: str | None
+
+
 class _UserRequired(TypedDict):
     object: Literal["user"]
     id: str
@@ -156,6 +178,9 @@ class User(_UserRequired, total=False):
     ban_expires_at: int | None
     ban_reason: str | None
     ban_note: str | None
+    #: Every linked provider identity (sign-in, connect, imported on create or by bulk
+    #: import); the same set ``identities.list`` returns. Absent from older servers.
+    external_accounts: list[UserExternalAccount]
 
 
 class UserReferralFlag(TypedDict):
@@ -314,6 +339,10 @@ class CreateUserBody(_CreateUserRequired, total=False):
     password_digest: str | None
     first_name: str
     last_name: str
+    #: The profile picture: an https URL, stored as given.
+    image_url: str
+    #: Alias of ``image_url``.
+    profile_image_url: str
     email_verified: bool
     #: Your own id for this user; ``None`` or ``""`` clears it.
     external_id: str | None
@@ -338,6 +367,10 @@ class UpdateUserBody(TypedDict, total=False):
     referral_code: str | None
     first_name: str
     last_name: str
+    #: The profile picture: an https URL; ``None`` clears it.
+    image_url: str | None
+    #: Alias of ``image_url``.
+    profile_image_url: str | None
     #: Your own id for this user; ``None`` or ``""`` clears it.
     external_id: str | None
     #: Admin password reset. Prefer ``users.set_password``.
@@ -690,10 +723,13 @@ class CreateWebhookEndpointBody(_CreateWebhookEndpointRequired, total=False):
     alert_contacts: list[str]
     external_ref: str
     metadata: dict[str, Any]
+    #: ``False`` creates the endpoint switched off: nothing is delivered until it is
+    #: enabled. Default ``True``.
+    active: bool
 
 
 # --------------------------------------------------------------------------- #
-# OAuth clients                                                                #
+# OAuth clients                                                               #
 # --------------------------------------------------------------------------- #
 
 TokenAuthMethod = Literal["client_secret_basic", "client_secret_post", "none"]
@@ -1968,9 +2004,10 @@ class ActionTestHttpRequest(TypedDict):
     save_response_as: str | None
 
 
-#: The window a spend cap counts over: ``request`` caps a single debit; ``day`` and
-#: ``month`` are UTC calendar windows; ``total`` never resets.
-ApiKeyLimitPeriod = Literal["request", "day", "month", "total"]
+#: The window a spend cap counts over: ``request`` caps a single debit; ``second`` and
+#: ``minute`` are fixed rate windows aligned to the UTC clock; ``day`` and ``month`` are
+#: UTC calendar windows; ``total`` never resets.
+ApiKeyLimitPeriod = Literal["request", "second", "minute", "day", "month", "total"]
 
 
 class ApiKeyLimit(TypedDict):
@@ -2003,7 +2040,7 @@ class ApiKeyUsageCounter(TypedDict):
     """A raw usage counter for one unit in its current window."""
 
     unit: str
-    period: Literal["day", "month", "total"]
+    period: Literal["second", "minute", "day", "month", "total"]
     used: int
     window_start: int
     #: Epoch ms the window ends; ``None`` for ``total``.
@@ -2207,6 +2244,10 @@ class _ApiKeyVerificationVariant2Required(TypedDict):
 class ApiKeyVerificationVariant2(_ApiKeyVerificationVariant2Required, total=False):
     name: str | None
     scopes: list[str] | None
+    #: The held scopes expanded through the instance scope implications (``calls:write``
+    #: implies ``calls:read``, ``admin`` implies ``*``). ``required_scopes`` is checked
+    #: against this set; equals ``scopes`` when no implications are configured.
+    effective_scopes: list[str]
     constraints: dict[str, Any]
     #: The key's spend caps (``None`` when none).
     limits: list[ApiKeyLimit] | None
@@ -3719,6 +3760,87 @@ class InstanceAuthConfigResolved(TypedDict, total=False):
     externalJwt: InstanceAuthConfigResolvedExternalJwt
 
 
+class _InstanceUpdateWarningRequired(TypedDict):
+    #: ``origin_still_referenced`` (a removed origin URLs still point at) or, on a lenient
+    #: write, ``unknown_field`` (an ``auth_config`` key that was ignored and not stored).
+    code: str
+    message: str
+
+
+class InstanceUpdateWarning(_InstanceUpdateWarningRequired, total=False):
+    """What ``instance.update`` did not do as sent."""
+
+    #: ``unknown_field``: the full path, e.g. ``auth_config.strategies.atlasId``.
+    field: str
+    #: The endpoint for a setting that has its own (e.g. branding: ``PATCH /v1/branding``).
+    hint: str
+    did_you_mean: str
+    #: ``origin_still_referenced``: the removed origin.
+    origin: str
+
+
+class SignInWithAtlasCandidate(TypedDict):
+    id: str
+    client_id: str | None
+    managed_by_this_instance: bool
+
+
+class SignInWithAtlasSettings(TypedDict):
+    """Sign in with Atlas on the instance (``GET/PATCH /v1/instance/sign_in_with_atlas``)."""
+
+    object: Literal["sign_in_with_atlas"]
+    #: Whether the embedded and hosted sign-in show "Continue with Atlas".
+    enabled: bool
+    #: The SSO connection the button starts; ``None`` when off.
+    connection_id: str | None
+    #: ``instance_toggle``: Atlas created the connection and its Atlas ID app. ``linked``:
+    #: an existing connection of yours.
+    managed_via: Literal["instance_toggle", "linked"] | None
+    connection_status: str | None
+    #: Whether this deployment can offer Sign in with Atlas at all.
+    available: bool
+    #: The Atlas issuer the connection must point at.
+    issuer: str | None
+    #: Active OIDC connections to that issuer that could be linked.
+    candidates: list[SignInWithAtlasCandidate]
+
+
+class _UpdateSignInWithAtlasBodyRequired(TypedDict):
+    enabled: bool
+
+
+class UpdateSignInWithAtlasBody(_UpdateSignInWithAtlasBodyRequired, total=False):
+    #: Link this existing connection (an active OIDC connection to the Atlas issuer). Omit
+    #: to pick or create one.
+    connection_id: str | None
+
+
+class HostedPagesUrls(TypedDict):
+    sign_in: str
+    sign_up: str
+    user: str
+
+
+class HostedPagesSettings(TypedDict):
+    """Where the hosted pages send the browser (``GET/PATCH /v1/instance/hosted_pages``)."""
+
+    object: Literal["hosted_pages"]
+    #: ``/hosted/sign-in`` answers 302 here; ``None`` serves the hosted page.
+    sign_in_url: str | None
+    sign_up_url: str | None
+    user_url: str | None
+    #: The hosted pages these settings apply to.
+    hosted: HostedPagesUrls
+
+
+class UpdateHostedPagesBody(TypedDict, total=False):
+    """Each URL https on one of the instance's allowed origins; ``None`` clears it."""
+
+    sign_in_url: str | None
+    sign_up_url: str | None
+    user_url: str | None
+
+
 class Instance(TypedDict, total=False):
     object: Literal["instance"]
     id: str
@@ -3741,6 +3863,8 @@ class Instance(TypedDict, total=False):
     auth_config_resolved: InstanceAuthConfigResolved
     #: Created (epoch ms).
     created_at: int
+    #: ``instance.update`` only: what the write did not do as sent.
+    warnings: list[InstanceUpdateWarning]
 
 
 class _AllowedOriginEntryRequired(TypedDict):
@@ -3826,8 +3950,16 @@ class CookieConsentSettingsLink(TypedDict):
     rendered_attributes: dict[str, str]
 
 
-class DeclaredCookie(TypedDict):
-    """A cookie or browser-storage key Atlas writes (all strictly necessary)."""
+class DeclaredCookieLifetimeRange(TypedDict):
+    """The instance setting a cookie's lifetime follows, with its bounds and default."""
+
+    setting: str
+    min_seconds: int
+    max_seconds: int
+    default_seconds: int
+
+
+class _DeclaredCookieRequired(TypedDict):
 
     #: The exact name, or ``None`` when ``pattern`` describes a family of keys.
     name: str | None
@@ -3843,6 +3975,16 @@ class DeclaredCookie(TypedDict):
     purpose: str
     written_when: str
     set_by: Literal["atlas_frontend_api", "atlas_sdk"]
+
+
+class DeclaredCookie(_DeclaredCookieRequired, total=False):
+    """A cookie or browser-storage key Atlas writes (all strictly necessary)."""
+
+    #: The purpose in every language the hosted pages speak (``en`` included), by locale.
+    purposes: dict[str, str]
+    #: Set when the lifetime follows an instance setting; ``lifetime_seconds`` is this
+    #: instance's value.
+    lifetime_range: DeclaredCookieLifetimeRange
 
 
 class _CookieConsentRequired(TypedDict):
@@ -4122,6 +4264,33 @@ ReferralConsentProvider = Literal[
 ]
 
 
+# A retired provider name (e.g. ``referally``) stored under its new name. Functional form:
+# ``from`` is a keyword.
+ReferralSettingsRenamedWarning = TypedDict(
+    "ReferralSettingsRenamedWarning",
+    {
+        "code": 'Literal["renamed"]',
+        "field": "str",
+        "from": "str",
+        "to": "str",
+        "message": "str",
+    },
+)
+
+
+class ReferralSettingsDefaultedWarning(TypedDict):
+    """A newly picked platform's tracking cookies filled in."""
+
+    code: Literal["defaulted"]
+    field: str
+    to: list[str]
+    message: str
+
+
+#: What a referral settings write stored differently from what was sent.
+ReferralSettingsWarning = Union[ReferralSettingsRenamedWarning, ReferralSettingsDefaultedWarning]
+
+
 class _ReferralSettingsRequired(TypedDict):
     object: Literal["referral_settings"]
     enabled: bool
@@ -4158,6 +4327,8 @@ class ReferralSettings(_ReferralSettingsRequired, total=False):
     browser_sources: list[ReferralBrowserSource]
     #: Whether ``browser_sources`` is the provider's default.
     browser_sources_default: bool
+    #: ``referrals.update`` only: what the write stored differently from what was sent.
+    warnings: list[ReferralSettingsWarning]
     #: Which consent manager decides on the tracking cookie's ids (default ``auto``).
     consent_provider: ReferralConsentProvider
     #: Forward email, name and suspension changes to the platform (default ``True``).
@@ -6557,6 +6728,45 @@ class CreateSessionBody(_CreateSessionBodyRequired, total=False):
     actor: CreateSessionBodyActor
     #: Custom per-session data to attach (a JSON object, at most 2 KB).
     custom_data: dict[str, Any]
+    #: ``"session"`` (default) mints a session; ``"browser_ticket"`` mints a one-time
+    #: browser sign-in ticket instead (answers a :class:`BrowserTicket`); prefer
+    #: ``sessions.create_browser_ticket``.
+    mode: Literal["session", "browser_ticket"]
+    #: ``browser_ticket`` mode: where the ready ``url`` lands (an allowed origin).
+    redirect_url: str
+    #: ``browser_ticket`` mode: ticket lifetime in seconds, 1 to 300 (default 60).
+    expires_in_seconds: int
+
+
+class BrowserTicket(TypedDict):
+    """A one-time browser sign-in ticket (``POST /v1/sessions`` with
+    ``mode: "browser_ticket"``). Open ``url`` in the browser, or redeem ``ticket`` with
+    the ticket sign-in strategy."""
+
+    object: Literal["browser_ticket"]
+    id: str
+    user_id: str
+    ticket: str
+    #: ``None`` when no ``redirect_url`` was sent.
+    url: str | None
+    redirect_url: str | None
+    expires_in: int
+    #: ISO 8601.
+    expires_at: str
+
+
+class TestingSignInUrl(TypedDict):
+    """A one-time URL that signs a browser in as a user (``POST /v1/testing/sign_in_url``)."""
+
+    object: Literal["testing_sign_in_url"]
+    id: str
+    user_id: str
+    ticket: str
+    url: str
+    redirect_url: str
+    expires_in: int
+    #: ISO 8601.
+    expires_at: str
 
 
 class SessionCreated(TypedDict, total=False):
@@ -6822,6 +7032,10 @@ class ImportUserRow(TypedDict, total=False):
     email_verified: bool
     first_name: str
     last_name: str
+    #: The profile picture: an https URL, stored as given.
+    image_url: str
+    #: Alias of ``image_url``.
+    profile_image_url: str
     username: str
     public_metadata: dict[str, Any]
     private_metadata: dict[str, Any]
@@ -7241,6 +7455,102 @@ class WebhookSecretRotation(_WebhookSecretRotationRequired, SealedSecrets, total
 
 
 # --------------------------------------------------------------------------- #
+# Application webhooks (your app's own events, to your customers' endpoints)   #
+# --------------------------------------------------------------------------- #
+
+
+class AppEventType(TypedDict):
+    """One entry of the app's own event catalog."""
+
+    object: Literal["app_event_type"]
+    #: ``aet_`` id.
+    id: str
+    #: Lowercase dotted name, e.g. ``call.completed``.
+    type: str
+    description: str | None
+    #: JSON Schema every published ``data`` must match; ``None`` = any object.
+    schema: dict[str, Any] | None
+    #: Still publishable; hidden from the endpoint picker.
+    deprecated: bool
+    created_at: int
+    updated_at: int
+
+
+class UpdateAppEventTypeBody(TypedDict, total=False):
+    description: str | None
+    schema: dict[str, Any] | None
+    deprecated: bool
+
+
+class _CreateAppEventTypeBodyRequired(TypedDict):
+    #: Lowercase dotted name, e.g. ``call.completed``.
+    type: str
+
+
+class CreateAppEventTypeBody(_CreateAppEventTypeBodyRequired, total=False):
+    description: str | None
+    schema: dict[str, Any] | None
+    deprecated: bool
+
+
+class _PublishAppEventBodyRequired(TypedDict):
+    type: str
+    data: dict[str, Any]
+
+
+class PublishAppEventBody(_PublishAppEventBodyRequired, total=False):
+    #: The organization (your customer) whose endpoints receive the event.
+    organization_id: str
+    #: Shorthand for ``organization_id``.
+    org: str
+    #: A repeat with the same key returns the first event and queues nothing (kept 90 days).
+    idempotency_key: str
+
+
+class AppEvent(TypedDict):
+    object: Literal["app_event"]
+    #: ``evt_`` id; the ``webhook-id`` header of every delivery of this event.
+    id: str
+    type: str
+    organization_id: str
+    data: dict[str, Any]
+    idempotency_key: str | None
+    created_at: int
+
+
+class _PublishedAppEventRequired(AppEvent):
+    #: ``True``: an earlier publish with the same key; nothing new was queued.
+    idempotent_replay: bool
+
+
+class PublishedAppEvent(_PublishedAppEventRequired, total=False):
+    #: First publish only: how many endpoints it was queued for, and which.
+    deliveries_queued: int
+    endpoint_ids: list[str]
+
+
+class AppWebhookEndpointBody(TypedDict, total=False):
+    url: str
+    #: Types from your catalog, or ``["*"]`` (the default) for all of them.
+    enabled_events: list[str]
+    description: str | None
+    active: bool
+
+
+class AppWebhookEndpointSecret(TypedDict):
+    object: Literal["webhook_secret"]
+    secret: str
+
+
+class AppWebhookEndpointSecretRotation(TypedDict):
+    object: Literal["webhook_secret"]
+    secret: str
+    #: The previous secret keeps signing for this long (24 hours).
+    overlap_seconds: int
+    previous_secret_expires_at: int | None
+
+
+# --------------------------------------------------------------------------- #
 # Origin moves, connections, integrations, logout fan-out, managed email,      #
 # back-channel deliveries, Sign in with Atlas publisher                        #
 # --------------------------------------------------------------------------- #
@@ -7436,6 +7746,27 @@ class ManagedEmailRecord(TypedDict, total=False):
     status: str
 
 
+class _ManagedEmailDnsAutomationRequired(TypedDict):
+    provider: str
+    token_set: bool
+
+
+class ManagedEmailDnsAutomation(_ManagedEmailDnsAutomationRequired, total=False):
+    """DNS automation runs in the background: ``create`` with ``dns`` answers at once
+    (202) and Atlas writes the records, then checks with your provider until the domain
+    is verified. Poll ``get()`` (or call ``verify()``). The token is never returned."""
+
+    #: ``pending`` (records not written yet), ``verifying``, ``verified``, or ``failed``
+    #: when Atlas stopped (see ``last_error``).
+    status: Literal["pending", "verifying", "verified", "failed"] | None
+    #: The last DNS write or provider check error, ``CODE: message``.
+    last_error: str | None
+    attempts: int
+    #: Epoch ms of the next background step; ``None`` when nothing is due.
+    next_check_at: int | None
+    started_at: int | None
+
+
 class _ManagedEmailRequired(TypedDict):
     object: Literal["managed_email"]
     id: str
@@ -7454,8 +7785,8 @@ class _ManagedEmailRequired(TypedDict):
     usage: dict[str, Any]
     #: ``your_provider_account`` (``shared_platform_account`` from servers before 2026-10).
     reputation: str
-    #: ``{"provider": str, "token_set": bool}`` or ``None``; the token is never returned.
-    dns: dict[str, Any] | None
+    #: DNS automation, or ``None`` when not set.
+    dns: ManagedEmailDnsAutomation | None
     failure_reason: str | None
     last_checked_at: int | None
     verified_at: int | None
@@ -7470,11 +7801,12 @@ class ManagedEmail(_ManagedEmailRequired, total=False):
     backend: Literal["resend", "brevo"]
     #: Your email provider (mode ``managed_domain``) that holds the API key.
     provider_id: str | None
-    #: Brevo, on create: whether the bounce / complaint webhook was registered on your account.
+    #: Whether the bounce / complaint webhook is registered on your Resend or Brevo account.
     feedback_webhook: Literal["registered", "not_registered"]
-
-    #: Create only, with ``dns``: the zone and the records Atlas wrote.
-    dns_result: dict[str, Any]
+    #: That webhook's id on your account.
+    feedback_webhook_id: str | None
+    #: Why the last registration failed; ``None`` once it is registered.
+    feedback_webhook_error: str | None
     next_step: str
 
 
@@ -9185,6 +9517,63 @@ class PrivacyOrchestratorInput(TypedDict, total=False):
     cancel_deletion_on_sign_in: bool
     sign_requests: bool
     completion_webhook_url: str | None
+
+
+class PrivacyIntegrationKey(TypedDict, total=False):
+    """The executor key: ``privacy:*`` scopes only (default ``privacy:execute`` and
+    ``privacy:grants:revoke``)."""
+
+    name: str
+    scopes: list[str]
+    #: Epoch ms or an ISO 8601 date.
+    expires_at: int | str
+    allowed_ips: list[str]
+    allowed_origins: list[str]
+
+
+class _PrivacyIntegrationConnectInputRequired(TypedDict):
+    #: An orchestrator preset (``cookiemunch``) or ``custom``.
+    preset: str
+
+
+class PrivacyIntegrationConnectInput(_PrivacyIntegrationConnectInputRequired, total=False):
+    """``POST /v1/instance/privacy_integrations/connect``: wire a consent manager /
+    orchestrator both ways in one call."""
+
+    #: The orchestrator-side site. Required by the ``cookiemunch`` preset.
+    site_id: str
+    #: The key the orchestrator issued to Atlas for opening cases (optional on a re-run).
+    api_key: str
+    partner_link_id: str
+    #: The webhook URL the orchestrator shows for this instance's executor connection
+    #: (optional on a re-run).
+    completion_webhook_url: str
+    #: Overrides for ``PUT /v1/instance/cookie_consent`` (merged over the preset), or
+    #: ``False`` to leave it alone.
+    cookie_consent: dict[str, Any] | Literal[False]
+    #: Further orchestrator fields (``name``, ``case_url``, ``cancel_url``,
+    #: ``sign_requests``, ...).
+    orchestrator: PrivacyOrchestratorInput
+    key: PrivacyIntegrationKey
+
+
+class _PrivacyIntegrationRequired(TypedDict):
+    object: Literal["privacy_integration"]
+    preset: str | None
+    #: Banner on, orchestrator and its completion webhook set, executor key live.
+    connected: bool
+    #: The cookie consent settings (``enabled`` and the rest).
+    cookie_consent: dict[str, Any]
+    privacy_orchestrator: PrivacyOrchestrator
+    dsr_webhook: dict[str, Any] | None
+    #: ``id``, ``scopes``; ``secret`` only on the connect that minted it,
+    #: ``idempotent_replay`` on a re-run.
+    executor_key: dict[str, Any] | None
+
+
+class PrivacyIntegration(_PrivacyIntegrationRequired, total=False):
+    #: Connect only: the consent-manager site check (``{code, message}`` each).
+    warnings: list[dict[str, str]]
 
 
 class OperatorConfiguration(TypedDict, total=False):
