@@ -181,6 +181,9 @@ class User(_UserRequired, total=False):
     #: Every linked provider identity (sign-in, connect, imported on create or by bulk
     #: import); the same set ``identities.list`` returns. Absent from older servers.
     external_accounts: list[UserExternalAccount]
+    #: One account state, as the ID token's ``account_status`` (deactivation is a ban).
+    #: Also on ``user.*`` webhook payloads. Absent from older servers.
+    status: Literal["active", "suspended", "banned"]
 
 
 class UserReferralFlag(TypedDict):
@@ -394,10 +397,13 @@ class CreateUserBody(_CreateUserRequired, total=False):
     password_digest: str | None
     #: Names a hash that does not describe itself: ``scrypt``, ``pbkdf2``, ``md5``,
     #: ``sha1``, ``sha256``, ``sha512``, ``hmac_sha256``, ... A self-describing hash
-    #: (Argon2id, bcrypt, Django / passlib PBKDF2 and scrypt, ...) needs none.
+    #: (Argon2id, bcrypt, Django / passlib PBKDF2 and scrypt, ...) needs none. A Node
+    #: ``crypto.scrypt`` string ``scrypt$N$r$p$salt$key`` whose salt is all digits is
+    #: also a valid Django one: name it ``scrypt_node`` or ``scrypt_django``.
     password_hash_algorithm: str
-    #: That algorithm's parameters (e.g. ``{"N": 16384, "r": 8, "p": 1, "salt": "..."}``).
-    #: A refusal names the bad param.
+    #: That algorithm's parameters (e.g. ``{"N": 16384, "r": 8, "p": 1, "salt": "..."}``;
+    #: ``salt_encoding`` ``hex`` / ``base64`` / ``base64url`` / ``utf8``, default
+    #: ``utf8`` for ``scrypt_node``). A refusal names the bad param.
     password_hash_params: dict[str, Any]
     #: The per-user salt, when it is not part of ``password_hash``.
     password_salt: str
@@ -720,6 +726,11 @@ class _CreateInvitationRequired(TypedDict):
 
 class CreateInvitationBody(_CreateInvitationRequired, total=False):
     public_metadata: Metadata
+    #: When it expires: epoch ms or an ISO 8601 date-time, at most 365 days ahead.
+    #: Default 7 days.
+    expires_at: int | str
+    #: Alternative to ``expires_at``: 1 to 365 days from now. Send one or the other.
+    expires_in_days: int
 
 
 # --------------------------------------------------------------------------- #
@@ -919,6 +930,15 @@ class OAuthClient(_OAuthClientRequired, SealedSecrets, total=False):
     #: session and redirects straight back (with ``state``), skipping the
     #: confirmation page. ``False`` by default.
     skip_logout_confirmation: bool
+    #: First-party only. A refresh_token grant also keeps the Atlas session it came from
+    #: alive, and once that session has ended the refresh fails (``invalid_grant``).
+    refresh_touches_session: bool
+    #: Create and update responses only: the origins this write added to the
+    #: instance's ``allowed_origins`` (``add_redirect_origins``, or automatically for a
+    #: client a connected integration signs users in with).
+    added_origins: list[str]
+    #: No authorization code is issued for a user whose primary email is not verified.
+    require_verified_email: bool
     #: Every OAuth flow for the client is refused while ``True``.
     disabled: bool
     #: PKCE is required for this confidential client too.
@@ -975,6 +995,29 @@ class OAuthClientSecretRotation(_OAuthClientSecretRotationRequired, SealedSecret
 
     note: str
     skip_logout_confirmation: bool
+    #: Where and until when the generated secret can be fetched once more
+    #: (``oauth_clients.reveal_secret``).
+    client_secret_reveal: OAuthClientSecretRevealLink
+
+
+class OAuthClientSecretRevealLink(TypedDict):
+    #: ``/v1/oauth_clients/{id}/secret/reveal``.
+    path: str
+    #: Epoch ms.
+    expires_at: int
+
+
+class OAuthClientSecretReveal(TypedDict):
+    """``oauth_clients.reveal_secret``: the secret the latest create or rotate generated
+    (once, within 10 minutes)."""
+
+    object: Literal["oauth_client_secret"]
+    id: str
+    client_id: str
+    client_secret: str
+    secret_prefix: str | None
+    client_secret_expires_at: int | None
+    note: str
 
 
 class ClientGrant(TypedDict):
@@ -1003,6 +1046,12 @@ class CreateOAuthClientBody(_CreateOAuthClientRequired, total=False):
     #: OIDC Back-Channel Logout: a signed ``logout_token`` is POSTed here on sign-out.
     backchannel_logout_uri: str | None
     backchannel_logout_session_required: bool
+    #: Your own secret (32-256 random printable characters); omit and Atlas generates
+    #: one (then the response carries ``client_secret_reveal``).
+    client_secret: str
+    #: Issue no authorization code for a user whose primary email is not verified.
+    #: Default ``False``.
+    require_verified_email: bool
     #: OIDC Front-Channel Logout: loaded in a hidden iframe on the sign-out page.
     frontchannel_logout_uri: str | None
     frontchannel_logout_session_required: bool
@@ -1012,6 +1061,13 @@ class CreateOAuthClientBody(_CreateOAuthClientRequired, total=False):
     #: registered ``post_logout_redirect_uri`` ends the session and redirects straight
     #: back with ``state``, without the confirmation page.
     skip_logout_confirmation: bool
+    #: First-party clients only (422 ``VALIDATION_FAILED`` otherwise). A
+    #: refresh_token grant also keeps the Atlas session it came from alive, and once
+    #: that session has ended the refresh fails (``invalid_grant``).
+    refresh_touches_session: bool
+    #: Write-only: also add the redirect URIs' origins to the instance's
+    #: ``allowed_origins`` (append only; the response lists them in ``added_origins``).
+    add_redirect_origins: bool
     #: How long the issued secret authenticates (reported as ``client_secret_expires_at``).
     secret_expires_in_seconds: int
     #: ``pairwise`` gives the client a per-sector ``sub`` (OIDC Core §8).
@@ -1048,6 +1104,13 @@ class UpdateOAuthClientBody(TypedDict, total=False):
     #: registered ``post_logout_redirect_uri`` ends the session and redirects straight
     #: back with ``state``, without the confirmation page.
     skip_logout_confirmation: bool
+    #: First-party clients only (422 ``VALIDATION_FAILED`` otherwise). A
+    #: refresh_token grant also keeps the Atlas session it came from alive, and once
+    #: that session has ended the refresh fails (``invalid_grant``).
+    refresh_touches_session: bool
+    #: Write-only: also add the redirect URIs' origins to the instance's
+    #: ``allowed_origins`` (append only; the response lists them in ``added_origins``).
+    add_redirect_origins: bool
     #: How long the issued secret authenticates (reported as ``client_secret_expires_at``).
     secret_expires_in_seconds: int
     #: ``pairwise`` gives the client a per-sector ``sub`` (OIDC Core §8).
@@ -1059,6 +1122,8 @@ class UpdateOAuthClientBody(TypedDict, total=False):
     disabled: bool
     #: Require PKCE for this confidential client too.
     require_pkce: bool
+    #: Issue no authorization code for a user whose primary email is not verified.
+    require_verified_email: bool
     #: ``jwt`` or ``opaque`` access tokens for this client; ``None`` inherits.
     access_token_format: Literal["jwt", "opaque"] | None
     #: Token lifetime overrides (seconds); a ``None`` field is inherited. On write it
@@ -4132,12 +4197,38 @@ class SetCaptchaSecretBody(TypedDict, total=False):
     #: The captcha provider the secret belongs to (defaults to the configured one).
     #: Captcha is bring-your-own-keys: store the secret before turning captcha on.
     provider: str
+    #: The provider's public site key. With it, ``auth_config.captcha`` switches to
+    #: ``provider`` with this site key in the same atomic write (e.g. from the built-in
+    #: ``atlas`` captcha to Turnstile). Refused for secret-only providers.
+    site_key: str
 
 
-class CaptchaSecret(TypedDict):
+class _CaptchaSecretRequired(TypedDict):
     object: Literal["captcha_secret"]
     provider: str
     set: Literal[True]
+
+
+class CaptchaSecret(_CaptchaSecretRequired, total=False):
+    #: Whether ``auth_config.captcha`` now runs this provider with the given site key.
+    switched: bool
+    #: The resulting captcha config, present when ``switched``.
+    captcha: dict[str, Any]
+
+
+class OAuthClientLogout(TypedDict):
+    """The result of ``oauth_clients.logout``."""
+
+    object: Literal["oauth_client_logout"]
+    client_id: str
+    sid: str
+    #: ``revoked``: this call ended the Atlas session. ``already_ended``: it had already ended.
+    session: Literal["revoked", "already_ended"]
+    #: This client's refresh grants under the sid that were revoked (offline_access included).
+    grants_revoked: int
+    #: Back-channel logouts queued, to this client and every other app signed in through
+    #: the session.
+    backchannel_logouts: int
 
 
 class _InstanceDeleteCaptchaSecretResultBase(TypedDict):
@@ -4853,6 +4944,9 @@ class _BeforeUserCreateHookRequired(TypedDict):
 class BeforeUserCreateHook(_BeforeUserCreateHookRequired, total=False):
     """``GET /v1/instance/hooks/before_user_create``."""
 
+    #: Refuse the sign-up when the hook times out, errors or answers badly. Default
+    #: ``False``.
+    fail_closed: bool
     #: The last call Atlas made to the hook.
     last_call: BeforeUserCreateHookLastCall | None
     updated_at: int | None
@@ -4870,9 +4964,14 @@ class UpdateBeforeUserCreateHookBody(TypedDict, total=False):
     signing_secret: str | None
     #: 500-5000.
     timeout_ms: int
+    #: Refuse the sign-up when the hook times out, errors or answers badly.
+    fail_closed: bool
 
 
 class BeforeUserCreateHookAnswer(TypedDict, total=False):
+    #: Set when the hook denied the sample sign-up.
+    deny: Literal[True]
+    reason: str | None
     external_id: str | None
     public_metadata: dict[str, Any] | None
     private_metadata_set: bool
@@ -4923,6 +5022,45 @@ class _PreflightFindingsItemRequired(TypedDict):
 class PreflightFindingsItem(_PreflightFindingsItemRequired, total=False):
     #: Ids of what the finding is about (provider, id/client_id, domain_id/host, …).
     subject: dict[str, str]
+    #: Set when the code is acknowledged as known and accepted (never on an error).
+    #: Do not count such a finding.
+    acknowledged: PreflightAckSummary
+
+
+class PreflightAckSummary(TypedDict):
+    #: Why the finding is accepted.
+    reason: str
+    #: The API key or dashboard user that acknowledged it.
+    by: str | None
+    #: Epoch ms.
+    at: int
+    #: Epoch ms; ``None`` = until removed.
+    expires_at: int | None
+
+
+class PreflightAck(PreflightAckSummary):
+    """A stored preflight acknowledgement."""
+
+    object: Literal["preflight_ack"]
+    code: str
+    #: ``False`` once ``expires_at`` has passed: the finding counts again.
+    active: bool
+
+
+class _AcknowledgePreflightRequired(TypedDict):
+    #: Why the finding is accepted (required, at most 500 characters).
+    reason: str
+
+
+class AcknowledgePreflightBody(_AcknowledgePreflightRequired, total=False):
+    #: When it lapses: epoch ms or ISO 8601, in the future. Omit or ``None`` for no expiry.
+    expires_at: int | str | None
+
+
+class PreflightAckDeleted(TypedDict):
+    object: Literal["preflight_ack"]
+    code: str
+    deleted: Literal[True]
 
 
 class SdkAdvisory(TypedDict):
@@ -5804,11 +5942,22 @@ class TestMessagingProviderBody(TypedDict, total=False):
     to: str
 
 
-class MessagingTest(TypedDict):
+class _MessagingTestRequired(TypedDict):
     object: Literal["messaging_test"]
     channel: str
     sent_to: str
+    #: Always ``True``: a provider refusal is a 502 error whose meta says what the
+    #: provider answered.
     ok: Literal[True]
+
+
+class MessagingTest(_MessagingTestRequired, total=False):
+    accepted: bool
+    #: The transport that accepted it (``resend``, ``smtp``, ``twilio``, ...).
+    provider: str
+    provider_message_id: str | None
+    #: SMTP: the server reply line (carries the queue id).
+    provider_response: str
 
 
 class CreateNetworkAclBody(TypedDict, total=False):
@@ -7772,6 +7921,8 @@ class WebhookDeliveryAttempt(_WebhookDeliveryAttemptRequired, total=False):
     """A queued test (or redelivery); with ``test(wait=...)`` the attempt's outcome."""
 
     delivery_id: str
+    #: On a test: the exact URL the attempt was (or will be) POSTed to.
+    url: str
     #: Always ``webhook.test`` on a test.
     event_type: str
     http_status: int | None

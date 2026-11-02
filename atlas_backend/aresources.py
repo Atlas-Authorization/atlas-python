@@ -1397,6 +1397,13 @@ class AsyncOAuthClients:
             idempotency_key=idempotency_key,
         )
 
+    async def reveal_secret(self, client_id: str) -> m.OAuthClientSecretReveal:
+        """The secret the latest create or rotate generated, once more: within 10
+        minutes, a single time, while it is still current; 410 afterwards (rotate)."""
+        return await self._t.request(
+            method="POST", path=f"/v1/oauth_clients/{client_id}/secret/reveal"
+        )
+
     async def list_backchannel_deliveries(
         self, client_id: str, *, limit: int | None = None, starting_after: str | None = None
     ) -> m.BackchannelLogoutDeliveryList:
@@ -1405,6 +1412,22 @@ class AsyncOAuthClients:
             method="GET",
             path=f"/v1/oauth_clients/{client_id}/backchannel_deliveries",
             query=_q(limit=limit, starting_after=starting_after),
+        )
+
+    async def logout(
+        self, client_id: str, sid: str, *, idempotency_key: str | None = None
+    ) -> m.OAuthClientLogout:
+        """Sign a user out of this app AND of Atlas in one call: revokes this client's
+        grants under ``sid`` and the Atlas session itself (every other app gets a
+        back-channel logout). ``client_id`` is the client id or its public
+        ``client_id``; ``sid`` is the id_token's ``sid``. Needs ``oauth_clients:write``
+        and ``sessions:write``. No browser redirect to ``/oauth2/logout`` is needed.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/oauth_clients/{client_id}/logout",
+            body={"sid": sid},
+            idempotency_key=idempotency_key,
         )
 
     async def test_backchannel_logout(self, client_id: str) -> m.BackchannelLogoutTest:
@@ -4157,7 +4180,10 @@ class AsyncInstance:
     async def set_captcha_secret(
         self, body: m.SetCaptchaSecretBody | None = None
     ) -> m.CaptchaSecret:
-        """Store the captcha provider secret (write-only, encrypted; never read back)."""
+        """Store the captcha provider secret (write-only, encrypted; never read back).
+        With ``site_key``, also switch ``auth_config.captcha`` to ``provider`` with that
+        site key in the same atomic write (``switched`` is then ``True``).
+        """
         return await self._t.request(
             method="PUT",
             path="/v1/instance/captcha_secret",
@@ -4267,6 +4293,29 @@ class AsyncInstance:
             method="GET",
             path="/v1/instance/preflight",
             query=_q(min_severity=min_severity, include_suppressed=include_suppressed),
+        )
+
+    async def list_preflight_acks(self) -> ListPage:
+        """Every preflight acknowledgement, lapsed ones included (``active: False``)."""
+        return await self._t.request(method="GET", path="/v1/instance/preflight/acks")
+
+    async def acknowledge_preflight(
+        self, code: str, body: m.AcknowledgePreflightBody, *, dry_run: bool = False
+    ) -> m.PreflightAck:
+        """Acknowledge a known, accepted warning or info finding by code: it is still
+        reported, with ``acknowledged``, and stops counting. Replaces any earlier
+        acknowledgement of the code. A code that can be an error is refused (422)."""
+        return await self._t.request(
+            method="PUT",
+            path=f"/v1/instance/preflight/acks/{_enc(code)}",
+            body=body,
+            query=_dry(dry_run),
+        )
+
+    async def delete_preflight_ack(self, code: str) -> m.PreflightAckDeleted:
+        """Remove an acknowledgement: findings with this code count again (404 when none)."""
+        return await self._t.request(
+            method="DELETE", path=f"/v1/instance/preflight/acks/{_enc(code)}"
         )
 
     async def unknown_fields_report(self, *, days: int | None = None) -> JSON:
@@ -4572,8 +4621,10 @@ class _AsyncInstanceHooks:
     """The ``before_user_create`` hook: just before Atlas creates a user from a
     self-service sign-up, it sends your endpoint a signed ``POST`` (the webhook headers;
     verify it with :func:`verify_webhook`) of type ``user.before_create`` and stamps the
-    ``external_id`` and metadata you answer. A slow or failing hook never blocks a
-    sign-up. ``signing_secret`` is write-only.
+    ``external_id`` and metadata you answer, or refuses the sign-up when you answer
+    ``{"deny": true, "reason": ...}`` (or HTTP 403). A slow or failing hook does not
+    block a sign-up unless the hook is set ``fail_closed``. ``signing_secret`` is
+    write-only.
     """
 
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -6711,13 +6762,31 @@ class AsyncPlatformApps:
         archived: bool | None = None,
         include_archived: bool | None = None,
         metadata: dict[str, Any] | None = None,
+        name: str | None = None,
+        name_prefix: str | None = None,
+        external_ref: str | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
     ) -> ListPage:
-        """List the apps (instances) this platform owns; ``metadata`` filters on
-        ``metadata[key]=value``."""
+        """List the apps (instances) this platform owns, newest first; ``metadata``
+        filters on ``metadata[key]=value``. Find one app with ``name`` (exact, ignoring
+        case), ``name_prefix`` or ``external_ref`` (zero or one item). Without ``limit``
+        every matching app is returned; pass ``limit`` (up to 500) and
+        ``starting_after`` = the previous page's ``next_cursor`` to page."""
         return await self._t.request(
             method="GET",
             path="/v1/platform/apps",
-            query=_meta(metadata, tag=tag, archived=archived, include_archived=include_archived)
+            query=_meta(
+                metadata,
+                tag=tag,
+                archived=archived,
+                include_archived=include_archived,
+                name=name,
+                name_prefix=name_prefix,
+                external_ref=external_ref,
+                limit=limit,
+                starting_after=starting_after,
+            )
             or None,
         )
 

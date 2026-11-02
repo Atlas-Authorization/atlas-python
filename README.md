@@ -432,6 +432,48 @@ client is refused with 422 `VALIDATION_FAILED`.
 atlas.oauth_clients.update(client_id, {"skip_logout_confirmation": True})
 ```
 
+## Acknowledging preflight findings
+
+A warning or info finding you know about and accept can be acknowledged with a reason
+(and an optional expiry). `instance.preflight()` still lists it, with `acknowledged`;
+count only the findings without it. Errors are never acknowledged (422).
+
+```python
+atlas.instance.acknowledge_preflight("webhook_endpoint_off_origin", {"reason": "Receiver runs on our ops host"})
+todo = [f for f in atlas.instance.preflight()["findings"] if "acknowledged" not in f]
+atlas.instance.delete_preflight_ack("webhook_endpoint_off_origin")
+```
+
+## Fetching a generated client secret once more
+
+A create or rotate that generated the secret answers `client_secret_reveal`
+(`path`, `expires_at`): within 10 minutes, `oauth_clients.reveal_secret(client_id)` returns
+it a single time. Or send your own `client_secret` (32-256 random printable characters)
+on create. `require_verified_email=True` issues no authorization code for a user whose
+primary email is not verified.
+
+```python
+secret = atlas.oauth_clients.reveal_secret(client_id)["client_secret"]
+```
+
+## Signing a user out of your app and Atlas
+
+`oauth_clients.logout(client_id, sid)` ends the user's Atlas session from your backend
+(the `sid` is the id_token's `sid`): it revokes this client's grants under that sid,
+ends the session and queues a back-channel logout to every other app signed in
+through it. No browser redirect to `/oauth2/logout` is needed. Needs
+`oauth_clients:write` and `sessions:write`.
+
+```python
+out = atlas.oauth_clients.logout(client_id, id_token_claims["sid"])
+print(out["session"], out["grants_revoked"], out["backchannel_logouts"])  # "revoked" | "already_ended"
+```
+
+A first-party client with `refresh_touches_session=True` keeps the Atlas session alive
+on every refresh, and its refresh fails (`invalid_grant`) once that session has ended.
+`add_redirect_origins=True` on create / update also adds the redirect URIs' origins to
+the instance's `allowed_origins`; the response lists them in `added_origins`.
+
 ## Entitlements and organization policy
 
 ```python

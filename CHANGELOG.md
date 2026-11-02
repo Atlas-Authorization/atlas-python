@@ -2,6 +2,24 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.23.0 — 2026-11-02
+
+### Added
+
+- **Back-channel sign-out from your backend.** `oauth_clients.logout(client_id, sid, idempotency_key=)` (`POST /v1/oauth_clients/{id}/logout`) signs the user out of your app and of Atlas in one call; typed `OAuthClientLogout` (`session`: `revoked` / `already_ended`, `grants_revoked`, `backchannel_logouts`).
+- OAuth clients: `refresh_touches_session` (first-party; a refresh keeps the Atlas session alive and fails once it has ended) on create, update and read; write-only `add_redirect_origins` on create and update, with the response's `added_origins`.
+- `instance.set_captcha_secret` takes `site_key`: storing the secret and switching `auth_config.captcha` to that provider happen in one atomic write. `CaptchaSecret` gains `switched` and `captcha`.
+- **Preflight acknowledgements.** `instance.list_preflight_acks()`, `instance.acknowledge_preflight(code, {"reason", "expires_at"?}, dry_run=)` and `instance.delete_preflight_ack(code)` (`/v1/instance/preflight/acks[/{code}]`); findings gain `acknowledged` (`reason`, `by`, `at`, `expires_at`). Typed `PreflightAck`, `AcknowledgePreflightBody`.
+- **OAuth client secret reveal.** `oauth_clients.reveal_secret(client_id)` (`POST /v1/oauth_clients/{id}/secret/reveal`): the generated secret once more, within 10 minutes. Create accepts your own `client_secret`; create and rotate responses carry `client_secret_reveal` (`path`, `expires_at`). `require_verified_email` on create, update and read.
+- `platform.apps.list` takes `name`, `name_prefix`, `external_ref`, `limit` and `starting_after`.
+- `invitations.create` takes `expires_at` (epoch ms or ISO 8601) or `expires_in_days`.
+- `User.status` (`active` / `suspended` / `banned`), also on `user.*` webhook payloads.
+- The webhook test result carries `url`; `MessagingTest` gains `accepted`, `provider`, `provider_message_id` and `provider_response`.
+- `before_user_create` hook: `fail_closed` on read and update; the test answer may carry `deny` / `reason`.
+- New webhook events (no SDK change needed, event types are strings): `session.expired` (`data.reason` `idle_expired` / `expired`), `invitation.created`, `invitation.accepted`, `invitation.revoked`.
+- Password import docs: `password_hash_algorithm` `scrypt_node` / `scrypt_django` and the `salt_encoding` hash param.
+- API coverage list: 1,246 operations.
+
 ## 0.22.0 — 2026-11-01
 
 ### Added
