@@ -2,6 +2,26 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.22.0 — 2026-11-01
+
+### Added
+
+- **Tenant organizations.** `CreateOrganizationBody` takes `external_id`, `public_metadata`, `private_metadata`, `owner_email` and `role_mappings`, and `created_by` is optional (a backend-created organization with no members yet); `UpdateOrganizationBody` takes `external_id` and `role_mappings` (`None` clears). `Organization` gains `external_id`, `role_mappings`, a nullable `created_by`, `owner_invitation` (create with `owner_email`) and the `sso` block on `get` (`connections`, `scim_base_url`).
+- `organizations.list(external_id=, metadata=)` (`metadata[key]=value`, AND), `organizations.find_by_domain(domain, include_unverified=)` (also takes an email address) and `organizations.get_policy(org_id)`.
+- **Domain verification methods.** `organizations.domains.verify(org_id, domain_id, method=, code=)` (`dns_txt`, `well_known` or `email`; no arguments is the DNS check, as before) and `organizations.domains.send_verification_email(org_id, domain_id, address=)` (your own email provider). `OrgDomain` gains `verification_methods` and `verification_method`; `status` is typed.
+- **Trusted-JWT connections.** `jwt_connections` (`list`, `get`, `create`, `update`, `delete`), typed `JwtConnection` / `JwtConnectionBody`.
+- SCIM token create returns `scim_base_url` and `warnings` (`no_sso_connection`).
+- SSO connections: `saml_acs_path` and `github_access`. Organization LDAP connections: `group_role_mappings` and `attributes.groups`.
+- **Setup links.** `return_url` on onboarding profiles and tickets, `effective_return_url` on an issued ticket, `sso_onboarding.list_profiles(name=)`.
+- **Webhooks.** `secret` (your own `whsec_` signing secret) on endpoint create and on `rotate_secret`; `WebhookDeliveryAttempt` gains `event_type` and `error_kind`. Constants for `sso_connection.activated`, `sso_onboarding_ticket.completed` and the `scim_group.*` events, with typed event data; `user.referral_attributed` data gains `source`, `atlas_id_sub` and `atlas_id_app_id`, `organization_membership.updated` gains `previous_role` and `previous_role_id`.
+- **Password hashes.** `password_hash_algorithm` and `password_hash_params` on `users.create` (plus `password_salt` and `password_hasher`) and on user import rows.
+- **Platform apps.** `apps.reveal_initial_secret(app_id, dry_run=)` shows a new app's secret keys once more within 10 minutes; the create result carries `initial_secret_reveal`, and an Idempotency-Key replay carries `secret_redacted`.
+- Referral settings: `report_linked_atlas_id_signups` and `partner_portal_url`.
+- Cookie consent: `host_aliases`.
+- **Path-mount domains.** `domains.create` with `method="path"`, `hostname` and `base_path`; `CustomDomain` gains `method`, `base_path`, `routing`, `frontend_api_url`, `verification` and `instructions` (`cname_target` is `None` for a path mount); a verified path mount answers `issuer`.
+- **Previous issuers.** `AtlasBackend(previous_issuers=[...])` also accepts the instance's earlier issuers while it moves to a new sign-in host (listed in discovery as `atlas_previous_issuers`).
+- API coverage list: 1,241 operations.
+
 ## 0.21.0 — 2026-10-30
 
 ### Added

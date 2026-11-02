@@ -197,11 +197,7 @@ class UserReferralFlag(TypedDict):
     risk_level: Literal["low", "medium", "high"] | None
 
 
-class UserReferralAttributedEvent(TypedDict):
-    """The ``data`` of a ``user.referral_attributed`` webhook: the referral platform
-    answered after ``user.created`` was sent.
-    """
-
+class _UserReferralAttributedEventRequired(TypedDict):
     object: Literal["user_referral"]
     user_id: str
     #: ``attributed``, ``not_referred`` (the platform found no referrer), ``failed``, ...
@@ -212,6 +208,65 @@ class UserReferralAttributedEvent(TypedDict):
     #: Epoch ms.
     signed_up_at: int
     updated_at: int
+
+
+class UserReferralAttributedEvent(_UserReferralAttributedEventRequired, total=False):
+    """The ``data`` of a ``user.referral_attributed`` webhook: the referral platform
+    answered after ``user.created`` was sent.
+    """
+
+    #: ``sign_in_with_atlas`` only for a Sign in with Atlas sign-up
+    #: (``report_linked_atlas_id_signups``): ``user_id`` is then the ``sub`` the app sees.
+    source: Literal["sign_in_with_atlas"]
+    atlas_id_sub: str
+    atlas_id_app_id: str
+
+
+class ScimGroupEvent(TypedDict, total=False):
+    """The ``data`` of ``scim_group.created`` / ``updated`` / ``deleted``."""
+
+    object: Literal["scim_group"]
+    id: str
+    organization_id: str
+    display_name: str
+    external_id: str | None
+    created_at: int
+    updated_at: int
+
+
+class ScimGroupMemberEvent(TypedDict):
+    """The ``data`` of ``scim_group.member_added`` / ``member_removed``."""
+
+    object: Literal["scim_group_member"]
+    group_id: str
+    user_id: str
+    organization_id: str
+
+
+class OrganizationMembershipUpdatedEvent(TypedDict, total=False):
+    """The ``data`` of ``organization_membership.updated``: the membership plus what the
+    role was before the change."""
+
+    object: Literal["organization_membership"]
+    id: str
+    organization_id: str
+    user_id: str
+    role: str
+    previous_role: str
+    previous_role_id: str
+
+
+class SsoOnboardingTicketCompletedEvent(TypedDict, total=False):
+    """The ``data`` of ``sso_onboarding_ticket.completed``."""
+
+    object: Literal["sso_onboarding_ticket"]
+    id: str
+    profile_id: str
+    organization_id: str
+    sso_connection_id: str | None
+    status: Literal["completed"]
+    return_url: str | None
+    completed_at: int
 
 
 #: The ``data`` of a ``user.referral_resolved`` webhook: the full user, sent when a
@@ -337,6 +392,17 @@ class CreateUserBody(_CreateUserRequired, total=False):
     #: A password hash migrated from another system (bcrypt, argon2, ...).
     password_hash: str | None
     password_digest: str | None
+    #: Names a hash that does not describe itself: ``scrypt``, ``pbkdf2``, ``md5``,
+    #: ``sha1``, ``sha256``, ``sha512``, ``hmac_sha256``, ... A self-describing hash
+    #: (Argon2id, bcrypt, Django / passlib PBKDF2 and scrypt, ...) needs none.
+    password_hash_algorithm: str
+    #: That algorithm's parameters (e.g. ``{"N": 16384, "r": 8, "p": 1, "salt": "..."}``).
+    #: A refusal names the bad param.
+    password_hash_params: dict[str, Any]
+    #: The per-user salt, when it is not part of ``password_hash``.
+    password_salt: str
+    #: The hasher's name in the system being migrated from.
+    password_hasher: str
     first_name: str
     last_name: str
     #: The profile picture: an https URL, stored as given.
@@ -392,7 +458,7 @@ class ReplaceUserMetadataBody(TypedDict, total=False):
 # --------------------------------------------------------------------------- #
 
 
-class Organization(TypedDict):
+class _OrganizationRequired(TypedDict):
     object: Literal["organization"]
     id: str
     name: str
@@ -400,9 +466,66 @@ class Organization(TypedDict):
     image_url: str | None
     public_metadata: Metadata
     max_allowed_memberships: int
-    created_by: str
+    #: ``None`` when your backend created the organization without a creator.
+    created_by: str | None
     created_at: int
     updated_at: int
+
+
+class OrganizationOwnerInvitation(TypedDict):
+    object: Literal["organization_invitation"]
+    id: str
+    email: str
+    role: str
+    status: str
+    expires_at: int | None
+
+
+class OrganizationSsoConnectionSummary(TypedDict):
+    id: str
+    type: str
+    status: Literal["draft", "active", "disabled"]
+
+
+class OrganizationSso(TypedDict):
+    """``organizations.get``: the organization's enterprise sign-in setup."""
+
+    connections: list[OrganizationSsoConnectionSummary]
+    #: The SCIM 2.0 base URL to give this organization's identity provider.
+    scim_base_url: str
+
+
+class Organization(_OrganizationRequired, total=False):
+    #: Your own id for this customer; unique per instance.
+    external_id: str | None
+    #: Role key → your product's name for it (the ``org_role_mapped`` token claim).
+    role_mappings: dict[str, str] | None
+    #: On create with ``owner_email`` only: the invitation sent to that address.
+    owner_invitation: OrganizationOwnerInvitation
+    #: ``organizations.get`` only.
+    sso: OrganizationSso
+
+
+class OrganizationByDomainMatch(TypedDict):
+    object: Literal["org_domain"]
+    id: str
+    domain: str
+    status: Literal["pending", "verified", "failed"]
+    verified_at: int | None
+
+
+class OrganizationByDomain(Organization):
+    """``organizations.find_by_domain``: the owning organization and the matched domain."""
+
+    domain: OrganizationByDomainMatch
+
+
+class OrganizationPolicyResult(TypedDict):
+    """``organizations.get_policy``."""
+
+    object: Literal["organization_policy"]
+    organization_id: str
+    policy: OrgPolicy
 
 
 class OrganizationMembership(TypedDict):
@@ -414,12 +537,17 @@ class OrganizationMembership(TypedDict):
     created_at: int
 
 
-class OrgDomain(TypedDict):
+OrgDomainVerificationMethod = Literal["dns_txt", "well_known", "email"]
+
+
+class _OrgDomainRequired(TypedDict):
     object: Literal["org_domain"]
     id: str
     organization_id: str
     domain: str
-    status: str
+    #: ``pending`` until a check runs, ``failed`` after a check that did not find the
+    #: token (re-check any time), ``verified`` once proven.
+    status: Literal["pending", "verified", "failed"]
     auto_join: bool
     default_role_id: str | None
     verification: dict[str, Any]
@@ -428,17 +556,41 @@ class OrgDomain(TypedDict):
     created_at: int
 
 
+class OrgDomain(_OrgDomainRequired, total=False):
+    #: Every way to prove the domain: ``dns_txt`` (record), ``well_known``
+    #: (``url``, ``body``, ``content_type``) and ``email`` (``addresses``,
+    #: ``sent_to``, ``expires_at``).
+    verification_methods: dict[str, Any]
+    #: How the domain was verified; ``None`` while unverified.
+    verification_method: OrgDomainVerificationMethod | None
+    #: ``send_verification_email`` only: the mailbox the code went to.
+    sent_to: str
+
+
 class _CreateOrganizationRequired(TypedDict):
     name: str
     slug: str
-    created_by: str
 
 
 class CreateOrganizationBody(_CreateOrganizationRequired, total=False):
+    #: Seated with the creator role; omit (or ``None``) for a backend-created
+    #: organization with no members yet.
+    created_by: str | None
+    #: Your own id for this customer; unique per instance (409 ``param: external_id``).
+    external_id: str
+    public_metadata: Metadata
+    private_metadata: Metadata
+    #: Invites this address with the creator role (``owner_invitation`` in the result).
+    owner_email: str
+    role_mappings: dict[str, str]
     max_allowed_memberships: int
 
 
 class UpdateOrganizationBody(TypedDict, total=False):
+    #: ``None`` clears it.
+    external_id: str | None
+    #: ``None`` clears them.
+    role_mappings: dict[str, str] | None
     name: str
     slug: str
     image_url: str
@@ -671,6 +823,9 @@ class RotateWebhookSecretBody(TypedDict, total=False):
     #: (7 days). Set it only once every receiver verifies with a verifier that accepts
     #: several signatures (this package 0.7.0+).
     overlap_seconds: int
+    #: Rotate to a secret you chose: ``whsec_`` plus 32-256 of ``[A-Za-z0-9+/=_-]``,
+    #: different from the current one (422 ``param: secret`` otherwise).
+    secret: str
 
 
 class WebhookEventCatalogEntry(TypedDict, total=False):
@@ -726,6 +881,9 @@ class CreateWebhookEndpointBody(_CreateWebhookEndpointRequired, total=False):
     #: ``False`` creates the endpoint switched off: nothing is delivered until it is
     #: enabled. Default ``True``.
     active: bool
+    #: Your own signing secret instead of a generated one: ``whsec_`` plus 32-256 of
+    #: ``[A-Za-z0-9+/=_-]`` (generate it with a CSPRNG). HTTPS endpoints only.
+    secret: str
 
 
 # --------------------------------------------------------------------------- #
@@ -1042,6 +1200,17 @@ class SsoConnection(_SsoConnectionRequired, total=False):
     idp_initiated_login: IdpInitiatedLoginSettings
     #: OIDC connections: the URLs to register at the IdP.
     upstream_urls: UpstreamUrls | None
+    #: A custom ACS path on your own frontend API domain; ``None`` = the standard ACS.
+    saml_acs_path: str | None
+    #: GitHub as the identity provider: only members of these GitHub orgs / teams
+    #: (``"org/team-slug"``) sign in.
+    github_access: GithubAccess | None
+
+
+class GithubAccess(TypedDict, total=False):
+    allowed_organizations: list[str]
+    #: ``"org/team-slug"``.
+    allowed_teams: list[str]
 
 
 class _SamlMetadataRequired(TypedDict):
@@ -1112,6 +1281,12 @@ class CreateSsoConnectionBody(TypedDict, total=False):
     logout: UpstreamLogoutSettings | None
     #: OIDC: third-party initiated login.
     idp_initiated_login: IdpInitiatedLoginSettings | None
+    #: SAML: a custom ACS path on your own frontend API domain (e.g. ``/saml/acs/acme``)
+    #: kept from a previous provider; ``None`` clears it.
+    saml_acs_path: str | None
+    #: OIDC: GitHub as the identity provider (``oidc_issuer`` may be left out); ``None``
+    #: removes it.
+    github_access: GithubAccess | None
 
 
 #: PATCH accepts everything create does except ``type``, which is immutable.
@@ -1147,6 +1322,10 @@ class ScimToken(_ScimTokenRequired, SealedSecrets, total=False):
     #: ``None`` = read and write; ``["read"]`` = read-only.
     scopes: list[str] | None
     role_mappings: list[ScimRoleMapping]
+    #: Create only: the SCIM 2.0 base URL to give the identity provider with this token.
+    scim_base_url: str
+    #: Create only: ``no_sso_connection`` when the organization has no SSO connection yet.
+    warnings: list[dict[str, str]]
 
 
 class _CreateScimTokenRequired(TypedDict):
@@ -1172,7 +1351,7 @@ class UpdateScimTokenBody(TypedDict, total=False):
 # --------------------------------------------------------------------------- #
 
 
-class CustomDomain(TypedDict):
+class CustomDomain(TypedDict, total=False):
     object: Literal["custom_domain"]
     id: str
     role: Literal["fapi", "accounts"]
@@ -1180,7 +1359,8 @@ class CustomDomain(TypedDict):
     status: str
     action: str
     live: bool
-    cname_target: str
+    #: ``None`` for a path mount (no CNAME).
+    cname_target: str | None
     last_checked_at: int | None
     last_observed_target: str | None
     failure_reason: str | None
@@ -1188,6 +1368,23 @@ class CustomDomain(TypedDict):
     cookie_domain: str | None
     #: DNS automation: ``{"provider": "cloudflare", "token_set": True}`` or ``None``.
     dns: dict[str, Any] | None
+    #: ``path``: a path mount on your own host, proven by an https file (no DNS).
+    method: Literal["cname", "path"]
+    #: Path mount: the prefix the Frontend API is served under.
+    base_path: str | None
+    #: Path mount, once verified: Atlas routes it, or your reverse proxy does.
+    routing: Literal["atlas_ingress", "customer_proxy"] | None
+    #: Path mount: ``https://<host><base_path>``, the Frontend API and (once verified)
+    #: the issuer.
+    frontend_api_url: str
+    #: Path mount: publish ``content`` at ``url`` (status 200, no redirect), then verify.
+    verification: dict[str, Any]
+    #: Path mount, once verified: nothing to add, or the reverse-proxy rule.
+    instructions: dict[str, Any]
+    #: ``domains.verify`` only.
+    verified: bool
+    #: ``domains.verify`` on a path mount, once verified: the issuer tokens now carry.
+    issuer: str
 
 
 class _CustomDomainDnsInputRequired(TypedDict):
@@ -1203,13 +1400,53 @@ class CustomDomainDnsInput(_CustomDomainDnsInputRequired, total=False):
     overwrite: bool
 
 
-class _CreateDomainRequired(TypedDict):
+class CreateDomainBody(TypedDict, total=False):
+    #: The host (``hostname`` is an alias).
     host: str
-
-
-class CreateDomainBody(_CreateDomainRequired, total=False):
+    hostname: str
     role: Literal["fapi", "accounts"]
+    #: ``cname`` (default): a CNAME to Atlas. ``path``: the Frontend API under
+    #: ``base_path`` on a host you already run, proven by an https file.
+    method: Literal["cname", "path"]
+    #: Path mount: default ``/__atlas``.
+    base_path: str
     dns: CustomDomainDnsInput
+
+
+# --------------------------------------------------------------------------- #
+# Trusted-JWT connections                                                      #
+# --------------------------------------------------------------------------- #
+
+
+class JwtConnection(TypedDict):
+    object: Literal["jwt_connection"]
+    id: str
+    organization_id: str | None
+    status: Literal["draft", "active", "disabled"]
+    jwks_uri: str | None
+    issuer: str | None
+    audience: str | None
+    email_claim: str
+    max_age_seconds: int
+    default_role_id: str | None
+    #: Send the person here with ``?token=<jwt>&redirect_url=<your app URL>``.
+    login_url: str
+    created_at: int
+    updated_at: int
+
+
+class JwtConnectionBody(TypedDict, total=False):
+    organization_id: str | None
+    status: Literal["draft", "active", "disabled"]
+    #: An https URL serving your public signing keys (RS / PS / ES / EdDSA).
+    jwks_uri: str
+    issuer: str
+    audience: str
+    #: Default ``email``.
+    email_claim: str
+    #: ``exp - iat`` at most this; 30-3600, default 300.
+    max_age_seconds: int
+    default_role_id: str | None
 
 
 # --------------------------------------------------------------------------- #
@@ -4007,6 +4244,8 @@ class CookieConsent(_CookieConsentRequired, total=False):
     culture: Literal["page", "browser"]
     #: Every cookie and browser-storage key Atlas writes for this instance.
     declared_cookies: list[DeclaredCookie]
+    #: The declared host aliases (see ``SetCookieConsentBody.host_aliases``).
+    host_aliases: list[str]
 
 
 class _SetCookieConsentBodyRequired(TypedDict):
@@ -4028,6 +4267,10 @@ class SetCookieConsentBody(_SetCookieConsentBodyRequired, total=False):
     settings_link: CookieConsentSettingsLinkInput | None
     #: ``page`` (default) or ``browser``.
     culture: Literal["page", "browser"] | None
+    #: Hosts the hosted pages are served on that your consent manager's site is
+    #: knowingly not registered for (bare hostnames, up to 10; ``[]`` clears). A body of
+    #: just ``{"host_aliases": [...]}`` sets only these.
+    host_aliases: list[str]
 
 
 class SetKerberosSecretBody(TypedDict, total=False):
@@ -4312,6 +4555,8 @@ class ReferralSettings(_ReferralSettingsRequired, total=False):
     consent_fallback_category: str | None
     auto_enroll_users: bool
     link_template: str | None
+    #: The partner portal linked from the hosted account page's "Refer a friend" panel.
+    partner_portal_url: str | None
     timeout_ms: int
     security: ReferralSecuritySettings
     #: Public tracking token (the ``referalli`` provider derives the code lookup from
@@ -4338,6 +4583,9 @@ class ReferralSettings(_ReferralSettingsRequired, total=False):
     #: Add the user's own code as a ``referral_code`` claim to session and ID tokens
     #: (default ``False``).
     include_referral_claims: bool
+    #: Report the first sign-in of an Atlas ID account to a Sign in with Atlas app this
+    #: instance manages as a sign-up (default ``False``).
+    report_linked_atlas_id_signups: bool
     #: What the chosen provider still needs before referrals can be enabled.
     missing: list[str]
     connection: ReferralConnectionStatus | None
@@ -4375,6 +4623,9 @@ class UpdateReferralSettingsBody(TypedDict, total=False):
     auto_enroll_users: bool
     #: An https URL containing ``{code}``.
     link_template: str | None
+    #: https URL of the partner portal (shown on the hosted account page); ``None``
+    #: removes it.
+    partner_portal_url: str | None
     #: 100-5000.
     timeout_ms: int
     security: ReferralSecuritySettings
@@ -4389,6 +4640,7 @@ class UpdateReferralSettingsBody(TypedDict, total=False):
     forward_lifecycle: bool
     mirror_to_public_metadata: bool
     include_referral_claims: bool
+    report_linked_atlas_id_signups: bool
 
 
 class ReferralTestError(TypedDict):
@@ -5807,6 +6059,15 @@ class CreateOrgLdapConnectionBodyAttributes(TypedDict, total=False):
     firstName: str
     lastName: str
     username: str
+    #: The groups attribute (default ``memberOf``), read for ``group_role_mappings``.
+    groups: str
+
+
+class OrgLdapGroupRoleMapping(TypedDict):
+    #: A directory group DN.
+    group: str
+    #: The organization role key.
+    role: str
 
 
 class CreateOrgLdapConnectionBody(TypedDict, total=False):
@@ -5826,6 +6087,7 @@ class CreateOrgLdapConnectionBody(TypedDict, total=False):
     attributes: CreateOrgLdapConnectionBodyAttributes
     #: Service-account password.
     bind_password: str
+    group_role_mappings: list[OrgLdapGroupRoleMapping]
     default_role_id: str | None
 
 
@@ -5841,6 +6103,7 @@ class OrgLdapConnection(TypedDict, total=False):
     start_tls: bool
     #: Directory attribute → Atlas field mapping.
     attributes: CreateOrgLdapConnectionBodyAttributes
+    group_role_mappings: list[OrgLdapGroupRoleMapping]
     #: Whether a bind password is set — never the password.
     has_bind_password: bool
     default_role_id: str | None
@@ -5867,6 +6130,9 @@ class UpdateOrgLdapConnectionBody(TypedDict, total=False):
     attributes: CreateOrgLdapConnectionBodyAttributes
     #: Service-account password.
     bind_password: str
+    #: The first mapping whose group the person is in picks their role when they are
+    #: seated; ``None`` clears.
+    group_role_mappings: list[OrgLdapGroupRoleMapping] | None
     default_role_id: str | None
 
 
@@ -6143,10 +6409,45 @@ class PlatformAppWithSecret(_PlatformAppWithSecretRequired, SealedSecrets, total
     allowed_origin_integrations: dict[str, Literal["redirect", "embedded"]]
 
 
+class PlatformAppInitialSecretReveal(TypedDict):
+    #: POST here once to get both secrets again (``platform.apps.reveal_initial_secret``).
+    path: str
+    #: When that stops working (epoch ms), 10 minutes after the create.
+    expires_at: int
+
+
 class PlatformAppProvisioned(TypedDict, total=False):
     #: The auto-created test-mode sibling in the environment opposite the primary (development
     #: for a production app — the default and common case).
     sibling_instance: PlatformAppWithSecret
+    #: The one extra look at this response's secrets, for a caller that lost it.
+    initial_secret_reveal: PlatformAppInitialSecretReveal
+    #: ``True`` on an Idempotency-Key replay: the secrets are ``None`` (never stored).
+    secret_redacted: bool
+
+
+class PlatformAppInitialSecretSibling(TypedDict, total=False):
+    instance_id: str
+    key_id: str
+    secret: str | None
+    note: str
+
+
+class PlatformAppInitialSecret(TypedDict, total=False):
+    """``platform.apps.reveal_initial_secret``."""
+
+    object: Literal["initial_secret"]
+    app_id: str
+    instance_id: str
+    key_id: str
+    #: The secret key created with the app; ``None`` if it was rotated or revoked since.
+    secret: str | None
+    #: The development sibling created with the app (absent when there is none).
+    sibling_instance: PlatformAppInitialSecretSibling
+    #: Dry run only: whether the reveal can still be used, and until when (epoch ms).
+    available: bool
+    expires_at: int | None
+    note: str
 
 
 class AcceptPlatformAppTransferBody(TypedDict, total=False):
@@ -6834,6 +7135,9 @@ class CreateSsoOnboardingProfileBody(TypedDict, total=False):
     organization_id: str | None
     company_name: str | None
     allow_scim: Any
+    #: Where "Finish" on the hosted setup page sends the admin: https, on one of your
+    #: allowed origins.
+    return_url: str | None
 
 
 class SsoOnboardingProfile(TypedDict):
@@ -6844,6 +7148,8 @@ class SsoOnboardingProfile(TypedDict):
     organization_id: str | None
     company_name: str | None
     allow_scim: bool
+    #: Where "Finish" on the hosted setup page sends the admin.
+    return_url: str | None
     #: Created (epoch ms).
     created_at: int
     #: Last updated (epoch ms).
@@ -6852,7 +7158,32 @@ class SsoOnboardingProfile(TypedDict):
 
 class CreateSsoOnboardingTicketBody(TypedDict, total=False):
     organization_id: str | None
+    #: Clamped to 300-2592000; default 259200 (3 days).
     expires_in_seconds: float
+    #: Overrides the profile's ``return_url`` for this ticket.
+    return_url: str | None
+
+
+class IssuedSsoOnboardingTicket(TypedDict, total=False):
+    """``sso_onboarding.create_ticket``: the ticket, with its one-time hosted ``url``."""
+
+    object: Literal["sso_onboarding_ticket"]
+    id: str
+    profile_id: str
+    organization_id: str
+    sso_connection_id: str | None
+    status: str
+    #: This ticket's ``return_url`` (``None`` = the profile's applies).
+    return_url: str | None
+    token: str
+    #: The hosted URL the customer's IT admin opens.
+    url: str
+    expires_in: int
+    #: Where "Finish" will send the admin: the ticket's ``return_url``, else the profile's.
+    effective_return_url: str | None
+    expires_at: int
+    created_at: int
+    completed_at: int | None
 
 
 class SsoOnboardingRevokeTicketResult(TypedDict):
@@ -7029,6 +7360,9 @@ class ImportUserRow(TypedDict, total=False):
     password_hasher: str
     #: The per-user salt for a hash whose parameters are given job-wide.
     password_salt: str
+    #: Names a hash that does not describe itself (see ``CreateUserBody``).
+    password_hash_algorithm: str
+    password_hash_params: dict[str, Any]
     email_verified: bool
     first_name: str
     last_name: str
@@ -7426,12 +7760,42 @@ class UpdateWebhookEndpointBody(TypedDict, total=False):
     metadata: dict[str, Any]
 
 
-class WebhookDeliveryAttempt(TypedDict):
+class _WebhookDeliveryAttemptRequired(TypedDict):
     object: Literal["webhook_delivery"]
     id: str
     event_id: str
     status: str
     note: str
+
+
+class WebhookDeliveryAttempt(_WebhookDeliveryAttemptRequired, total=False):
+    """A queued test (or redelivery); with ``test(wait=...)`` the attempt's outcome."""
+
+    delivery_id: str
+    #: Always ``webhook.test`` on a test.
+    event_type: str
+    http_status: int | None
+    latency_ms: int | None
+    #: The first 1 KB of your receiver's answer.
+    response_snippet: str | None
+    error: str | None
+    #: Why the attempt failed: ``non_2xx``, ``redirect``, ``timeout``, ``tls``, ``dns``,
+    #: ``connection_refused``, ``network``, ``url_blocked``; ``None`` on success.
+    error_kind: (
+        Literal[
+            "non_2xx",
+            "redirect",
+            "timeout",
+            "tls",
+            "dns",
+            "connection_refused",
+            "network",
+            "url_blocked",
+        ]
+        | None
+    )
+    signature_header_sent: str
+    will_retry: bool
 
 
 class WebhookSecret(SealedSecrets):

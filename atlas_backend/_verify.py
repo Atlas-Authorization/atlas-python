@@ -357,6 +357,11 @@ class AtlasBackend:
             id and ``legacy`` = ``{kind, issuer, sub}``. Atlas tokens are unaffected.
         secret_key / api_url: The instance secret key and Backend API origin the
             default ``legacy_issuers`` subject lookup uses.
+        previous_issuers: Earlier issuers of THIS instance, also accepted: its old
+            sign-in host while it moves to a new one (a custom domain or a path
+            mount going active). Same keys, so nothing else changes. The discovery
+            document lists them in ``atlas_previous_issuers`` with an
+            ``accepted_until``; remove them after that.
     """
 
     def __init__(
@@ -373,6 +378,7 @@ class AtlasBackend:
         legacy_issuers: Sequence[LegacyIssuer] | None = None,
         secret_key: str | None = None,
         api_url: str = DEFAULT_API_URL,
+        previous_issuers: Sequence[str] | None = None,
     ) -> None:
         if not jwks_url:
             raise ValueError("AtlasBackend requires jwks_url.")
@@ -382,6 +388,10 @@ class AtlasBackend:
                 "accepts any Atlas instance's tokens."
             )
         self._issuer = issuer
+        # PyJWT accepts a list: ``iss`` must equal one of them.
+        self._accepted_issuers: str | list[str] = (
+            [issuer, *[i for i in previous_issuers if i]] if previous_issuers else issuer
+        )
         self._authorized_parties = list(authorized_parties or [])
         self._leeway = leeway
         self.jwks = JwksCache(
@@ -455,7 +465,7 @@ class AtlasBackend:
                 token,
                 key=key,
                 algorithms=[alg],
-                issuer=self._issuer,
+                issuer=self._accepted_issuers,
                 leeway=self._leeway,
                 options={"verify_aud": False, "require": ["exp"]},
             )

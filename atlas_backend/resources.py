@@ -754,10 +754,38 @@ class _OrgDomains:
             idempotency_key=idempotency_key,
         )
 
-    def verify(self, org_id: str, domain_id: str) -> m.OrgDomain:
+    def verify(
+        self,
+        org_id: str,
+        domain_id: str,
+        *,
+        method: m.OrgDomainVerificationMethod | None = None,
+        code: str | None = None,
+    ) -> m.OrgDomain:
+        """Check now. No ``method`` = the DNS TXT check; ``well_known`` fetches the file;
+        ``email`` takes the emailed ``code``."""
+        body = _q(method=method, code=code)
         return self._t.request(
             method="POST",
             path=f"/v1/organizations/{org_id}/domains/{domain_id}/verify",
+            body=body or None,
+        )
+
+    def send_verification_email(
+        self,
+        org_id: str,
+        domain_id: str,
+        *,
+        address: Literal["admin", "administrator", "hostmaster", "postmaster", "webmaster"]
+        | None = None,
+    ) -> m.OrgDomain:
+        """Email a 6-digit code to ``admin@`` (or another administrative mailbox) at the
+        domain, through the instance's own email provider (422
+        ``EMAIL_DELIVERY_NOT_CONFIGURED`` without one). The result carries ``sent_to``."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/organizations/{org_id}/domains/{domain_id}/verification_email",
+            body=_q(address=address),
         )
 
     def delete(self, org_id: str, domain_id: str) -> JSON:
@@ -811,15 +839,42 @@ class Organizations:
             method="GET", path="/v1/organizations/check_slug", query={"slug": slug}
         )
 
-    def list(self, *, limit: int | None = None, starting_after: str | None = None) -> CursorPage:
+    def list(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+        external_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> CursorPage:
+        """List organizations; ``external_id`` and ``metadata`` (``metadata[key]=value``,
+        AND) filter."""
         return self._t.request(
             method="GET",
             path="/v1/organizations",
-            query=_q(limit=limit, starting_after=starting_after),
+            query=_meta(
+                metadata, limit=limit, starting_after=starting_after, external_id=external_id
+            ),
         )
 
     def get(self, org_id: str) -> m.Organization:
+        """Fetch an organization, with its ``sso`` block (connections, ``scim_base_url``)."""
         return self._t.request(method="GET", path=f"/v1/organizations/{org_id}")
+
+    def find_by_domain(
+        self, domain: str, *, include_unverified: bool | None = None
+    ) -> m.OrganizationByDomain:
+        """The organization owning a domain (or an email address's domain). Verified
+        domains only unless ``include_unverified``."""
+        return self._t.request(
+            method="GET",
+            path=f"/v1/organizations/by_domain/{_enc(domain)}",
+            query=_q(include_unverified=include_unverified),
+        )
+
+    def get_policy(self, org_id: str) -> m.OrganizationPolicyResult:
+        """An organization's policy overrides (camelCase keys)."""
+        return self._t.request(method="GET", path=f"/v1/organizations/{org_id}/policy")
 
     def create(
         self,
@@ -1743,7 +1798,11 @@ class ScimTokens:
             query=_q(organization_id=organization_id),
         )
 
-    def create(self, body: m.CreateScimTokenBody, *, idempotency_key: str | None = None) -> JSON:
+    def create(
+        self, body: m.CreateScimTokenBody, *, idempotency_key: str | None = None
+    ) -> m.ScimToken:
+        """Create a token; the result reveals ``secret`` once, with ``scim_base_url`` and
+        ``warnings``."""
         return self._t.request(
             method="POST",
             path="/v1/scim_tokens",
@@ -1767,7 +1826,11 @@ class Domains:
     def list(self) -> JSON:
         return self._t.request(method="GET", path="/v1/domains")
 
-    def create(self, body: m.CreateDomainBody, *, idempotency_key: str | None = None) -> JSON:
+    def create(
+        self, body: m.CreateDomainBody, *, idempotency_key: str | None = None
+    ) -> m.CustomDomain:
+        """Claim a host: a CNAME domain, or ``method="path"`` with ``hostname`` and
+        ``base_path`` to mount the Frontend API under a path on a host you already run."""
         return self._t.request(
             method="POST",
             path="/v1/domains",
@@ -1775,11 +1838,47 @@ class Domains:
             idempotency_key=idempotency_key,
         )
 
-    def verify(self, domain_id: str) -> JSON:
+    def verify(self, domain_id: str) -> m.CustomDomain:
+        """Check now; a verified path mount answers ``issuer``, ``routing`` and
+        ``instructions``."""
         return self._t.request(method="POST", path=f"/v1/domains/{domain_id}/verify")
 
     def delete(self, domain_id: str) -> JSON:
         return self._t.request(method="DELETE", path=f"/v1/domains/{domain_id}")
+
+
+class JwtConnections:
+    """Trusted-JWT connections: your system signs a short-lived JWT and sends the person
+    to the connection's ``login_url`` with ``?token=<jwt>&redirect_url=<your app URL>``."""
+
+    def __init__(self, transport: _SyncTransport) -> None:
+        self._t = transport
+
+    def list(self) -> ListPage:
+        return self._t.request(method="GET", path="/v1/jwt_connections")
+
+    def get(self, connection_id: str) -> m.JwtConnection:
+        return self._t.request(method="GET", path=f"/v1/jwt_connections/{_enc(connection_id)}")
+
+    def create(
+        self, body: m.JwtConnectionBody, *, idempotency_key: str | None = None
+    ) -> m.JwtConnection:
+        return self._t.request(
+            method="POST",
+            path="/v1/jwt_connections",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    def update(self, connection_id: str, body: m.JwtConnectionBody) -> m.JwtConnection:
+        return self._t.request(
+            method="PATCH", path=f"/v1/jwt_connections/{_enc(connection_id)}", body=body
+        )
+
+    def delete(self, connection_id: str) -> DeletedObject:
+        return self._t.request(
+            method="DELETE", path=f"/v1/jwt_connections/{_enc(connection_id)}"
+        )
 
 
 class Waitlist:
@@ -4316,8 +4415,9 @@ class _InstanceCookieConsent:
             path="/v1/instance/cookie_consent",
         )
 
-    def set(self, body: m.SetCookieConsentBody) -> m.CookieConsent:
-        """Set the cookie-consent CMP for the hosted pages (any provider)."""
+    def set(self, body: m.SetCookieConsentBody | dict[str, Any]) -> m.CookieConsent:
+        """Set the cookie-consent CMP for the hosted pages (any provider). A body of just
+        ``{"enabled": ...}`` or ``{"host_aliases": [...]}`` changes only that."""
         return self._t.request(
             method="PUT",
             path="/v1/instance/cookie_consent",
@@ -6398,11 +6498,13 @@ class SsoOnboarding:
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
-    def list_profiles(self) -> ListPage:
-        """List self-service SSO onboarding profiles (the templates tickets are issued from)."""
+    def list_profiles(self, *, name: str | None = None) -> ListPage:
+        """List self-service SSO onboarding profiles (the templates tickets are issued from).
+        With ``name``, only the profiles with exactly that name."""
         return self._t.request(
             method="GET",
             path="/v1/sso_onboarding_profiles",
+            query=_q(name=name),
         )
 
     def create_profile(
@@ -6441,8 +6543,9 @@ class SsoOnboarding:
         body: m.CreateSsoOnboardingTicketBody | None = None,
         *,
         idempotency_key: str | None = None,
-    ) -> JSON:
-        """Issue a scoped, one-time, expiring onboarding ticket for one organization."""
+    ) -> m.IssuedSsoOnboardingTicket:
+        """Issue a scoped, one-time, expiring onboarding ticket for one organization.
+        ``return_url`` overrides the profile's; the result has ``effective_return_url``."""
         return self._t.request(
             method="POST",
             path=f"/v1/sso_onboarding_profiles/{profile_id}/tickets",
@@ -6682,6 +6785,18 @@ class PlatformApps:
             path="/v1/platform/apps/accept_transfer",
             body=body,
             idempotency_key=idempotency_key,
+        )
+
+    def reveal_initial_secret(
+        self, app_id: str, *, dry_run: bool = False
+    ) -> m.PlatformAppInitialSecret:
+        """Show a new app's secret keys (primary and development sibling) once more, within
+        10 minutes of ``create``, for a script that lost them. Once only; 410 after that or
+        for a revoked key. ``dry_run=True`` says whether it is still available."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/platform/apps/{_enc(app_id)}/initial_secret/reveal",
+            query=_dry(dry_run),
         )
 
     def bulk_delete(self, body: m.BulkDeletePlatformAppsBody | None = None) -> m.BulkDeleteResult:

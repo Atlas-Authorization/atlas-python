@@ -87,6 +87,11 @@ GET /v1/domains
 POST /v1/domains
 DELETE /v1/domains/{id}
 POST /v1/domains/{id}/verify
+GET /v1/jwt_connections
+POST /v1/jwt_connections
+DELETE /v1/jwt_connections/{id}
+GET /v1/jwt_connections/{id}
+PATCH /v1/jwt_connections/{id}
 POST /v1/email_addresses/{eid}/primary
 POST /v1/email_addresses/{eid}/verify
 GET /v1/email_templates
@@ -287,6 +292,7 @@ POST /v1/organization_settings_schema
 PUT /v1/organization_settings_schema
 GET /v1/organizations
 POST /v1/organizations
+GET /v1/organizations/by_domain/{domain}
 DELETE /v1/organizations/{id}
 GET /v1/organizations/{id}
 PATCH /v1/organizations/{id}
@@ -302,6 +308,7 @@ GET /v1/organizations/{id}/domains
 POST /v1/organizations/{id}/domains
 DELETE /v1/organizations/{id}/domains/{domainId}
 POST /v1/organizations/{id}/domains/{domainId}/verify
+POST /v1/organizations/{id}/domains/{domainId}/verification_email
 GET /v1/organizations/{id}/entitlements
 GET /v1/organizations/{id}/hierarchy
 GET /v1/organizations/{id}/invitations
@@ -313,6 +320,7 @@ DELETE /v1/organizations/{id}/memberships/{userId}
 PATCH /v1/organizations/{id}/memberships/{userId}
 PUT /v1/organizations/{id}/metadata
 PUT /v1/organizations/{id}/parent
+GET /v1/organizations/{id}/policy
 PATCH /v1/organizations/{id}/policy
 GET /v1/organizations/{id}/settings
 PATCH /v1/organizations/{id}/settings
@@ -347,6 +355,7 @@ GET /v1/platform/apps/{id}
 PATCH /v1/platform/apps/{id}
 POST /v1/platform/apps/{id}/archive
 GET /v1/platform/apps/{id}/instances
+POST /v1/platform/apps/{id}/initial_secret/reveal
 POST /v1/platform/apps/{id}/instances
 POST /v1/platform/apps/{id}/instances/{instanceId}/rotate_secret
 POST /v1/platform/apps/{id}/rotate_secret
