@@ -1137,6 +1137,8 @@ class _CreateGrantRequired(TypedDict):
 
 class CreateGrantBody(_CreateGrantRequired, total=False):
     scopes: list[str]
+    #: Names from the resource server's ``scope_presets``, unioned with ``scopes``.
+    scope_presets: list[str]
 
 
 # --------------------------------------------------------------------------- #
@@ -1157,6 +1159,8 @@ class _ResourceServerRequired(TypedDict):
 
 
 class ResourceServer(_ResourceServerRequired, total=False):
+    #: Named bundles over ``scopes``, accepted as ``scope_presets`` wherever scopes are requested.
+    scope_presets: dict[str, list[str]]
     #: Atlas serves the API's RFC 9728 protected-resource metadata document.
     publish_resource_metadata: bool
     #: ``jwt`` or ``opaque`` access tokens for this API; ``None`` inherits.
@@ -1175,6 +1179,8 @@ class _CreateResourceServerRequired(TypedDict):
 
 class CreateResourceServerBody(_CreateResourceServerRequired, total=False):
     scopes: list[Any]
+    #: Named bundles over ``scopes``. A preset naming an undefined scope is refused.
+    scope_presets: dict[str, list[str]]
     token_ttl_seconds: int
     #: ``RS256`` or ``ES256``: the algorithm of this API's access tokens.
     signing_alg: Literal["RS256", "ES256"]
@@ -1190,6 +1196,8 @@ class CreateResourceServerBody(_CreateResourceServerRequired, total=False):
 
 
 class UpdateResourceServerBody(TypedDict, total=False):
+    #: Replaces all the presets.
+    scope_presets: dict[str, list[str]]
     name: str
     scopes: list[Any]
     token_ttl_seconds: int
@@ -5306,6 +5314,56 @@ class _M2mTokenVerificationRequired(TypedDict):
 class M2mTokenVerification(_M2mTokenVerificationRequired, total=False):
     machine_id: str
     name: str
+    #: Machine JWT only: what the token carries.
+    audience: str | None
+    scopes: list[str]
+    organization_id: str | None
+    org_role: str | None
+    org_permissions: list[str]
+    expires_at: int | None
+    #: What the machine holds now.
+    grants: list[dict[str, Any]]
+    organization_memberships: list[dict[str, Any]]
+
+
+class MachineGrant(TypedDict):
+    object: Literal["machine_grant"]
+    id: str
+    machine_id: str
+    resource_server_id: str
+    scopes: list[str]
+    created_at: int
+    updated_at: int
+
+
+class _CreateMachineGrantRequired(TypedDict):
+    resource_server_id: str
+
+
+class CreateMachineGrantBody(_CreateMachineGrantRequired, total=False):
+    #: Each must be defined on the resource server.
+    scopes: list[str]
+    #: Names from the resource server's ``scope_presets``, unioned with ``scopes``.
+    scope_presets: list[str]
+
+
+class MachineMembership(TypedDict):
+    object: Literal["machine_membership"]
+    id: str
+    organization_id: str
+    machine_id: str
+    role: str
+    role_id: str
+    created_at: int
+    updated_at: int
+
+
+class _AddMachineToOrganizationRequired(TypedDict):
+    machine_id: str
+
+
+class AddMachineToOrganizationBody(_AddMachineToOrganizationRequired, total=False):
+    role: str
 
 
 class CreateMachineEnrolmentTokenBody(TypedDict, total=False):

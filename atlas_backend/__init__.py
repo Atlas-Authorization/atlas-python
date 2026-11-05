@@ -215,6 +215,7 @@ from ._integrator import (
 from ._webhooks import WebhookVerification, verify_standard_webhook, verify_webhook
 from .resources import (
     BETTER_AUTH_IMPORT_PART_BYTES,
+    jwt_sign_in_url,
     split_bundle_parts,
 )
 
@@ -291,6 +292,7 @@ __all__ = [
     "exchange_better_auth_session",
     "read_better_auth_session_cookie",
     "serialize_bridge_cookie",
+    "jwt_sign_in_url",
     "split_bundle_parts",
     "BILLING_PROVIDERS",
     "BOTID_ATTESTATION_MAX_TTL_SECONDS",

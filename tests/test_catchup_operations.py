@@ -16,7 +16,7 @@ import httpx
 import pytest
 import respx
 
-from atlas_backend import AsyncAtlasClient, AtlasClient
+from atlas_backend import AsyncAtlasClient, AtlasClient, jwt_sign_in_url
 
 API_URL = "https://api.example.test"
 
@@ -5126,6 +5126,99 @@ ROWS: list[tuple[Any, ...]] = [
         {"k": "v"},
         True,
     ),
+    (
+        "users",
+        "protect_account_claim",
+        ["id 1"],
+        {"idempotency_key": "idem-1"},
+        "POST",
+        "/v1/users/id%201/account_claim",
+        {},
+        {"password_policy": "until_email_verified"},
+        True,
+    ),
+    ("machines", "list_grants", ["id 1"], {}, "GET", "/v1/machines/id%201/grants", {}, None, False),
+    (
+        "machines",
+        "create_grant",
+        ["id 1", {"resource_server_id": "rs_1", "scope_presets": ["readonly"]}],
+        {},
+        "POST",
+        "/v1/machines/id%201/grants",
+        {},
+        {"resource_server_id": "rs_1", "scope_presets": ["readonly"]},
+        False,
+    ),
+    ("machines", "delete_grant", ["id 1", "p1"], {}, "DELETE", "/v1/machines/id%201/grants/p1", {}, None, False),
+    (
+        "machines",
+        "list_organization_members",
+        ["id 1"],
+        {"limit": 7, "starting_after": "v_starting_after"},
+        "GET",
+        "/v1/organizations/id%201/machine_memberships",
+        {"limit": "7", "starting_after": "v_starting_after"},
+        None,
+        False,
+    ),
+    (
+        "machines",
+        "add_to_organization",
+        ["id 1", {"machine_id": "p1", "role": "org:admin"}],
+        {"idempotency_key": "idem-1"},
+        "POST",
+        "/v1/organizations/id%201/machine_memberships",
+        {},
+        {"machine_id": "p1", "role": "org:admin"},
+        True,
+    ),
+    (
+        "machines",
+        "update_organization_role",
+        ["id 1", "p1", "org:admin"],
+        {},
+        "PATCH",
+        "/v1/organizations/id%201/machine_memberships/p1",
+        {},
+        {"role": "org:admin"},
+        False,
+    ),
+    (
+        "machines",
+        "remove_from_organization",
+        ["id 1", "p1"],
+        {},
+        "DELETE",
+        "/v1/organizations/id%201/machine_memberships/p1",
+        {},
+        None,
+        False,
+    ),
+    (
+        "instance.integrations",
+        "redeliver_events",
+        ["id 1", {"since": "failing_since"}],
+        {"idempotency_key": "idem-1"},
+        "POST",
+        "/v1/instance/integrations/id%201/deliveries/redeliver",
+        {},
+        {"since": "failing_since"},
+        True,
+    ),
+    ("instance.hooks", "clear_before_user_create", [], {}, "DELETE", "/v1/instance/hooks/before_user_create", {}, None, False),
+    ("instance.security", "cancel_staged_signing_key", [], {}, "DELETE", "/v1/instance/signing_keys/next", {}, None, False),
+    ("instance.security", "get_signing_key_policy", [], {}, "GET", "/v1/instance/signing_key_policy", {}, None, False),
+    ("instance.security", "set_signing_key_policy", [7], {}, "PATCH", "/v1/instance/signing_key_policy", {}, {"prepublish_days": 7}, False),
+    ("partner_platforms", "mint_executor_key", ["id 1", "p1", '{"x":1}', "x-signature", "t=1"], {}, "POST", "/v1/partner_executor_keys/id%201/p1", {}, {"x": 1}, False),
+    ("partner_platforms", "revoke_executor_key", ["id 1", "p1", '{"x":1}', "x-signature", "t=1"], {}, "DELETE", "/v1/partner_executor_keys/id%201/p1", {}, {"x": 1}, False),
+    ("users", "remove_password", ["id 1"], {"sign_out_of_other_sessions": False}, "DELETE", "/v1/users/id%201/password", {"sign_out_of_other_sessions": "false"}, None, False),
+    ("instance", "storage_declaration", [], {}, "GET", "/v1/instance/storage_declaration", {}, None, False),
+    ("instance", "public_storage_declaration", ["pk_1"], {}, "GET", "/v1/storage_declaration", {"publishable_key": "pk_1"}, None, False),
+    ("sessions", "status", ["id 1"], {}, "GET", "/v1/sessions/id%201/status", {}, None, False),
+    ("sso_onboarding", "update_profile", ["id 1", {"name": "s"}], {}, "PATCH", "/v1/sso_onboarding_profiles/id%201", {}, {"name": "s"}, False),
+    ("instance.referrals", "resync_accounts", [], {"starting_after": "org_1"}, "POST", "/v1/instance/referrals/accounts/resync", {}, {"starting_after": "org_1"}, False),
+    ("organizations", "upsert_by_external_id", ["id 1", {"name": "s"}], {}, "PUT", "/v1/organizations/by_external_id/id%201", {}, {"name": "s"}, False),
+    ("sso_onboarding", "upsert_profile_by_name", ["id 1", {"name": "s"}], {}, "PUT", "/v1/sso_onboarding_profiles/by_name/id%201", {}, {"name": "s"}, False),
 ]
 
 
@@ -5200,3 +5293,35 @@ def test_delivery_health_get_keeps_its_original_signature_and_route() -> None:
         AtlasClient("sk_test", base_url=API_URL).delivery_health.get(kind="email")
         assert route.calls.last.request.url.params["kind"] == "email"
     asyncio.run(run())
+
+
+def test_partner_executor_key_sends_the_signed_bytes_and_the_signature() -> None:
+    raw = '{ "nonce":"n",  "iat":1 }'
+    with respx.mock(base_url=API_URL) as mock:
+        route = mock.post("/v1/partner_executor_keys/p/i").mock(
+            return_value=httpx.Response(201, json={"secret": "sk", "executorUrl": API_URL})
+        )
+        AtlasClient("sk_test", base_url=API_URL).partner_platforms.mint_executor_key(
+            "p", "i", raw, "x-signature", "t=1,kid=k,ed25519=s"
+        )
+        request = route.calls.last.request
+        assert request.content == raw.encode()
+        assert request.headers["x-signature"] == "t=1,kid=k,ed25519=s"
+        assert request.headers["content-type"] == "application/json"
+
+
+def test_storage_declaration_csv_returns_the_text() -> None:
+    with respx.mock(base_url=API_URL) as mock:
+        route = mock.get("/v1/instance/storage_declaration").mock(
+            return_value=httpx.Response(200, text="name,provider\r\n")
+        )
+        out = AtlasClient("sk_test", base_url=API_URL).instance.storage_declaration_csv()
+        assert out == "name,provider\r\n"
+        assert route.calls.last.request.url.params["format"] == "csv"
+
+
+def test_jwt_sign_in_url_encodes_both_values() -> None:
+    assert jwt_sign_in_url("https://a.test/v1/sso/jwt/c", "t k", "https://b.test/?x=1") == (
+        "https://a.test/v1/sso/jwt/c?token=t+k&redirect_url=https%3A%2F%2Fb.test%2F%3Fx%3D1"
+    )
+    assert jwt_sign_in_url("https://a.test/j?z=1", "t", "u") == "https://a.test/j?z=1&token=t&redirect_url=u"

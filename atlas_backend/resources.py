@@ -88,6 +88,17 @@ BETTER_AUTH_IMPORT_PART_BYTES = 8 * 1024 * 1024
 BETTER_AUTH_IMPORT_IN_FLIGHT = ("analyzing", "queued", "applying")
 
 
+def jwt_sign_in_url(login_url: str, token: str, redirect_url: str) -> str:
+    """Where to send the person's browser to sign in with a trusted JWT
+    (``GET /v1/sso/jwt/{connectionId}``). ``login_url`` is the connection's ``login_url``.
+
+    A URL, not an API call: the token works once, and the 302 carries a one-time ticket
+    that has to reach the browser.
+    """
+    separator = "&" if "?" in login_url else "?"
+    return f"{login_url}{separator}{urlencode({'token': token, 'redirect_url': redirect_url})}"
+
+
 def split_bundle_parts(
     bundle: str | bytes, max_bytes: int = BETTER_AUTH_IMPORT_PART_BYTES
 ) -> list[str]:
@@ -267,6 +278,18 @@ class Users:
             body=_q(duration_in_seconds=duration_in_seconds),
         )
 
+    def protect_account_claim(self, user_id: str, *, idempotency_key: str | None = None) -> dict[str, Any]:
+        """Protect one existing unverified user, so a proof of its address reaches it instead
+        of making a second account. A 409 ``ACCOUNT_NOT_CLAIMABLE`` names what else on the user
+        signs in. Safe to repeat.
+        """
+        return self._t.request(
+            method="POST",
+            path=f"/v1/users/{_enc(user_id)}/account_claim",
+            body={"password_policy": "until_email_verified"},
+            idempotency_key=idempotency_key,
+        )
+
     def unlock(self, user_id: str) -> m.User:
         return self._t.request(method="POST", path=f"/v1/users/{user_id}/unlock")
 
@@ -416,6 +439,18 @@ class Users:
             path=f"/v1/users/{user_id}/password",
             body=body,
             idempotency_key=idempotency_key,
+        )
+
+    def remove_password(
+        self, user_id: str, *, sign_out_of_other_sessions: bool | None = None
+    ) -> m.User:
+        """Remove a user's password, even when it is their only sign-in method. Idempotent.
+        Signs the user out unless ``sign_out_of_other_sessions`` is false.
+        """
+        return self._t.request(
+            method="DELETE",
+            path=f"/v1/users/{_enc(user_id)}/password",
+            query=_q(sign_out_of_other_sessions=sign_out_of_other_sessions),
         )
 
     def delete_profile_image(self, user_id: str, *, idempotency_key: str | None = None) -> m.User:
@@ -982,6 +1017,16 @@ class Organizations:
         )
 
 
+    def upsert_by_external_id(self, external_id: str, body: dict[str, Any]) -> m.Organization:
+        """Create or update the organization keyed by your own id: 201 when created, else 200
+        with only the fields sent changed. ``name`` is required when it creates.
+        """
+        return self._t.request(
+            method="PUT",
+            path=f"/v1/organizations/by_external_id/{_enc(external_id)}",
+            body=body,
+        )
+
 
 class Sessions:
     def __init__(self, transport: _SyncTransport) -> None:
@@ -995,6 +1040,12 @@ class Sessions:
 
     def get(self, session_id: str) -> m.Session:
         return self._t.request(method="GET", path=f"/v1/sessions/{session_id}")
+
+    def status(self, session_id: str) -> JSON:
+        """Cheap freshness check: ``{id, status, user_id, expires_at, last_active_at?}``, where
+        status is active, expired, revoked or ended. Takes a session id or an ID token ``sid``.
+        """
+        return self._t.request(method="GET", path=f"/v1/sessions/{_enc(session_id)}/status")
 
     def revoke(self, session_id: str) -> JSON:
         return self._t.request(method="POST", path=f"/v1/sessions/{session_id}/revoke")
@@ -4165,6 +4216,35 @@ class Instance:
         self.sign_in_with_atlas = _InstanceSignInWithAtlas(transport)
         self.hosted_pages = _InstanceHostedPages(transport)
 
+    def storage_declaration(self) -> JSON:
+        """Every cookie and browser-storage key of the hosted pages, as a declaration a consent
+        manager can import. Needs ``cookie_consent:read``.
+        """
+        return self._t.request(method="GET", path="/v1/instance/storage_declaration")
+
+    def storage_declaration_csv(self) -> str:
+        """:meth:`storage_declaration` as CSV, for a generic importer."""
+        return self._t.request(
+            method="GET", path="/v1/instance/storage_declaration", query={"format": "csv"}, raw=True
+        )
+
+    def public_storage_declaration(self, publishable_key: str) -> JSON:
+        """The same declaration read by publishable key. Nothing in it is secret."""
+        return self._t.request(
+            method="GET",
+            path="/v1/storage_declaration",
+            query={"publishable_key": publishable_key},
+        )
+
+    def public_storage_declaration_csv(self, publishable_key: str) -> str:
+        """:meth:`public_storage_declaration` as CSV, for a generic importer."""
+        return self._t.request(
+            method="GET",
+            path="/v1/storage_declaration",
+            query={"publishable_key": publishable_key, "format": "csv"},
+            raw=True,
+        )
+
     def get(self) -> m.Instance:
         """Read instance configuration."""
         return self._t.request(
@@ -4449,6 +4529,25 @@ class _InstanceIntegrations:
             idempotency_key=idempotency_key,
         )
 
+    def redeliver_events(
+        self,
+        product: str,
+        body: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Re-send the events the integration's receiver never got, since ``body["since"]``
+        (ISO 8601, epoch milliseconds or ``failing_since``), and switch a disabled receiver
+        back on. Delivered events are not sent again. While ``has_more`` is true, call again
+        with ``since`` set to ``next_since``.
+        """
+        return self._t.request(
+            method="POST",
+            path=f"/v1/instance/integrations/{_enc(product)}/deliveries/redeliver",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
 
 
 class _InstanceCookieConsent:
@@ -4624,6 +4723,16 @@ class _InstanceReferrals:
             idempotency_key=idempotency_key,
         )
 
+    def resync_accounts(self, *, starting_after: str | None = None) -> JSON:
+        """Send every organization's owner to the referral platform once, up to 10,000 per call.
+        When ``truncated``, continue with ``starting_after`` = ``next_starting_after``.
+        """
+        return self._t.request(
+            method="POST",
+            path="/v1/instance/referrals/accounts/resync",
+            body={} if starting_after is None else {"starting_after": starting_after},
+        )
+
     def get_backfill(self, backfill_id: str) -> m.ReferralBackfillJob:
         """Read a backfill job: how many calls it queued and where they stand."""
         return self._t.request(
@@ -4676,6 +4785,12 @@ class _InstanceHooks:
             body=body,
             idempotency_key=idempotency_key,
         )
+
+    def clear_before_user_create(self) -> m.BeforeUserCreateHook:
+        """Turn the hook off and clear its url and signing secret. Idempotent; ``timeout_ms``
+        and ``fail_closed`` are kept.
+        """
+        return self._t.request(method="DELETE", path="/v1/instance/hooks/before_user_create")
 
     def test_before_user_create(self) -> m.BeforeUserCreateHookTest:
         """Send the hook a sample draft and return its answer; nothing is stored."""
@@ -4735,6 +4850,24 @@ class _InstanceSecurity:
         """Rotate the instance signing key, optionally switching ``alg`` (RS256 or ES256)."""
         return self._t.request(
             method="POST", path="/v1/instance/signing_keys/rotate", body=body or {}
+        )
+
+    def cancel_staged_signing_key(self) -> JSON:
+        """Cancel a staged rotation: the staged key leaves the JWKS and never signs. 404 when
+        none is staged.
+        """
+        return self._t.request(method="DELETE", path="/v1/instance/signing_keys/next")
+
+    def get_signing_key_policy(self) -> JSON:
+        """The staged-rotation policy: ``prepublish_days`` (null = off)."""
+        return self._t.request(method="GET", path="/v1/instance/signing_key_policy")
+
+    def set_signing_key_policy(self, prepublish_days: int | None) -> JSON:
+        """Stage every ordinary rotation this many days ahead (1..90); ``None`` or 0 is off."""
+        return self._t.request(
+            method="PATCH",
+            path="/v1/instance/signing_key_policy",
+            body={"prepublish_days": prepublish_days},
         )
 
     def get_signing_key_provider(self) -> m.SigningKeyProviderSettings:
@@ -5231,7 +5364,7 @@ class M2mTokens:
         self._t = transport
 
     def verify(self, body: m.VerifyM2mTokenBody | None = None) -> m.M2mTokenVerification:
-        """Verify a presented machine secret → { valid, machine_id?"""
+        """Verify a presented machine secret or machine JWT → { valid, machine_id?, ... }"""
         return self._t.request(
             method="POST",
             path="/v1/m2m_tokens/verify",
@@ -5280,6 +5413,57 @@ class MachineEnrolmentTokens:
 class Machines:
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
+
+    def list_grants(self, machine_id: str) -> ListPage:
+        """The resource servers this machine may obtain tokens for."""
+        return self._t.request(method="GET", path=f"/v1/machines/{_enc(machine_id)}/grants")
+
+    def create_grant(self, machine_id: str, body: m.CreateMachineGrantBody) -> m.MachineGrant:
+        """Authorize the machine for a resource server; a second grant on it is a 409."""
+        return self._t.request(method="POST", path=f"/v1/machines/{_enc(machine_id)}/grants", body=body)
+
+    def delete_grant(self, machine_id: str, grant_id: str) -> DeletedObject:
+        """Revoke a grant. A token already issued lasts until it expires."""
+        return self._t.request(
+            method="DELETE",
+            path=f"/v1/machines/{_enc(machine_id)}/grants/{_enc(grant_id)}",
+        )
+
+    def list_organization_members(
+        self, organization_id: str, *, limit: int | None = None, starting_after: str | None = None
+    ) -> CursorPage:
+        """The machines that are members of an organization."""
+        return self._t.request(
+            method="GET",
+            path=f"/v1/organizations/{_enc(organization_id)}/machine_memberships",
+            query=_q(limit=limit, starting_after=starting_after),
+        )
+
+    def add_to_organization(
+        self, organization_id: str, body: m.AddMachineToOrganizationBody, *, idempotency_key: str | None = None
+    ) -> m.MachineMembership:
+        """Make a machine a member of an organization. ``role`` defaults to ``org:member``."""
+        return self._t.request(
+            method="POST",
+            path=f"/v1/organizations/{_enc(organization_id)}/machine_memberships",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    def update_organization_role(self, organization_id: str, machine_id: str, role: str) -> m.MachineMembership:
+        """Change a machine's role in an organization. New tokens carry the new role."""
+        return self._t.request(
+            method="PATCH",
+            path=f"/v1/organizations/{_enc(organization_id)}/machine_memberships/{_enc(machine_id)}",
+            body={"role": role},
+        )
+
+    def remove_from_organization(self, organization_id: str, machine_id: str) -> DeletedObject:
+        """Remove a machine from an organization."""
+        return self._t.request(
+            method="DELETE",
+            path=f"/v1/organizations/{_enc(organization_id)}/machine_memberships/{_enc(machine_id)}",
+        )
 
     def create(self, body: m.CreateMachineBody | None = None) -> m.MachineWithSecret:
         """Create a named machine (M2M) identity; returns the machine secret (mk_) ONCE."""
@@ -6579,6 +6763,24 @@ class SsoOnboarding:
         return self._t.request(
             method="GET",
             path=f"/v1/sso_onboarding_profiles/{profile_id}",
+        )
+
+    def update_profile(self, profile_id: str, body: dict[str, Any]) -> m.SsoOnboardingProfile:
+        """Change an onboarding profile; only the fields sent change."""
+        return self._t.request(
+            method="PATCH",
+            path=f"/v1/sso_onboarding_profiles/{_enc(profile_id)}",
+            body=body,
+        )
+
+    def upsert_profile_by_name(self, name: str, body: dict[str, Any]) -> m.SsoOnboardingProfile:
+        """Create or update the profile with this exact name: 201 when created, else 200. 409
+        ``IDENTIFIER_EXISTS`` when two profiles already share the name.
+        """
+        return self._t.request(
+            method="PUT",
+            path=f"/v1/sso_onboarding_profiles/by_name/{_enc(name)}",
+            body=body,
         )
 
     def delete_profile(self, profile_id: str) -> DeletedObject:
@@ -8064,6 +8266,35 @@ class PartnerPlatforms:
             method="GET",
             path=f"/v1/partner_platforms/{_enc(partner)}/deliveries",
             query=_q(limit=limit),
+        )
+
+    def mint_executor_key(
+        self, partner: str, instance_id: str, raw_body: str, signature_header: str, signature: str
+    ) -> JSON:
+        """For the partner: mint its data-rights key for one instance. ``raw_body`` is sent
+        byte for byte because ``signature`` (in ``signature_header``) signs those bytes.
+        Answers ``{secret, executorUrl}``; a second mint for the same site rotates.
+        """
+        return self._t.request(
+            method="POST",
+            path=f"/v1/partner_executor_keys/{_enc(partner)}/{_enc(instance_id)}",
+            content=raw_body.encode(),
+            content_type="application/json",
+            headers={signature_header: signature},
+        )
+
+    def revoke_executor_key(
+        self, partner: str, instance_id: str, raw_body: str, signature_header: str, signature: str
+    ) -> JSON:
+        """For the partner: the link is gone, revoke the keys minted for that site. Signed like
+        :meth:`mint_executor_key`. Answers ``{revoked}``.
+        """
+        return self._t.request(
+            method="DELETE",
+            path=f"/v1/partner_executor_keys/{_enc(partner)}/{_enc(instance_id)}",
+            content=raw_body.encode(),
+            content_type="application/json",
+            headers={signature_header: signature},
         )
 
 

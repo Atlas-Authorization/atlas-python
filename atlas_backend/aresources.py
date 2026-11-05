@@ -181,6 +181,18 @@ class AsyncUsers:
             body=_q(duration_in_seconds=duration_in_seconds),
         )
 
+    async def protect_account_claim(self, user_id: str, *, idempotency_key: str | None = None) -> dict[str, Any]:
+        """Protect one existing unverified user, so a proof of its address reaches it instead
+        of making a second account. A 409 ``ACCOUNT_NOT_CLAIMABLE`` names what else on the user
+        signs in. Safe to repeat.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/users/{_enc(user_id)}/account_claim",
+            body={"password_policy": "until_email_verified"},
+            idempotency_key=idempotency_key,
+        )
+
     async def unlock(self, user_id: str) -> m.User:
         return await self._t.request(method="POST", path=f"/v1/users/{user_id}/unlock")
 
@@ -332,9 +344,19 @@ class AsyncUsers:
             idempotency_key=idempotency_key,
         )
 
-    async def delete_profile_image(
-        self, user_id: str, *, idempotency_key: str | None = None
+    async def remove_password(
+        self, user_id: str, *, sign_out_of_other_sessions: bool | None = None
     ) -> m.User:
+        """Remove a user's password, even when it is their only sign-in method. Idempotent.
+        Signs the user out unless ``sign_out_of_other_sessions`` is false.
+        """
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/users/{_enc(user_id)}/password",
+            query=_q(sign_out_of_other_sessions=sign_out_of_other_sessions),
+        )
+
+    async def delete_profile_image(self, user_id: str, *, idempotency_key: str | None = None) -> m.User:
         """Clear a user’s profile image."""
         return await self._t.request(
             method="DELETE",
@@ -494,13 +516,12 @@ class AsyncUsers:
         )
 
 
+
 class _AsyncOrgMemberships:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    async def list(
-        self, org_id: str, *, limit: int | None = None, offset: int | None = None
-    ) -> JSON:
+    async def list(self, org_id: str, *, limit: int | None = None, offset: int | None = None) -> JSON:
         return await self._t.request(
             method="GET",
             path=f"/v1/organizations/{org_id}/memberships",
@@ -585,14 +606,10 @@ class _AsyncOrgTeams:
         )
 
     async def create(self, org_id: str, body: m.TeamBody) -> m.Team:
-        return await self._t.request(
-            method="POST", path=f"/v1/organizations/{org_id}/teams", body=body
-        )
+        return await self._t.request(method="POST", path=f"/v1/organizations/{org_id}/teams", body=body)
 
     async def get(self, org_id: str, team_id: str) -> m.Team:
-        return await self._t.request(
-            method="GET", path=f"/v1/organizations/{org_id}/teams/{team_id}"
-        )
+        return await self._t.request(method="GET", path=f"/v1/organizations/{org_id}/teams/{team_id}")
 
     async def update(self, org_id: str, team_id: str, body: m.TeamBody) -> m.Team:
         return await self._t.request(
@@ -600,9 +617,7 @@ class _AsyncOrgTeams:
         )
 
     async def delete(self, org_id: str, team_id: str) -> DeletedObject:
-        return await self._t.request(
-            method="DELETE", path=f"/v1/organizations/{org_id}/teams/{team_id}"
-        )
+        return await self._t.request(method="DELETE", path=f"/v1/organizations/{org_id}/teams/{team_id}")
 
     async def list_members(self, org_id: str, team_id: str) -> CursorPage:
         return await self._t.request(
@@ -639,9 +654,7 @@ class _AsyncOrgRoles:
         )
 
     async def create(self, org_id: str, body: m.CreateOrgRoleBody) -> m.OrgRole:
-        return await self._t.request(
-            method="POST", path=f"/v1/organizations/{org_id}/roles", body=body
-        )
+        return await self._t.request(method="POST", path=f"/v1/organizations/{org_id}/roles", body=body)
 
     async def update(self, org_id: str, role_id: str, body: m.UpdateOrgRoleBody) -> m.OrgRole:
         return await self._t.request(
@@ -823,17 +836,11 @@ class AsyncOrganizations:
     async def update_metadata(
         self, org_id: str, body: m.ReplaceOrganizationMetadataBody
     ) -> m.Organization:
-        return await self._t.request(
-            method="PUT", path=f"/v1/organizations/{org_id}/metadata", body=body
-        )
+        return await self._t.request(method="PUT", path=f"/v1/organizations/{org_id}/metadata", body=body)
 
-    async def update_policy(
-        self, org_id: str, body: m.OrganizationPolicyPatch | dict[str, Any]
-    ) -> JSON:
+    async def update_policy(self, org_id: str, body: m.OrganizationPolicyPatch | dict[str, Any]) -> JSON:
         """Patch an organization's policy (camelCase keys; ``None`` clears an override)."""
-        return await self._t.request(
-            method="PATCH", path=f"/v1/organizations/{org_id}/policy", body=body
-        )
+        return await self._t.request(method="PATCH", path=f"/v1/organizations/{org_id}/policy", body=body)
 
     async def get_entitlements(self, org_id: str) -> m.OrganizationEntitlements:
         """The organization’s effective entitlement — resolved plan, feature keys and numeric
@@ -913,6 +920,17 @@ class AsyncOrganizations:
         )
 
 
+    async def upsert_by_external_id(self, external_id: str, body: dict[str, Any]) -> m.Organization:
+        """Create or update the organization keyed by your own id: 201 when created, else 200
+        with only the fields sent changed. ``name`` is required when it creates.
+        """
+        return await self._t.request(
+            method="PUT",
+            path=f"/v1/organizations/by_external_id/{_enc(external_id)}",
+            body=body,
+        )
+
+
 class AsyncSessions:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -925,6 +943,12 @@ class AsyncSessions:
 
     async def get(self, session_id: str) -> m.Session:
         return await self._t.request(method="GET", path=f"/v1/sessions/{session_id}")
+
+    async def status(self, session_id: str) -> JSON:
+        """Cheap freshness check: ``{id, status, user_id, expires_at, last_active_at?}``, where
+        status is active, expired, revoked or ended. Takes a session id or an ID token ``sid``.
+        """
+        return await self._t.request(method="GET", path=f"/v1/sessions/{_enc(session_id)}/status")
 
     async def revoke(self, session_id: str) -> JSON:
         return await self._t.request(method="POST", path=f"/v1/sessions/{session_id}/revoke")
@@ -1010,9 +1034,7 @@ class AsyncSessions:
             body={"audience_hint": audience_hint} if audience_hint else None,
         )
 
-    async def set_custom_data(
-        self, session_id: str, custom_data: dict[str, Any] | None
-    ) -> m.Session:
+    async def set_custom_data(self, session_id: str, custom_data: dict[str, Any] | None) -> m.Session:
         """Replace the session's custom data (``None`` clears it). At most 2 KB; only an
         active session can be changed. Not for secrets: the signed-in user can read it.
         Sends the ``session.updated`` webhook."""
@@ -1035,9 +1057,7 @@ class AsyncInvitations:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    async def list(
-        self, *, limit: int | None = None, starting_after: str | None = None
-    ) -> CursorPage:
+    async def list(self, *, limit: int | None = None, starting_after: str | None = None) -> CursorPage:
         return await self._t.request(
             method="GET",
             path="/v1/invitations",
@@ -1164,9 +1184,7 @@ class _AsyncWebhookEndpoints:
     async def get(self, endpoint_id: str) -> m.WebhookEndpoint:
         """Read one endpoint, with its health fields (``failing_since``,
         ``last_failing_since``, ``consecutive_failures``, ...)."""
-        return await self._t.request(
-            method="GET", path=f"/v1/webhook_endpoints/{_enc(endpoint_id)}"
-        )
+        return await self._t.request(method="GET", path=f"/v1/webhook_endpoints/{_enc(endpoint_id)}")
 
     async def create(
         self,
@@ -1375,9 +1393,7 @@ class AsyncOAuthClients:
         )
 
     async def update(self, client_id: str, body: m.UpdateOAuthClientBody) -> m.OAuthClient:
-        return await self._t.request(
-            method="PATCH", path=f"/v1/oauth_clients/{client_id}", body=body
-        )
+        return await self._t.request(method="PATCH", path=f"/v1/oauth_clients/{client_id}", body=body)
 
     async def rotate_secret(
         self,
@@ -1534,6 +1550,7 @@ class AsyncOAuthClients:
         )
 
 
+
 class AsyncResourceServers:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -1548,9 +1565,7 @@ class AsyncResourceServers:
         return await self._t.request(method="POST", path="/v1/resource_servers", body=body)
 
     async def update(self, server_id: str, body: m.UpdateResourceServerBody) -> m.ResourceServer:
-        return await self._t.request(
-            method="PATCH", path=f"/v1/resource_servers/{server_id}", body=body
-        )
+        return await self._t.request(method="PATCH", path=f"/v1/resource_servers/{server_id}", body=body)
 
     async def delete(self, server_id: str) -> JSON:
         return await self._t.request(method="DELETE", path=f"/v1/resource_servers/{server_id}")
@@ -1699,13 +1714,9 @@ class AsyncCustomOAuthProviders:
         )
 
     async def delete(self, provider_id: str) -> JSON:
-        return await self._t.request(
-            method="DELETE", path=f"/v1/custom_oauth_providers/{provider_id}"
-        )
+        return await self._t.request(method="DELETE", path=f"/v1/custom_oauth_providers/{provider_id}")
 
-    async def discover(
-        self, issuer: str, *, discovery_url: str | None = None
-    ) -> m.OidcDiscoveryResult:
+    async def discover(self, issuer: str, *, discovery_url: str | None = None) -> m.OidcDiscoveryResult:
         """Fetch and validate an issuer's OpenID configuration (for autofill)."""
         return await self._t.request(
             method="POST",
@@ -1713,9 +1724,7 @@ class AsyncCustomOAuthProviders:
             body=_q(issuer=issuer, discovery_url=discovery_url),
         )
 
-    async def preview_profile_mapping(
-        self, body: m.ProfileMappingPreviewBody
-    ) -> m.ProfileMappingPreview:
+    async def preview_profile_mapping(self, body: m.ProfileMappingPreviewBody) -> m.ProfileMappingPreview:
         """Run a mapping (``body["profile_mapping"]``) against a pasted sample."""
         return await self._t.request(
             method="POST", path="/v1/custom_oauth_providers/profile_mapping/preview", body=body
@@ -1914,9 +1923,7 @@ class _AsyncRestriction:
         return await self._t.request(method="GET", path=self._path)
 
     async def add(self, identifier: str) -> JSON:
-        return await self._t.request(
-            method="POST", path=self._path, body={"identifier": identifier}
-        )
+        return await self._t.request(method="POST", path=self._path, body={"identifier": identifier})
 
     async def remove(self, identifier_id: str) -> JSON:
         return await self._t.request(method="DELETE", path=f"{self._path}/{identifier_id}")
@@ -1964,6 +1971,7 @@ class AsyncAttackProtection:
             path="/v1/attack_protection/app_attestation_secret",
             query=_q(dry_run=dry_run, kind=kind),
         )
+
 
 
 class AsyncActorTokens:
@@ -2290,9 +2298,7 @@ class _AsyncUserApprovalRequests:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    async def create(
-        self, user_id: str, body: m.CreateApprovalRequestBody
-    ) -> m.ApprovalRequestCreated:
+    async def create(self, user_id: str, body: m.CreateApprovalRequestBody) -> m.ApprovalRequestCreated:
         """Request a transaction approval from a user: push a number-matching "approve this
         action" prompt (carrying a human-readable description and optional context) to the
         user's registered push devices.
@@ -2598,9 +2604,7 @@ class _AsyncOrgBranding:
             path=f"/v1/organizations/{org_id}/branding",
         )
 
-    async def set(
-        self, org_id: str, body: m.SetOrgBrandingBody | None = None
-    ) -> m.OrganizationBranding:
+    async def set(self, org_id: str, body: m.SetOrgBrandingBody | None = None) -> m.OrganizationBranding:
         """Set an organization's hosted-page branding overlay — a partial merge: a provided
         field overrides the instance brand, null (or empty string) clears it back.
         """
@@ -2676,9 +2680,7 @@ class AsyncActions:
             path=f"/v1/actions/{action_id}",
         )
 
-    async def test(
-        self, action_id: str, body: m.TestActionBody | None = None
-    ) -> m.ActionTestResult:
+    async def test(self, action_id: str, body: m.TestActionBody | None = None) -> m.ActionTestResult:
         """Dry-run an Action against a sample event in the sandbox and return its
         claims/deny/logs.
         """
@@ -2709,6 +2711,7 @@ class AsyncActions:
         )
 
 
+
 class AsyncApiKeys:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -2737,9 +2740,7 @@ class AsyncApiKeys:
             body=body,
         )
 
-    async def list_revoked(
-        self, *, since: str | int | None = None, limit: int | None = None
-    ) -> ListPage:
+    async def list_revoked(self, *, since: str | int | None = None, limit: int | None = None) -> ListPage:
         """Revocation feed: the keys revoked since a cursor (since=<iso|cursor>), so a resource
         can deny-list revoked key ids while their short-lived delegated tokens are still
         live.
@@ -3002,9 +3003,7 @@ class _AsyncBillingPlans:
             path=f"/v1/billing/plans/{plan_id}",
         )
 
-    async def update(
-        self, plan_id: str, body: m.UpdateBillingPlanBody | None = None
-    ) -> m.BillingPlan:
+    async def update(self, plan_id: str, body: m.UpdateBillingPlanBody | None = None) -> m.BillingPlan:
         """Update an end-user billing plan's name, slug, price, interval, features, audience or
         active flag.
         """
@@ -3074,9 +3073,7 @@ class _AsyncBillingSubscriptions:
             body=body,
         )
 
-    async def cancel(
-        self, subscription_id: str, *, immediately: bool | None = None
-    ) -> m.Subscription:
+    async def cancel(self, subscription_id: str, *, immediately: bool | None = None) -> m.Subscription:
         """Cancel at the end of the current period, or now with ``immediately=True``."""
         return await self._t.request(
             method="POST",
@@ -3107,9 +3104,7 @@ class _AsyncBillingProviders:
 
     async def set(self, provider: str, body: m.SetBillingProviderBody) -> m.BillingProvider:
         """Store credentials (merged onto what is stored, encrypted at rest)."""
-        return await self._t.request(
-            method="PUT", path=f"/v1/billing/providers/{provider}", body=body
-        )
+        return await self._t.request(method="PUT", path=f"/v1/billing/providers/{provider}", body=body)
 
     async def test(self, provider: str) -> m.BillingProviderTest:
         """Make one read-only call with the stored credentials."""
@@ -3266,9 +3261,7 @@ class AsyncConnectors:
             path=f"/v1/connectors/{connector_id}",
         )
 
-    async def update(
-        self, connector_id: str, body: m.UpdateConnectorBody | None = None
-    ) -> m.Connector:
+    async def update(self, connector_id: str, body: m.UpdateConnectorBody | None = None) -> m.Connector:
         """Edit a connector profile — SEO fields, OAuth config, and share modes."""
         return await self._t.request(
             method="PATCH",
@@ -3311,9 +3304,7 @@ class AsyncConnectors:
             path=f"/v1/connectors/{connector_id}/unlist",
         )
 
-    async def install(
-        self, slug: str, body: m.InstallConnectorBody | None = None
-    ) -> m.ConnectorInstall:
+    async def install(self, slug: str, body: m.InstallConnectorBody | None = None) -> m.ConnectorInstall:
         """Enable a published connector on the caller's instance (prefill, full_shared, or
         full_idp), snapshotting its OAuth config into the connection.
         """
@@ -3323,9 +3314,7 @@ class AsyncConnectors:
             body=body,
         )
 
-    async def review(
-        self, slug: str, body: m.ReviewConnectorBody | None = None
-    ) -> m.ConnectorReview:
+    async def review(self, slug: str, body: m.ReviewConnectorBody | None = None) -> m.ConnectorReview:
         """Rate a connector the caller installed (1–5, optional text)."""
         return await self._t.request(
             method="POST",
@@ -3573,9 +3562,7 @@ class AsyncEmailAddresses:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    async def set_primary(
-        self, email_id: str, *, idempotency_key: str | None = None
-    ) -> m.EmailAddress:
+    async def set_primary(self, email_id: str, *, idempotency_key: str | None = None) -> m.EmailAddress:
         """Make a verified address primary — flat alias (user derived from the address)."""
         return await self._t.request(
             method="POST",
@@ -3620,9 +3607,7 @@ class AsyncEmailTemplates:
             path=f"/v1/email_templates/{name}",
         )
 
-    async def preview(
-        self, name: str, body: m.PreviewEmailTemplateBody | None = None
-    ) -> m.EmailPreview:
+    async def preview(self, name: str, body: m.PreviewEmailTemplateBody | None = None) -> m.EmailPreview:
         """Render an email template (an unsaved draft if supplied, else the stored one) with
         SAMPLE variables — never a real code — so an agent can see the result before saving.
         """
@@ -3832,6 +3817,7 @@ class AsyncFga:
         )
 
 
+
 class _AsyncFgaStores:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -3953,9 +3939,7 @@ class AsyncOpenFga:
             body=body,
         )
 
-    async def read(
-        self, store_id: str, body: m.ReadOpenFgaBody | None = None
-    ) -> m.OpenFgaReadResult:
+    async def read(self, store_id: str, body: m.ReadOpenFgaBody | None = None) -> m.OpenFgaReadResult:
         """Read relationship tuples, optionally filtered by a tuple key (OpenFGA-wire Read)."""
         return await self._t.request(
             method="POST",
@@ -4015,6 +3999,7 @@ class AsyncOpenFga:
                 start_time=start_time,
             ),
         )
+
 
 
 class _AsyncOpenFgaStores:
@@ -4080,9 +4065,7 @@ class AsyncGrants:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    async def revoke(
-        self, grant_id: str, *, idempotency_key: str | None = None
-    ) -> m.GrantRevokeResult:
+    async def revoke(self, grant_id: str, *, idempotency_key: str | None = None) -> m.GrantRevokeResult:
         """Revoke one consent grant and cascade-revoke its access/refresh grants through the
         standard revocation path, so the app stops working on its next request.
         """
@@ -4136,6 +4119,35 @@ class AsyncInstance:
         self.sign_in_with_atlas = _AsyncInstanceSignInWithAtlas(transport)
         self.hosted_pages = _AsyncInstanceHostedPages(transport)
 
+    async def storage_declaration(self) -> JSON:
+        """Every cookie and browser-storage key of the hosted pages, as a declaration a consent
+        manager can import. Needs ``cookie_consent:read``.
+        """
+        return await self._t.request(method="GET", path="/v1/instance/storage_declaration")
+
+    async def storage_declaration_csv(self) -> str:
+        """:meth:`storage_declaration` as CSV, for a generic importer."""
+        return await self._t.request(
+            method="GET", path="/v1/instance/storage_declaration", query={"format": "csv"}, raw=True
+        )
+
+    async def public_storage_declaration(self, publishable_key: str) -> JSON:
+        """The same declaration read by publishable key. Nothing in it is secret."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/storage_declaration",
+            query={"publishable_key": publishable_key},
+        )
+
+    async def public_storage_declaration_csv(self, publishable_key: str) -> str:
+        """:meth:`public_storage_declaration` as CSV, for a generic importer."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/storage_declaration",
+            query={"publishable_key": publishable_key, "format": "csv"},
+            raw=True,
+        )
+
     async def get(self) -> m.Instance:
         """Read instance configuration."""
         return await self._t.request(
@@ -4177,9 +4189,7 @@ class AsyncInstance:
             body={"auth_config": {"captcha": captcha}},
         )
 
-    async def set_captcha_secret(
-        self, body: m.SetCaptchaSecretBody | None = None
-    ) -> m.CaptchaSecret:
+    async def set_captcha_secret(self, body: m.SetCaptchaSecretBody | None = None) -> m.CaptchaSecret:
         """Store the captcha provider secret (write-only, encrypted; never read back).
         With ``site_key``, also switch ``auth_config.captcha`` to ``provider`` with that
         site key in the same atomic write (``switched`` is then ``True``).
@@ -4211,9 +4221,7 @@ class AsyncInstance:
             query=query or None,
         )
 
-    async def set_kerberos_secret(
-        self, body: m.SetKerberosSecretBody | None = None
-    ) -> m.KerberosSecret:
+    async def set_kerberos_secret(self, body: m.SetKerberosSecretBody | None = None) -> m.KerberosSecret:
         """Store the per-instance Kerberos/IWA trusted-proxy secret (write-only, encrypted;
         never read back).
         """
@@ -4424,6 +4432,26 @@ class _AsyncInstanceIntegrations:
             idempotency_key=idempotency_key,
         )
 
+    async def redeliver_events(
+        self,
+        product: str,
+        body: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Re-send the events the integration's receiver never got, since ``body["since"]``
+        (ISO 8601, epoch milliseconds or ``failing_since``), and switch a disabled receiver
+        back on. Delivered events are not sent again. While ``has_more`` is true, call again
+        with ``since`` set to ``next_since``.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/instance/integrations/{_enc(product)}/deliveries/redeliver",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+
 
 class _AsyncInstanceCookieConsent:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -4545,9 +4573,7 @@ class _AsyncInstanceReferrals:
             body=body,
         )
 
-    async def retry_call(
-        self, call_id: str, *, idempotency_key: str | None = None
-    ) -> m.ReferralCall:
+    async def retry_call(self, call_id: str, *, idempotency_key: str | None = None) -> m.ReferralCall:
         """Retry a failed, retrying or skipped call now (not a connection test)."""
         return await self._t.request(
             method="POST",
@@ -4598,6 +4624,16 @@ class _AsyncInstanceReferrals:
             path="/v1/instance/referrals/backfill",
             body=body,
             idempotency_key=idempotency_key,
+        )
+
+    async def resync_accounts(self, *, starting_after: str | None = None) -> JSON:
+        """Send every organization's owner to the referral platform once, up to 10,000 per call.
+        When ``truncated``, continue with ``starting_after`` = ``next_starting_after``.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/instance/referrals/accounts/resync",
+            body={} if starting_after is None else {"starting_after": starting_after},
         )
 
     async def get_backfill(self, backfill_id: str) -> m.ReferralBackfillJob:
@@ -4652,6 +4688,12 @@ class _AsyncInstanceHooks:
             body=body,
             idempotency_key=idempotency_key,
         )
+
+    async def clear_before_user_create(self) -> m.BeforeUserCreateHook:
+        """Turn the hook off and clear its url and signing secret. Idempotent; ``timeout_ms``
+        and ``fail_closed`` are kept.
+        """
+        return await self._t.request(method="DELETE", path="/v1/instance/hooks/before_user_create")
 
     async def test_before_user_create(self) -> m.BeforeUserCreateHookTest:
         """Send the hook a sample draft and return its answer; nothing is stored."""
@@ -4713,6 +4755,24 @@ class _AsyncInstanceSecurity:
             method="POST", path="/v1/instance/signing_keys/rotate", body=body or {}
         )
 
+    async def cancel_staged_signing_key(self) -> JSON:
+        """Cancel a staged rotation: the staged key leaves the JWKS and never signs. 404 when
+        none is staged.
+        """
+        return await self._t.request(method="DELETE", path="/v1/instance/signing_keys/next")
+
+    async def get_signing_key_policy(self) -> JSON:
+        """The staged-rotation policy: ``prepublish_days`` (null = off)."""
+        return await self._t.request(method="GET", path="/v1/instance/signing_key_policy")
+
+    async def set_signing_key_policy(self, prepublish_days: int | None) -> JSON:
+        """Stage every ordinary rotation this many days ahead (1..90); ``None`` or 0 is off."""
+        return await self._t.request(
+            method="PATCH",
+            path="/v1/instance/signing_key_policy",
+            body={"prepublish_days": prepublish_days},
+        )
+
     async def get_signing_key_provider(self) -> m.SigningKeyProviderSettings:
         """The key management service the signing key lives in (``local`` when none)."""
         return await self._t.request(method="GET", path="/v1/instance/signing_key_provider")
@@ -4722,9 +4782,7 @@ class _AsyncInstanceSecurity:
     ) -> m.SigningKeyProviderSettings:
         """Sign every token with a key in your own AWS KMS, Google Cloud KMS or Azure Key
         Vault. The result carries the ``rotation`` onto the KMS key."""
-        return await self._t.request(
-            method="PUT", path="/v1/instance/signing_key_provider", body=body
-        )
+        return await self._t.request(method="PUT", path="/v1/instance/signing_key_provider", body=body)
 
     async def remove_signing_key_provider(
         self, body: m.RotateSigningKeyBody | None = None
@@ -4749,9 +4807,7 @@ class AsyncJobs:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
-    async def list(
-        self, *, limit: int | None = None, starting_after: str | None = None
-    ) -> CursorPage:
+    async def list(self, *, limit: int | None = None, starting_after: str | None = None) -> CursorPage:
         """List bulk import/export jobs, newest first (cursor pagination)."""
         return await self._t.request(
             method="GET",
@@ -4795,9 +4851,7 @@ class AsyncBetterAuthImports:
             path="/v1/better_auth_imports/public_key",
         )
 
-    async def rotate_public_key(
-        self, *, idempotency_key: str | None = None
-    ) -> m.BetterAuthImportKey:
+    async def rotate_public_key(self, *, idempotency_key: str | None = None) -> m.BetterAuthImportKey:
         """Replace the import key. The old one is retired: bundles sealed to it no
         longer finalize (``import_key_retired``)."""
         return await self._t.request(
@@ -4820,9 +4874,7 @@ class AsyncBetterAuthImports:
             idempotency_key=idempotency_key,
         )
 
-    async def list(
-        self, *, limit: int | None = None, starting_after: str | None = None
-    ) -> CursorPage:
+    async def list(self, *, limit: int | None = None, starting_after: str | None = None) -> CursorPage:
         """List imports, newest first. Each ``data`` item is a
         :class:`~atlas_backend.models.BetterAuthImport`."""
         return await self._t.request(
@@ -4838,9 +4890,7 @@ class AsyncBetterAuthImports:
             path=f"/v1/better_auth_imports/{import_id}",
         )
 
-    async def upload_part(
-        self, import_id: str, part: int, data: str | bytes
-    ) -> m.BetterAuthImportPart:
+    async def upload_part(self, import_id: str, part: int, data: str | bytes) -> m.BetterAuthImportPart:
         """Upload part ``part`` (1-based) of the sealed bundle: whole lines, at most
         10 MiB. Re-sending a part replaces it."""
         if isinstance(data, bytes):
@@ -5050,9 +5100,7 @@ class AsyncLegacyAuthConnection:
             idempotency_key=idempotency_key,
         )
 
-    async def delete(
-        self, *, idempotency_key: str | None = None
-    ) -> m.LegacyAuthConnectionDeleteResult:
+    async def delete(self, *, idempotency_key: str | None = None) -> m.LegacyAuthConnectionDeleteResult:
         """Delete the instance's lazy-migration (legacy-auth / custom-DB) connection."""
         return await self._t.request(
             method="DELETE",
@@ -5141,9 +5189,7 @@ class AsyncLogStreams:
             path=f"/v1/log_streams/{stream_id}",
         )
 
-    async def update(
-        self, stream_id: str, body: m.UpdateLogStreamBody | None = None
-    ) -> m.LogStream:
+    async def update(self, stream_id: str, body: m.UpdateLogStreamBody | None = None) -> m.LogStream:
         """Update a log stream's name, destination, event_filter, enabled flag, or status
         (active/paused).
         """
@@ -5221,7 +5267,7 @@ class AsyncM2mTokens:
         self._t = transport
 
     async def verify(self, body: m.VerifyM2mTokenBody | None = None) -> m.M2mTokenVerification:
-        """Verify a presented machine secret → { valid, machine_id?"""
+        """Verify a presented machine secret or machine JWT → { valid, machine_id?, ... }"""
         return await self._t.request(
             method="POST",
             path="/v1/m2m_tokens/verify",
@@ -5270,6 +5316,57 @@ class AsyncMachineEnrolmentTokens:
 class AsyncMachines:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
+
+    async def list_grants(self, machine_id: str) -> ListPage:
+        """The resource servers this machine may obtain tokens for."""
+        return await self._t.request(method="GET", path=f"/v1/machines/{_enc(machine_id)}/grants")
+
+    async def create_grant(self, machine_id: str, body: m.CreateMachineGrantBody) -> m.MachineGrant:
+        """Authorize the machine for a resource server; a second grant on it is a 409."""
+        return await self._t.request(method="POST", path=f"/v1/machines/{_enc(machine_id)}/grants", body=body)
+
+    async def delete_grant(self, machine_id: str, grant_id: str) -> DeletedObject:
+        """Revoke a grant. A token already issued lasts until it expires."""
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/machines/{_enc(machine_id)}/grants/{_enc(grant_id)}",
+        )
+
+    async def list_organization_members(
+        self, organization_id: str, *, limit: int | None = None, starting_after: str | None = None
+    ) -> CursorPage:
+        """The machines that are members of an organization."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/organizations/{_enc(organization_id)}/machine_memberships",
+            query=_q(limit=limit, starting_after=starting_after),
+        )
+
+    async def add_to_organization(
+        self, organization_id: str, body: m.AddMachineToOrganizationBody, *, idempotency_key: str | None = None
+    ) -> m.MachineMembership:
+        """Make a machine a member of an organization. ``role`` defaults to ``org:member``."""
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/organizations/{_enc(organization_id)}/machine_memberships",
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def update_organization_role(self, organization_id: str, machine_id: str, role: str) -> m.MachineMembership:
+        """Change a machine's role in an organization. New tokens carry the new role."""
+        return await self._t.request(
+            method="PATCH",
+            path=f"/v1/organizations/{_enc(organization_id)}/machine_memberships/{_enc(machine_id)}",
+            body={"role": role},
+        )
+
+    async def remove_from_organization(self, organization_id: str, machine_id: str) -> DeletedObject:
+        """Remove a machine from an organization."""
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/organizations/{_enc(organization_id)}/machine_memberships/{_enc(machine_id)}",
+        )
 
     async def create(self, body: m.CreateMachineBody | None = None) -> m.MachineWithSecret:
         """Create a named machine (M2M) identity; returns the machine secret (mk_) ONCE."""
@@ -5676,9 +5773,7 @@ class AsyncLogoutNotifyEndpoints:
             idempotency_key=idempotency_key,
         )
 
-    async def delete(
-        self, endpoint_id: str, *, idempotency_key: str | None = None
-    ) -> DeletedObject:
+    async def delete(self, endpoint_id: str, *, idempotency_key: str | None = None) -> DeletedObject:
         """Delete an endpoint; its queued deliveries go with it."""
         return await self._t.request(
             method="DELETE",
@@ -5969,9 +6064,7 @@ class AsyncOrgLdapConnections:
             idempotency_key=idempotency_key,
         )
 
-    async def delete(
-        self, connection_id: str, *, idempotency_key: str | None = None
-    ) -> DeletedObject:
+    async def delete(self, connection_id: str, *, idempotency_key: str | None = None) -> DeletedObject:
         """Delete an organization-owned LDAP connection."""
         return await self._t.request(
             method="DELETE",
@@ -6049,6 +6142,7 @@ class AsyncOrgLdapConnections:
             query=_q(dry_run=dry_run),
             body=body,
         )
+
 
 
 class AsyncOrganizationSettingsSchema:
@@ -6131,9 +6225,7 @@ class AsyncPca:
             body=body,
         )
 
-    async def deny_step_up(
-        self, step_up_id: str, body: m.DenyPcaStepUpBody | None = None
-    ) -> m.PcaStepup:
+    async def deny_step_up(self, step_up_id: str, body: m.DenyPcaStepUpBody | None = None) -> m.PcaStepup:
         """Deny a pending step-up: the held action is never anchored."""
         return await self._t.request(
             method="POST",
@@ -6350,6 +6442,7 @@ class AsyncRiskBasedMfa:
             path="/v1/risk_based_mfa/reputation_secret",
             query=_q(dry_run=dry_run, provider=provider),
         )
+
 
 
 class AsyncScimProvisioningTargets:
@@ -6573,6 +6666,24 @@ class AsyncSsoOnboarding:
         return await self._t.request(
             method="GET",
             path=f"/v1/sso_onboarding_profiles/{profile_id}",
+        )
+
+    async def update_profile(self, profile_id: str, body: dict[str, Any]) -> m.SsoOnboardingProfile:
+        """Change an onboarding profile; only the fields sent change."""
+        return await self._t.request(
+            method="PATCH",
+            path=f"/v1/sso_onboarding_profiles/{_enc(profile_id)}",
+            body=body,
+        )
+
+    async def upsert_profile_by_name(self, name: str, body: dict[str, Any]) -> m.SsoOnboardingProfile:
+        """Create or update the profile with this exact name: 201 when created, else 200. 409
+        ``IDENTIFIER_EXISTS`` when two profiles already share the name.
+        """
+        return await self._t.request(
+            method="PUT",
+            path=f"/v1/sso_onboarding_profiles/by_name/{_enc(name)}",
+            body=body,
         )
 
     async def delete_profile(self, profile_id: str) -> DeletedObject:
@@ -6825,9 +6936,7 @@ class AsyncPlatformApps:
             idempotency_key=idempotency_key,
         )
 
-    async def clone_config(
-        self, app_id: str, body: dict[str, Any], *, dry_run: bool = False
-    ) -> JSON:
+    async def clone_config(self, app_id: str, body: dict[str, Any], *, dry_run: bool = False) -> JSON:
         """Copy another app's configuration (``from_app_id``) onto this one."""
         return await self._t.request(
             method="POST",
@@ -6864,9 +6973,7 @@ class AsyncPlatformApps:
             query=_dry(dry_run),
         )
 
-    async def bulk_delete(
-        self, body: m.BulkDeletePlatformAppsBody | None = None
-    ) -> m.BulkDeleteResult:
+    async def bulk_delete(self, body: m.BulkDeletePlatformAppsBody | None = None) -> m.BulkDeleteResult:
         """X8 housekeeping: delete up to 100 owned apps in one call, for tidying throwaway
         probes.
         """
@@ -6901,9 +7008,7 @@ class AsyncPlatformApps:
             path=f"/v1/platform/apps/{app_id}",
         )
 
-    async def update(
-        self, app_id: str, body: m.UpdatePlatformAppBody | None = None
-    ) -> m.PlatformApp:
+    async def update(self, app_id: str, body: m.UpdatePlatformAppBody | None = None) -> m.PlatformApp:
         """Update an owned app's safe config subset (name, allowed_origins, and X8 housekeeping
         tags).
         """
@@ -7267,24 +7372,18 @@ class AsyncPlatformDomains:
 
     async def claim(self, domain: str) -> m.AccountDomain:
         """Claim a domain; returns the TXT record to publish."""
-        return await self._t.request(
-            method="POST", path="/v1/platform/domains", body={"domain": domain}
-        )
+        return await self._t.request(method="POST", path="/v1/platform/domains", body={"domain": domain})
 
     async def check(self, domain_id: str) -> m.AccountDomain:
         """Check the DNS record now (``POST /v1/platform/domains/{id}/verify``)."""
-        return await self._t.request(
-            method="POST", path=f"/v1/platform/domains/{_enc(domain_id)}/verify"
-        )
+        return await self._t.request(method="POST", path=f"/v1/platform/domains/{_enc(domain_id)}/verify")
 
     async def verify(self, domain_id: str) -> m.AccountDomain:
         """Alias of :meth:`check`."""
         return await self.check(domain_id)
 
     async def remove(self, domain_id: str) -> Any:
-        return await self._t.request(
-            method="DELETE", path=f"/v1/platform/domains/{_enc(domain_id)}"
-        )
+        return await self._t.request(method="DELETE", path=f"/v1/platform/domains/{_enc(domain_id)}")
 
 
 class AsyncPlatformAtlasIdPublisher:
@@ -7429,14 +7528,10 @@ class AsyncAppRoles:
 
     async def set_for_user(self, user_id: str, body: m.SetUserAppRolesBody) -> m.UserAppRoles:
         """``roles`` replaces the set; ``add`` / ``remove`` change it (keys or ids)."""
-        return await self._t.request(
-            method="POST", path=f"/v1/users/{user_id}/app_roles", body=body
-        )
+        return await self._t.request(method="POST", path=f"/v1/users/{user_id}/app_roles", body=body)
 
     async def remove_from_user(self, user_id: str, role_id: str) -> m.UserAppRoles:
-        return await self._t.request(
-            method="DELETE", path=f"/v1/users/{user_id}/app_roles/{role_id}"
-        )
+        return await self._t.request(method="DELETE", path=f"/v1/users/{user_id}/app_roles/{role_id}")
 
 
 class AsyncOAuthInitialAccessTokens:
@@ -7449,18 +7544,14 @@ class AsyncOAuthInitialAccessTokens:
     async def list(self) -> CursorPage:
         return await self._t.request(method="GET", path="/v1/oauth_initial_access_tokens")
 
-    async def create(
-        self, body: m.CreateInitialAccessTokenBody | None = None
-    ) -> m.InitialAccessToken:
+    async def create(self, body: m.CreateInitialAccessTokenBody | None = None) -> m.InitialAccessToken:
         """Mint a token; ``token`` is returned exactly once."""
         return await self._t.request(
             method="POST", path="/v1/oauth_initial_access_tokens", body=body or {}
         )
 
     async def revoke(self, token_id: str) -> m.InitialAccessToken:
-        return await self._t.request(
-            method="DELETE", path=f"/v1/oauth_initial_access_tokens/{token_id}"
-        )
+        return await self._t.request(method="DELETE", path=f"/v1/oauth_initial_access_tokens/{token_id}")
 
 
 class AsyncActionGallery:
@@ -7570,15 +7661,11 @@ class AsyncActionTemplates:
 
     async def publish(self, template_id: str) -> m.ActionTemplate:
         """List an approved template again after unlisting it."""
-        return await self._t.request(
-            method="POST", path=f"/v1/action_templates/{template_id}/publish"
-        )
+        return await self._t.request(method="POST", path=f"/v1/action_templates/{template_id}/publish")
 
     async def unlist(self, template_id: str) -> m.ActionTemplate:
         """Hide a template from the gallery (installs keep working)."""
-        return await self._t.request(
-            method="POST", path=f"/v1/action_templates/{template_id}/unlist"
-        )
+        return await self._t.request(method="POST", path=f"/v1/action_templates/{template_id}/unlist")
 
 
 class AsyncPolicies:
@@ -7603,9 +7690,7 @@ class AsyncPolicies:
             query=_q(include_retired=include_retired),
         )
 
-    async def create(
-        self, body: m.CreatePolicyBody, *, idempotency_key: str | None = None
-    ) -> m.Policy:
+    async def create(self, body: m.CreatePolicyBody, *, idempotency_key: str | None = None) -> m.Policy:
         """Create a policy. It asks nobody anything until a version is published."""
         return await self._t.request(
             method="POST", path="/v1/policies", body=body, idempotency_key=idempotency_key
@@ -7862,17 +7947,13 @@ class AsyncSecretKeys:
         )
 
     async def list(self, *, metadata: dict[str, Any] | None = None) -> ListPage:
-        return await self._t.request(
-            method="GET", path="/v1/secret_keys", query=_meta(metadata) or None
-        )
+        return await self._t.request(method="GET", path="/v1/secret_keys", query=_meta(metadata) or None)
 
     async def get(self, key_id: str) -> m.SecretKey:
         return await self._t.request(method="GET", path=f"/v1/secret_keys/{_enc(key_id)}")
 
     async def update(self, key_id: str, body: m.UpdateSecretKeyBody) -> m.SecretKey:
-        return await self._t.request(
-            method="PATCH", path=f"/v1/secret_keys/{_enc(key_id)}", body=body
-        )
+        return await self._t.request(method="PATCH", path=f"/v1/secret_keys/{_enc(key_id)}", body=body)
 
     async def rotate(
         self,
@@ -7985,9 +8066,7 @@ class _AsyncPartnerLinkRequests:
         )
 
     async def get(self, request_id: str) -> m.PartnerLinkRequest:
-        return await self._t.request(
-            method="GET", path=f"/v1/partner_links/requests/{_enc(request_id)}"
-        )
+        return await self._t.request(method="GET", path=f"/v1/partner_links/requests/{_enc(request_id)}")
 
     async def approve(
         self, request_id: str, body: m.ApprovePartnerLinkRequestBody | None = None
@@ -8024,9 +8103,7 @@ class _AsyncOutboundPartnerLinks:
         )
 
     async def remove(self, partner: str) -> JSON:
-        return await self._t.request(
-            method="DELETE", path=f"/v1/partner_links/outbound/{_enc(partner)}"
-        )
+        return await self._t.request(method="DELETE", path=f"/v1/partner_links/outbound/{_enc(partner)}")
 
     async def request(self, partner: str, body: dict[str, Any]) -> JSON:
         """Ask a partner for a link; its credentials arrive by themselves once the partner
@@ -8055,9 +8132,7 @@ class AsyncPartnerPlatforms:
     async def get(self, partner: str) -> m.PartnerPlatform:
         return await self._t.request(method="GET", path=f"/v1/partner_platforms/{_enc(partner)}")
 
-    async def set(
-        self, partner: str, body: m.PartnerPlatformInput | None = None
-    ) -> m.PartnerPlatform:
+    async def set(self, partner: str, body: m.PartnerPlatformInput | None = None) -> m.PartnerPlatform:
         """Set up or change a partner platform (a preset id fills the defaults)."""
         return await self._t.request(
             method="PUT", path=f"/v1/partner_platforms/{_enc(partner)}", body=body or {}
@@ -8096,6 +8171,35 @@ class AsyncPartnerPlatforms:
             query=_q(limit=limit),
         )
 
+    async def mint_executor_key(
+        self, partner: str, instance_id: str, raw_body: str, signature_header: str, signature: str
+    ) -> JSON:
+        """For the partner: mint its data-rights key for one instance. ``raw_body`` is sent
+        byte for byte because ``signature`` (in ``signature_header``) signs those bytes.
+        Answers ``{secret, executorUrl}``; a second mint for the same site rotates.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/partner_executor_keys/{_enc(partner)}/{_enc(instance_id)}",
+            content=raw_body.encode(),
+            content_type="application/json",
+            headers={signature_header: signature},
+        )
+
+    async def revoke_executor_key(
+        self, partner: str, instance_id: str, raw_body: str, signature_header: str, signature: str
+    ) -> JSON:
+        """For the partner: the link is gone, revoke the keys minted for that site. Signed like
+        :meth:`mint_executor_key`. Answers ``{revoked}``.
+        """
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/partner_executor_keys/{_enc(partner)}/{_enc(instance_id)}",
+            content=raw_body.encode(),
+            content_type="application/json",
+            headers={signature_header: signature},
+        )
+
 
 class AsyncPartnerLinks:
     """``/v1/partner_links``: scoped credentials granted to a partner product, the requests
@@ -8106,9 +8210,7 @@ class AsyncPartnerLinks:
         self.requests = _AsyncPartnerLinkRequests(transport)
         self.outbound = _AsyncOutboundPartnerLinks(transport)
 
-    async def create(
-        self, body: dict[str, Any], *, idempotency_key: str | None = None
-    ) -> m.PartnerLink:
+    async def create(self, body: dict[str, Any], *, idempotency_key: str | None = None) -> m.PartnerLink:
         """Create a link by hand (the secret is returned once). Prefer approving a partner's
         request: there is no secret to hand over. ``body``: ``partner``, ``scopes``, optional
         ``name``, ``expires_at``, ``cert_fingerprints``."""
@@ -8122,9 +8224,7 @@ class AsyncPartnerLinks:
     async def get(self, link_id: str) -> m.PartnerLink:
         return await self._t.request(method="GET", path=f"/v1/partner_links/{_enc(link_id)}")
 
-    async def set_certificates(
-        self, link_id: str, cert_fingerprints: Sequence[str]
-    ) -> m.PartnerLink:
+    async def set_certificates(self, link_id: str, cert_fingerprints: Sequence[str]) -> m.PartnerLink:
         """Lock a link to client certificates (mTLS); an empty list removes the lock."""
         return await self._t.request(
             method="PATCH",
@@ -8159,9 +8259,7 @@ class AsyncAtlasIdGrants:
 
     async def preflight(self, app_id: str) -> m.AtlasIdAppPreflightDetail:
         """The setup check of an app this instance manages (``diagnostics:read`` is enough)."""
-        return await self._t.request(
-            method="GET", path=f"/v1/atlas_id_apps/{_enc(app_id)}/preflight"
-        )
+        return await self._t.request(method="GET", path=f"/v1/atlas_id_apps/{_enc(app_id)}/preflight")
 
     async def revoke_grant(self, app_id: str, grant_id: str) -> JSON:
         return await self._t.request(
@@ -8181,9 +8279,7 @@ class _AsyncPrivacyOrchestrator:
         ``partner_link_id`` calls through a partner link (implies ``use_partner_link``) and
         ``cancel_deletion_on_sign_in`` cancels a self-scheduled deletion when the person signs
         back in during the grace period."""
-        return await self._t.request(
-            method="PUT", path="/v1/instance/privacy_orchestrator", body=body
-        )
+        return await self._t.request(method="PUT", path="/v1/instance/privacy_orchestrator", body=body)
 
     async def delete(self) -> JSON:
         return await self._t.request(method="DELETE", path="/v1/instance/privacy_orchestrator")
@@ -8430,9 +8526,7 @@ class AsyncPrivacy:
     async def lookup(self, body: dict[str, Any]) -> JSON:
         return await self._t.request(method="POST", path="/v1/privacy/lookup", body=body)
 
-    async def create_request(
-        self, body: dict[str, Any], *, idempotency_key: str | None = None
-    ) -> JSON:
+    async def create_request(self, body: dict[str, Any], *, idempotency_key: str | None = None) -> JSON:
         """Open a privacy request. Always send an ``Idempotency-Key`` (16-255 characters)."""
         return await self._t.request(
             method="POST",
@@ -8464,9 +8558,7 @@ class AsyncIntegrations:
         return await self._t.request(method="GET", path="/v1/instance/integrations")
 
     async def get(self, product: str) -> JSON:
-        return await self._t.request(
-            method="GET", path=f"/v1/instance/integrations/{_enc(product)}"
-        )
+        return await self._t.request(method="GET", path=f"/v1/instance/integrations/{_enc(product)}")
 
     async def set(self, product: str, body: dict[str, Any], *, dry_run: bool = False) -> JSON:
         return await self._t.request(
@@ -8477,9 +8569,7 @@ class AsyncIntegrations:
         )
 
     async def delete(self, product: str) -> JSON:
-        return await self._t.request(
-            method="DELETE", path=f"/v1/instance/integrations/{_enc(product)}"
-        )
+        return await self._t.request(method="DELETE", path=f"/v1/instance/integrations/{_enc(product)}")
 
     async def deliveries(
         self,
@@ -8527,9 +8617,7 @@ class AsyncIntegrations:
         )
 
     async def report_verify_error(self, body: dict[str, Any]) -> JSON:
-        return await self._t.request(
-            method="POST", path="/v1/integrations/verify_errors", body=body
-        )
+        return await self._t.request(method="POST", path="/v1/integrations/verify_errors", body=body)
 
     async def card(self, product: str) -> JSON:
         return await self._t.request(method="GET", path=f"/v1/integrations/{_enc(product)}/card")
@@ -8564,6 +8652,7 @@ class AsyncIntegrations:
         )
 
 
+
 class _AsyncStatusSubscription:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -8572,17 +8661,13 @@ class _AsyncStatusSubscription:
         return await self._t.request(method="GET", path="/v1/instance/status_subscription")
 
     async def set(self, body: dict[str, Any]) -> JSON:
-        return await self._t.request(
-            method="PUT", path="/v1/instance/status_subscription", body=body
-        )
+        return await self._t.request(method="PUT", path="/v1/instance/status_subscription", body=body)
 
     async def delete(self) -> JSON:
         return await self._t.request(method="DELETE", path="/v1/instance/status_subscription")
 
     async def rotate_feed(self) -> JSON:
-        return await self._t.request(
-            method="POST", path="/v1/instance/status_subscription/rotate_feed"
-        )
+        return await self._t.request(method="POST", path="/v1/instance/status_subscription/rotate_feed")
 
 
 class _AsyncStatusDependencies:
@@ -8593,9 +8678,7 @@ class _AsyncStatusDependencies:
         return await self._t.request(method="GET", path="/v1/instance/status_dependencies")
 
     async def create(self, body: dict[str, Any]) -> JSON:
-        return await self._t.request(
-            method="POST", path="/v1/instance/status_dependencies", body=body
-        )
+        return await self._t.request(method="POST", path="/v1/instance/status_dependencies", body=body)
 
     async def get(self, dependency_id: str) -> JSON:
         return await self._t.request(
@@ -8693,9 +8776,7 @@ class AsyncAuditExports:
         return await self._t.request(method="DELETE", path=f"/v1/audit_exports/{_enc(export_id)}")
 
     async def test(self, export_id: str) -> JSON:
-        return await self._t.request(
-            method="POST", path=f"/v1/audit_exports/{_enc(export_id)}/test"
-        )
+        return await self._t.request(method="POST", path=f"/v1/audit_exports/{_enc(export_id)}/test")
 
     async def rotate_secret(self, export_id: str) -> JSON:
         return await self._t.request(
@@ -8765,9 +8846,7 @@ class AsyncDeliveryHealth:
     async def get(self, *, kind: str | None = None) -> JSON:
         return await self._t.request(method="GET", path="/v1/delivery_health", query=_q(kind=kind))
 
-    async def set_alert_contacts(
-        self, kind: str, target_id: str, alert_contacts: Sequence[str]
-    ) -> JSON:
+    async def set_alert_contacts(self, kind: str, target_id: str, alert_contacts: Sequence[str]) -> JSON:
         return await self._t.request(
             method="PUT",
             path=f"/v1/delivery_health/{_enc(kind)}/{_enc(target_id)}/alert_contacts",
@@ -8784,6 +8863,7 @@ class AsyncDeliveryHealth:
             method="GET",
             path=f"/v1/delivery_health/{_enc(kind)}/{_enc(id)}",
         )
+
 
 
 class AsyncMeta:
@@ -8817,9 +8897,7 @@ class AsyncPlatformKeys:
         return await self._t.request(method="POST", path="/v1/platform/keys", body=body)
 
     async def update(self, key_id: str, body: dict[str, Any]) -> m.PlatformKey:
-        return await self._t.request(
-            method="PATCH", path=f"/v1/platform/keys/{_enc(key_id)}", body=body
-        )
+        return await self._t.request(method="PATCH", path=f"/v1/platform/keys/{_enc(key_id)}", body=body)
 
     async def revoke(self, key_id: str) -> m.PlatformKey:
         return await self._t.request(method="POST", path=f"/v1/platform/keys/{_enc(key_id)}/revoke")
@@ -8962,7 +9040,6 @@ class AsyncAppCatalog:
             query=_q(dry_run=dry_run),
         )
 
-
 class AsyncLdapServerClients:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -9058,7 +9135,6 @@ class AsyncLdapServerClients:
             idempotency_key=idempotency_key,
         )
 
-
 class _AsyncUsersRequiredActions:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -9138,7 +9214,6 @@ class _AsyncUsersRequiredActions:
             idempotency_key=idempotency_key,
         )
 
-
 class _AsyncUsersNotes:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -9206,7 +9281,6 @@ class _AsyncUsersNotes:
             query=_q(dry_run=dry_run),
         )
 
-
 class _AsyncUsersGuardians:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -9269,7 +9343,6 @@ class _AsyncUsersGuardians:
             query=_q(dry_run=dry_run),
         )
 
-
 class _AsyncUsersSearch:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -9317,7 +9390,6 @@ class _AsyncUsersSearch:
             body=body,
             idempotency_key=idempotency_key,
         )
-
 
 class _AsyncUsersSearchViews:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -9381,7 +9453,6 @@ class _AsyncUsersSearchViews:
             path=f"/v1/users/search/views/{_enc(id)}",
             query=_q(dry_run=dry_run),
         )
-
 
 class AsyncJourneys:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -9511,7 +9582,6 @@ class AsyncJourneys:
             body=body,
             idempotency_key=idempotency_key,
         )
-
 
 class AsyncGroups:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -9671,7 +9741,6 @@ class AsyncGroups:
             query=_q(limit=limit, starting_after=starting_after),
         )
 
-
 class _AsyncGroupsRules:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -9776,7 +9845,6 @@ class _AsyncGroupsRules:
             idempotency_key=idempotency_key,
         )
 
-
 class AsyncMigrations:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -9868,7 +9936,6 @@ class AsyncMigrations:
             path=f"/v1/migrations/{_enc(source)}/bridge",
             query=_q(dry_run=dry_run),
         )
-
 
 class _AsyncMigrationsImports:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -10046,7 +10113,6 @@ class _AsyncMigrationsImports:
             idempotency_key=idempotency_key,
         )
 
-
 class AsyncManagedGrants:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -10122,7 +10188,6 @@ class AsyncManagedGrants:
             query=_q(dry_run=dry_run),
         )
 
-
 class AsyncLeastPrivilege:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -10197,7 +10262,6 @@ class AsyncLeastPrivilege:
             body=body,
             idempotency_key=idempotency_key,
         )
-
 
 class AsyncFlags:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -10332,7 +10396,6 @@ class AsyncFlags:
             body=body,
         )
 
-
 class AsyncMfaFactors:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -10458,7 +10521,6 @@ class AsyncMfaFactors:
             query=_q(dry_run=dry_run),
         )
 
-
 class _AsyncMfaFactorsYubikeys:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -10510,7 +10572,6 @@ class _AsyncMfaFactorsYubikeys:
             path=f"/v1/yubikeys/{_enc(id)}",
             query=_q(dry_run=dry_run),
         )
-
 
 class _AsyncMfaFactorsSmartCardMappings:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -10564,7 +10625,6 @@ class _AsyncMfaFactorsSmartCardMappings:
             path=f"/v1/users/{_enc(id)}/smartcard_mappings/{_enc(mapping_id)}",
             query=_q(dry_run=dry_run),
         )
-
 
 class AsyncAnalytics:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -10804,7 +10864,6 @@ class AsyncAnalytics:
             ),
         )
 
-
 class _AsyncAnalyticsReports:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -10907,7 +10966,6 @@ class _AsyncAnalyticsReports:
             ),
         )
 
-
 class _AsyncAnalyticsAlertRules:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -11003,7 +11061,6 @@ class _AsyncAnalyticsAlertRules:
             idempotency_key=idempotency_key,
         )
 
-
 class AsyncMarketing:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -11067,7 +11124,6 @@ class AsyncMarketing:
             path=f"/v1/leads/{_enc(id)}",
             query=_q(dry_run=dry_run),
         )
-
 
 class AsyncAuditEventSchemas:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -11183,7 +11239,6 @@ class AsyncAuditEventSchemas:
             query=_q(limit=limit, starting_after=starting_after),
         )
 
-
 class AsyncDirectoryPullSources:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -11279,7 +11334,6 @@ class AsyncDirectoryPullSources:
             body=body,
         )
 
-
 class _AsyncDirectoryPullSourcesSyncRuns:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -11327,7 +11381,6 @@ class _AsyncDirectoryPullSourcesSyncRuns:
             method="GET",
             path=f"/v1/directory_pull_sources/{_enc(id)}/sync_runs/{_enc(run_id)}",
         )
-
 
 class _AsyncOrgLdapConnectionsSyncRuns:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -11380,7 +11433,6 @@ class _AsyncOrgLdapConnectionsSyncRuns:
             method="GET",
             path=f"/v1/org_ldap_connections/{_enc(id)}/sync_runs/{_enc(run_id)}",
         )
-
 
 class AsyncRelayAgents:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -11475,7 +11527,6 @@ class AsyncRelayAgents:
             idempotency_key=idempotency_key,
         )
 
-
 class _AsyncOAuthClientsAppSettings:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -11510,7 +11561,6 @@ class _AsyncOAuthClientsAppSettings:
             query=_q(dry_run=dry_run),
             body=body,
         )
-
 
 class _AsyncOAuthClientsWorkloadIdentity:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -11548,7 +11598,6 @@ class _AsyncOAuthClientsWorkloadIdentity:
             path="/v1/workload_identity/cloud_trust",
             query=_q(provider=provider, audience=audience, subject=subject, tenant_id=tenant_id),
         )
-
 
 class _AsyncOAuthClientsTrustedIssuers:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -11613,7 +11662,6 @@ class _AsyncOAuthClientsTrustedIssuers:
             query=_q(dry_run=dry_run),
         )
 
-
 class _AsyncOAuthClientsLoginRequests:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -11667,7 +11715,6 @@ class _AsyncOAuthClientsLoginRequests:
             body=body,
         )
 
-
 class _AsyncOAuthClientsConsentRequests:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -11720,7 +11767,6 @@ class _AsyncOAuthClientsConsentRequests:
             query=_q(dry_run=dry_run, consent_challenge=consent_challenge),
             body=body,
         )
-
 
 class _AsyncOrganizationsWebhookEndpoints:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -11853,7 +11899,6 @@ class _AsyncOrganizationsWebhookEndpoints:
             ),
         )
 
-
 class AsyncOauthClientProfiles:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -11904,7 +11949,6 @@ class AsyncOauthClientProfiles:
             path=f"/v1/oauth_client_profiles/{_enc(name)}",
             query=_q(dry_run=dry_run),
         )
-
 
 class AsyncPasskeyApi:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -12021,7 +12065,6 @@ class AsyncPasskeyApi:
             path="/v1/passkey_api/usage",
         )
 
-
 class AsyncVc:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -12046,7 +12089,6 @@ class AsyncVc:
             body=body,
             idempotency_key=idempotency_key,
         )
-
 
 class _AsyncVcCredentialTypes:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -12106,7 +12148,6 @@ class _AsyncVcCredentialTypes:
             query=_q(dry_run=dry_run),
         )
 
-
 class _AsyncVcCredentials:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -12144,7 +12185,6 @@ class _AsyncVcCredentials:
             idempotency_key=idempotency_key,
         )
 
-
 class _AsyncVcPresentationRequests:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -12176,7 +12216,6 @@ class _AsyncVcPresentationRequests:
             method="GET",
             path=f"/v1/vc/presentation_requests/{_enc(id)}",
         )
-
 
 class AsyncListen:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -12235,7 +12274,6 @@ class AsyncListen:
             headers={"accept": "text/event-stream"},
         )
 
-
 class AsyncAgentRegistration:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -12264,7 +12302,6 @@ class AsyncAgentRegistration:
             query=_q(dry_run=dry_run),
             body=body,
         )
-
 
 class AsyncAgents:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -12354,7 +12391,6 @@ class AsyncAgents:
             idempotency_key=idempotency_key,
         )
 
-
 class AsyncAgentAccessRequests:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -12411,7 +12447,6 @@ class AsyncAgentAccessRequests:
             path="/v1/agent_access_requests",
             query=_q(status=status, agent_id=agent_id, limit=limit, starting_after=starting_after),
         )
-
 
 class AsyncWorkflows:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -12546,7 +12581,6 @@ class AsyncWorkflows:
             query=_q(limit=limit, starting_after=starting_after),
         )
 
-
 class AsyncPageTemplates:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -12640,7 +12674,6 @@ class AsyncPageTemplates:
             query=_q(dry_run=dry_run),
             idempotency_key=idempotency_key,
         )
-
 
 class AsyncServiceConnectors:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -12756,7 +12789,6 @@ class AsyncServiceConnectors:
             body=body,
             idempotency_key=idempotency_key,
         )
-
 
 class AsyncDesktopMfa:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -12879,7 +12911,6 @@ class AsyncDesktopMfa:
             idempotency_key=idempotency_key,
         )
 
-
 class AsyncIdentityVerification:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -12990,7 +13021,6 @@ class AsyncIdentityVerification:
             idempotency_key=idempotency_key,
         )
 
-
 class AsyncIga:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -13001,7 +13031,6 @@ class AsyncIga:
         self.sod = _AsyncIgaSod(transport)
         self.lifecycle = _AsyncIgaLifecycle(transport)
         self.campaigns = _AsyncIgaCampaigns(transport)
-
 
 class _AsyncIgaEntitlements:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -13082,7 +13111,6 @@ class _AsyncIgaEntitlements:
             path=f"/v1/iga/entitlements/{_enc(id)}",
             query=_q(dry_run=dry_run),
         )
-
 
 class _AsyncIgaRequests:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -13194,7 +13222,6 @@ class _AsyncIgaRequests:
             query=_q(approver_user_id=approver_user_id, limit=limit, starting_after=starting_after),
         )
 
-
 class _AsyncIgaGrants:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -13259,7 +13286,6 @@ class _AsyncIgaGrants:
             idempotency_key=idempotency_key,
         )
 
-
 class _AsyncIgaDelegations:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -13310,7 +13336,6 @@ class _AsyncIgaDelegations:
             path=f"/v1/iga/delegations/{_enc(id)}",
             query=_q(dry_run=dry_run),
         )
-
 
 class _AsyncIgaSod:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -13408,7 +13433,6 @@ class _AsyncIgaSod:
             query=_q(dry_run=dry_run),
             idempotency_key=idempotency_key,
         )
-
 
 class _AsyncIgaLifecycle:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -13536,7 +13560,6 @@ class _AsyncIgaLifecycle:
             query=_q(dry_run=dry_run),
             body=body,
         )
-
 
 class _AsyncIgaCampaigns:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -13703,7 +13726,6 @@ class _AsyncIgaCampaigns:
             idempotency_key=idempotency_key,
         )
 
-
 class AsyncScimProvisioningPresets:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -13722,7 +13744,6 @@ class AsyncScimProvisioningPresets:
             path="/v1/scim_provisioning_presets",
             query=_q(limit=limit, starting_after=starting_after),
         )
-
 
 class AsyncVault:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -13846,7 +13867,6 @@ class AsyncVault:
             query=_q(dry_run=dry_run),
         )
 
-
 class _AsyncVaultKeyProvider:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -13895,7 +13915,6 @@ class _AsyncVaultKeyProvider:
             path="/v1/vault/key_provider",
             query=_q(dry_run=dry_run),
         )
-
 
 class AsyncConnections:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -14308,7 +14327,6 @@ class AsyncConnections:
             idempotency_key=idempotency_key,
         )
 
-
 class _AsyncConnectionsOauthClients:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -14376,7 +14394,6 @@ class _AsyncConnectionsOauthClients:
             path=f"/v1/connections/oauth_clients/{_enc(id)}",
             query=_q(dry_run=dry_run),
         )
-
 
 class _AsyncConnectionsWebhooks:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -14474,13 +14491,11 @@ class _AsyncConnectionsWebhooks:
             query=_q(dry_run=dry_run),
         )
 
-
 class AsyncSsf:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
         self.streams = _AsyncSsfStreams(transport)
         self.receivers = _AsyncSsfReceivers(transport)
-
 
 class _AsyncSsfStreams:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -14626,7 +14641,6 @@ class _AsyncSsfStreams:
             query=_q(limit=limit, starting_after=starting_after),
         )
 
-
 class _AsyncSsfReceivers:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -14697,7 +14711,6 @@ class _AsyncSsfReceivers:
             path=f"/v1/ssf/receivers/{_enc(id)}",
             query=_q(dry_run=dry_run),
         )
-
 
 class AsyncNetworkZones:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -14797,7 +14810,6 @@ class AsyncNetworkZones:
             idempotency_key=idempotency_key,
         )
 
-
 class AsyncAccessPolicies:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -14894,7 +14906,6 @@ class AsyncAccessPolicies:
             path=f"/v1/access_policies/{_enc(id)}",
             query=_q(dry_run=dry_run),
         )
-
 
 class AsyncAbac:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -15231,7 +15242,6 @@ class AsyncAbac:
             idempotency_key=idempotency_key,
         )
 
-
 class _AsyncAbacTemplates:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -15313,7 +15323,6 @@ class _AsyncAbacTemplates:
             query=_q(dry_run=dry_run, force=force),
         )
 
-
 class _AsyncAbacLinks:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -15393,7 +15402,6 @@ class _AsyncAbacLinks:
             query=_q(dry_run=dry_run),
         )
 
-
 class _AsyncAbacSchema:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -15460,7 +15468,6 @@ class _AsyncAbacSchema:
             body=body,
             idempotency_key=idempotency_key,
         )
-
 
 class AsyncResources:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -15594,7 +15601,6 @@ class AsyncResources:
             idempotency_key=idempotency_key,
         )
 
-
 class _AsyncResourcesTypes:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -15669,7 +15675,6 @@ class _AsyncResourcesTypes:
             query=_q(dry_run=dry_run),
         )
 
-
 class _AsyncResourcesAssignments:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -15727,7 +15732,6 @@ class _AsyncResourcesAssignments:
             path=f"/v1/resource_role_assignments/{_enc(id)}",
             query=_q(dry_run=dry_run),
         )
-
 
 class AsyncOrgRoleGrants:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -15880,7 +15884,6 @@ class AsyncOrgRoleGrants:
             ),
         )
 
-
 class AsyncDevices:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -15959,7 +15962,6 @@ class AsyncDevices:
             idempotency_key=idempotency_key,
         )
 
-
 class AsyncAuthzDecisions:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -16026,7 +16028,6 @@ class AsyncAuthzDecisions:
             path=f"/v1/authz_decisions/{_enc(id)}",
         )
 
-
 class _AsyncAuthzDecisionsSettings:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -16059,7 +16060,6 @@ class _AsyncAuthzDecisionsSettings:
             query=_q(dry_run=dry_run),
             body=body,
         )
-
 
 class AsyncPolicyBundles:
     def __init__(self, transport: _AsyncTransport) -> None:
@@ -16175,7 +16175,6 @@ class AsyncPolicyBundles:
             idempotency_key=idempotency_key,
         )
 
-
 class AsyncProxyApps:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -16252,7 +16251,6 @@ class AsyncProxyApps:
             query=_q(dry_run=dry_run),
         )
 
-
 class AsyncMcpGateways:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
@@ -16328,7 +16326,6 @@ class AsyncMcpGateways:
             path=f"/v1/mcp_gateways/{_enc(id)}",
             query=_q(dry_run=dry_run),
         )
-
 
 class _AsyncMcpGatewaysBudgets:
     def __init__(self, transport: _AsyncTransport) -> None:
