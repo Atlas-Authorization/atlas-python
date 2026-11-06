@@ -2,6 +2,16 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.24.0 — 2026-11-06
+
+### Added
+
+- Machines: `list_grants`, `create_grant`, `delete_grant`, `list_organization_members`, `add_to_organization`, `update_organization_role`, `remove_from_organization`.
+- Users: `protect_account_claim`, `remove_password`. Sessions: `status`. Organizations: `upsert_by_external_id`.
+- Instance: `storage_declaration`, `storage_declaration_csv`, `public_storage_declaration`, `public_storage_declaration_csv`, `get_signing_key_policy`, `set_signing_key_policy`, `cancel_staged_signing_key`.
+- Integrations: `redeliver_events`. Partner platforms: `resync_accounts`. User hooks: `clear_before_user_create`.
+- SSO onboarding: `update_profile`, `upsert_profile_by_name`. Resource servers: `mint_executor_key`, `revoke_executor_key`.
+
 ## 0.23.0 — 2026-11-02
 
 ### Added
