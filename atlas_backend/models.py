@@ -9,7 +9,7 @@ lacks ``Required``/``NotRequired``.
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict, Union
+from typing import Any, Literal, Optional, TypedDict, Union
 
 from ._types import Metadata
 
@@ -5332,6 +5332,9 @@ class MachineGrant(TypedDict):
     machine_id: str
     resource_server_id: str
     scopes: list[str]
+    constraints: Optional[dict[str, Any]]
+    expires_at: Optional[int]
+    expired: bool
     created_at: int
     updated_at: int
 
@@ -5345,6 +5348,12 @@ class CreateMachineGrantBody(_CreateMachineGrantRequired, total=False):
     scopes: list[str]
     #: Names from the resource server's ``scope_presets``, unioned with ``scopes``.
     scope_presets: list[str]
+    #: A JSON object of at most 2 KB, carried as the ``constraints`` claim of the machine's tokens.
+    constraints: dict[str, Any]
+    #: The grant stops minting after this many seconds (60 to 31536000).
+    expires_in_seconds: int
+    #: Or at this time (epoch ms or ISO 8601). Not both.
+    expires_at: Union[int, str]
 
 
 class MachineMembership(TypedDict):
