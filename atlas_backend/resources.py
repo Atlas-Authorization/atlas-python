@@ -11,11 +11,13 @@ import json
 import time
 from collections.abc import Callable, Sequence
 from typing import Any, Literal
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
+from . import _catalog as c
 from . import models as m
 from ._transport import _SyncTransport
 from ._types import JSON, CursorPage, DeletedObject, ListPage
+from ._util import _enc
 
 
 def _q(**kwargs: Any) -> dict[str, Any]:
@@ -58,11 +60,6 @@ def _audience_query(
     if audience:
         out["audience"] = audience
     return out
-
-
-def _enc(value: str) -> str:
-    """Percent-encode one path segment."""
-    return quote(value, safe="")
 
 
 def _sniff_image_type(data: bytes) -> str:
@@ -128,7 +125,7 @@ def split_bundle_parts(
     return parts
 
 
-class Users:
+class Users(c.Users):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.required_actions = _UsersRequiredActions(transport)
@@ -847,7 +844,7 @@ class _OrgGroupRoles:
         )
 
 
-class Organizations:
+class Organizations(c.Organizations):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.webhook_endpoints = _OrganizationsWebhookEndpoints(transport)
@@ -1028,7 +1025,7 @@ class Organizations:
         )
 
 
-class Sessions:
+class Sessions(c.Sessions):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -1460,7 +1457,7 @@ class _OAuthClientGrants:
         )
 
 
-class OAuthClients:
+class OAuthClients(c.OauthClients):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.app_settings = _OAuthClientsAppSettings(transport)
@@ -1648,7 +1645,7 @@ class OAuthClients:
 
 
 
-class ResourceServers:
+class ResourceServers(c.ResourceServers):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -1668,7 +1665,7 @@ class ResourceServers:
         return self._t.request(method="DELETE", path=f"/v1/resource_servers/{server_id}")
 
 
-class SsoConnections:
+class SsoConnections(c.SsoConnections):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -1861,7 +1858,7 @@ class CustomOAuthProviders:
         )
 
 
-class ScimTokens:
+class ScimTokens(c.ScimTokens):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -2172,12 +2169,21 @@ class JwtTemplates:
     def create(self, body: m.CreateJwtTemplateBody) -> m.JwtTemplate:
         return self._t.request(method="POST", path="/v1/jwt_templates", body=body)
 
-    def update(self, name: str, claims: dict[str, str]) -> m.JwtTemplate:
-        return self._t.request(
-            method="PATCH",
-            path=f"/v1/jwt_templates/{name}",
-            body={"claims": claims},
-        )
+    def update(
+        self,
+        name: str,
+        claims: dict[str, str] | None = None,
+        *,
+        settings: m.JwtTemplateSettingsInput | None = None,
+    ) -> m.JwtTemplate:
+        """Change claims and/or mint settings (lifetime, audience, algorithm, HS256 secret);
+        the name is the key and cannot change. ``None`` for a setting's value clears it."""
+        body: dict[str, Any] = {}
+        if claims is not None:
+            body["claims"] = claims
+        if settings is not None:
+            body["settings"] = settings
+        return self._t.request(method="PATCH", path=f"/v1/jwt_templates/{name}", body=body)
 
     def delete(self, name: str) -> JSON:
         return self._t.request(method="DELETE", path=f"/v1/jwt_templates/{name}")
@@ -2712,7 +2718,7 @@ class _OrgBranding:
         )
 
 
-class Actions:
+class Actions(c.Actions):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -2809,7 +2815,7 @@ class Actions:
 
 
 
-class ApiKeys:
+class ApiKeys(c.ApiKeys):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -3031,7 +3037,7 @@ class AuditEvents:
         )
 
 
-class Billing:
+class Billing(c.Billing):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.plans = _BillingPlans(transport)
@@ -3420,7 +3426,7 @@ class Connectors:
         )
 
 
-class DataSubjectRequests:
+class DataSubjectRequests(c.DataSubjectRequests):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -3596,7 +3602,7 @@ class _DesignAssets:
         )
 
 
-class Diagnostics:
+class Diagnostics(c.Diagnostics):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -3791,7 +3797,7 @@ class Events:
         )
 
 
-class Fga:
+class Fga(c.Fga):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.stores = _FgaStores(transport)
@@ -3990,7 +3996,7 @@ class _FgaModels:
         )
 
 
-class OpenFga:
+class OpenFga(c.Openfga):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.stores = _OpenFgaStores(transport)
@@ -4158,7 +4164,7 @@ class _OpenFgaModels:
         )
 
 
-class Grants:
+class Grants(c.Grants):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -4204,7 +4210,7 @@ class _InstanceHostedPages:
         return self._t.request(method="PATCH", path="/v1/instance/hosted_pages", body=body)
 
 
-class Instance:
+class Instance(c.Instance):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.integrations = _InstanceIntegrations(transport)
@@ -5206,7 +5212,7 @@ class LegacyAuthConnection:
         )
 
 
-class Localizations:
+class Localizations(c.Localizations):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -5410,7 +5416,7 @@ class MachineEnrolmentTokens:
         )
 
 
-class Machines:
+class Machines(c.Machines):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -5624,7 +5630,7 @@ class ManagedWaf:
         )
 
 
-class Mcp:
+class Mcp(c.Mcp):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -5680,7 +5686,7 @@ class McpConnector:
         )
 
 
-class MessagingProviders:
+class MessagingProviders(c.MessagingProviders):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.managed_email = _ManagedEmail(transport)
@@ -6437,7 +6443,7 @@ class RedirectUrls:
         )
 
 
-class RiskBasedMfa:
+class RiskBasedMfa(c.RiskBasedMfa):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -6542,7 +6548,7 @@ class RiskBasedMfa:
 
 
 
-class ScimProvisioningTargets:
+class ScimProvisioningTargets(c.ScimProvisioningTargets):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -6913,7 +6919,7 @@ class Tokens:
         )
 
 
-class Usage:
+class Usage(c.Usage):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -6959,7 +6965,7 @@ class UserImports:
         )
 
 
-class PlatformApps:
+class PlatformApps(c.PlatformApps):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -7230,7 +7236,7 @@ class PlatformAccountlessApps:
         )
 
 
-class PlatformAtlasIdApps:
+class PlatformAtlasIdApps(c.PlatformAtlasIdApps):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.provisioned_accounts = PlatformAtlasIdProvisionedAccounts(transport)
@@ -7765,7 +7771,7 @@ class ActionTemplates:
         return self._t.request(method="POST", path=f"/v1/action_templates/{template_id}/unlist")
 
 
-class Policies:
+class Policies(c.Policies):
     """Policy acceptance: the policies (Terms of Service, privacy policy, any key) your
     users accept at sign-up - and, per policy, again at sign-in when a new version takes
     effect. A policy's versions go draft, published (with an ``effective_at``), retired.
@@ -8833,7 +8839,7 @@ class Notices:
         )
 
 
-class SecurityAdvisories:
+class SecurityAdvisories(c.SecurityAdvisories):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -8889,7 +8895,7 @@ class SubProcessors:
         return self._t.request(method="GET", path="/v1/instance/sub_processors")
 
 
-class Entitlements:
+class Entitlements(c.Entitlements):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -9045,7 +9051,7 @@ class PlatformAudit:
         )
 
 
-class AppCatalog:
+class AppCatalog(c.AppCatalog):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -12162,7 +12168,7 @@ class PasskeyApi:
             path="/v1/passkey_api/usage",
         )
 
-class Vc:
+class Vc(c.Vc):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.credential_types = _VcCredentialTypes(transport)
@@ -12400,7 +12406,7 @@ class AgentRegistration:
             body=body,
         )
 
-class Agents:
+class Agents(c.Agents):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -12545,7 +12551,7 @@ class AgentAccessRequests:
             query=_q(status=status, agent_id=agent_id, limit=limit, starting_after=starting_after),
         )
 
-class Workflows:
+class Workflows(c.Workflows):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -12887,7 +12893,7 @@ class ServiceConnectors:
             idempotency_key=idempotency_key,
         )
 
-class DesktopMfa:
+class DesktopMfa(c.DesktopMfa):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -13118,7 +13124,7 @@ class IdentityVerification:
             idempotency_key=idempotency_key,
         )
 
-class Iga:
+class Iga(c.Iga):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.entitlements = _IgaEntitlements(transport)
@@ -14013,7 +14019,7 @@ class _VaultKeyProvider:
             query=_q(dry_run=dry_run),
         )
 
-class Connections:
+class Connections(c.Connections):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.oauth_clients = _ConnectionsOauthClients(transport)
@@ -14588,7 +14594,7 @@ class _ConnectionsWebhooks:
             query=_q(dry_run=dry_run),
         )
 
-class Ssf:
+class Ssf(c.Ssf):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.streams = _SsfStreams(transport)
@@ -14907,7 +14913,7 @@ class NetworkZones:
             idempotency_key=idempotency_key,
         )
 
-class AccessPolicies:
+class AccessPolicies(c.AccessPolicies):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -15004,7 +15010,7 @@ class AccessPolicies:
             query=_q(dry_run=dry_run),
         )
 
-class Abac:
+class Abac(c.Abac):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.templates = _AbacTemplates(transport)
@@ -15981,7 +15987,7 @@ class OrgRoleGrants:
             ),
         )
 
-class Devices:
+class Devices(c.Devices):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -16059,7 +16065,7 @@ class Devices:
             idempotency_key=idempotency_key,
         )
 
-class AuthzDecisions:
+class AuthzDecisions(c.AuthzDecisions):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.settings = _AuthzDecisionsSettings(transport)
@@ -16348,7 +16354,7 @@ class ProxyApps:
             query=_q(dry_run=dry_run),
         )
 
-class McpGateways:
+class McpGateways(c.McpGateways):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.budgets = _McpGatewaysBudgets(transport)

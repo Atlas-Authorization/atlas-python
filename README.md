@@ -863,3 +863,43 @@ python scripts/gen_async.py && ruff format atlas_backend/aresources.py
 
 `tests/test_parity.py` fails if the two drift, and `tests/test_coverage.py`
 checks every operation in `tests/openapi_operations.txt` has a method.
+
+## Every operation, typed (0.25)
+
+All Backend API and Platform API operations are methods. Shapes are `TypedDict`s in `atlas_backend.catalog_models`; a list that pages has an `iter_` twin:
+
+```python
+for bundle in atlas.iga.iter_list_bundles():
+    ...
+atlas.billing.delete_coupon("coupon_1", idempotency_key="k-1")
+atlas.iga.create_bundle({...}, dry_run=True)   # preview
+```
+
+## Sign-in for your own server (relying party)
+
+```python
+from atlas_backend import RelyingParty
+from atlas_backend.fastapi.rp import rp_router     # or atlas_backend.flask.rp.register_rp / atlas_backend.django.rp.rp_urlpatterns
+
+rp = RelyingParty(
+    issuer="https://id.example.com", client_id="...", client_secret="...",
+    redirect_uri="https://app.example.com/auth/callback", secret=SESSION_SECRET,   # 32+ chars
+    on_signed_in=lambda user, tokens, request, result: create_session(user, result.response),
+)
+app.include_router(rp_router(rp))   # GET /auth/sign-in, GET /auth/callback, POST /auth/sign-out
+```
+
+`rp.require_recent_auth(request, 300, sub=..., auth_time=...)` answers a re-authentication redirect or `None`; `rp.touch_if_due(sid, last)` keeps the session alive; `rp.bind_session(sid, app_session_id, expires_at)` plus `on_backchannel_logout` ends your sessions when Atlas signs the user out. `authenticated_within(claims, 300)`, `used_multi_factor(claims)` and `mfa_satisfied(claims)` read a verified token's claims.
+
+## Checks that need no network call
+
+`KeyMirror` (end-user API keys), `ResourceRoleMirror` (`can(subject, permission, resource)`), `SidRevocationList`, `verify_and_dedupe(body, headers, secret, store)`, `verify_transaction_token(...)`, `WebBotAuthVerifier(...)` and `MachineClient` (enrol, mint, DPoP) keep the request path local; call `sync()` on a timer. `CliLogin` signs a command-line tool in through the browser (loopback or device code).
+
+## Retries, tracing and the doctor
+
+```python
+from atlas_backend import AtlasClient, RetryPolicy, Telemetry
+atlas = AtlasClient("sk_live_...", retry=RetryPolicy(max_retries=3, status_aware=True), telemetry=Telemetry())
+```
+
+`retry` honours `Retry-After` and never replays a write without `idempotency_key`; `telemetry` needs `pip install 'atlas-backend[otel]'` and is off by default. `python -m atlas_backend doctor` checks the key, clock skew, reachability, the JWKS and the status endpoint (`ATLAS_SECRET_KEY`, `ATLAS_API_URL`, `ATLAS_JWKS_URL`, `ATLAS_ISSUER`).

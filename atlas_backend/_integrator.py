@@ -21,6 +21,8 @@ from urllib.parse import quote, urlencode, urlparse, urlunparse, parse_qsl
 
 import httpx
 
+from ._cli_login import OAuthFlowError
+
 from ._transport import DEFAULT_BASE_URL, _to_error
 from ._webhooks import REPLAY_TOLERANCE_MS, WebhookVerification, verify_webhook
 
@@ -676,16 +678,6 @@ class BackchannelLogoutApp:
 # --------------------------------------------------------------------------- #
 # Operator device flow, token exchange, leaked-key revocation                  #
 # --------------------------------------------------------------------------- #
-
-
-class OAuthFlowError(Exception):
-    """A refused device-flow or token request. ``code`` is the OAuth ``error`` (or Atlas
-    error code), e.g. ``access_denied``, ``expired_token``, ``not_configured``."""
-
-    def __init__(self, code: str, message: str, status: int = 0) -> None:
-        super().__init__(message)
-        self.code = code
-        self.status = status
 
 
 _DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"

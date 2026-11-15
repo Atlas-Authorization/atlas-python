@@ -20,4 +20,6 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev,sealed]"
+      - name: Generated catalog is current
+        run: python scripts/gen_catalog.py --check
       - run: python -m pytest -q

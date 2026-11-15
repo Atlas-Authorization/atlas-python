@@ -255,6 +255,17 @@ class JwksCache:
         self.last_outcome = "fresh"
 
     @staticmethod
+    def read_alg(token: str) -> str | None:
+        """Read the ``alg`` from a JWT header without verifying anything (it only picks among the algorithms
+        the key type allows; the key still decides)."""
+        try:
+            header = json.loads(_b64url_decode(token.split(".")[0]))
+        except (ValueError, json.JSONDecodeError):
+            return None
+        alg = header.get("alg") if isinstance(header, dict) else None
+        return alg if isinstance(alg, str) else None
+
+    @staticmethod
     def read_kid(token: str) -> str | None:
         """Read the ``kid`` from a JWT header without verifying anything."""
         parts = token.split(".")
@@ -460,7 +471,7 @@ class AtlasBackend:
             # header says alg:none — or any algorithm coerced onto the key
             # material — fails to decode. Signature + exp/nbf (with leeway) + iss
             # are all enforced here by PyJWT.
-            key, alg = jwk_public_key(jwk)
+            key, alg = jwk_public_key(jwk, JwksCache.read_alg(token))
             claims = jwt.decode(
                 token,
                 key=key,
@@ -526,38 +537,46 @@ class AtlasBackend:
         return None
 
 
-#: The JWS algorithms Atlas signs tokens with. An instance key is RS256 (the default)
-#: or ES256, and an API may use either. Every verifier here is pinned to this list:
-#: ``none`` and HMAC never verify, and the token's ``kid`` selects exactly one
-#: published key whose type fixes which of the two applies.
-SIGNING_ALGS = ("RS256", "ES256")
+#: The JWS algorithms an instance can sign session tokens with. Every verifier here is pinned to this list:
+#: ``none`` and HMAC never verify, and the published key's TYPE fixes which algorithms apply to it (an RSA key
+#: verifies RS256 or PS256, a P-256 key ES256, a P-384 key ES384, an Ed25519 key EdDSA), so a token cannot
+#: coerce another algorithm onto the key material.
+SIGNING_ALGS = ("RS256", "ES256", "ES384", "PS256", "EdDSA")
+
+_RSA_ALGS = ("RS256", "PS256")
 
 
-def _jwk_alg(jwk: Mapping[str, Any]) -> str | None:
-    """The one algorithm a published key verifies, or ``None`` for a key Atlas never
-    signs with (or whose own ``alg`` contradicts its type)."""
+def _jwk_alg(jwk: Mapping[str, Any], hint: str | None = None) -> str | None:
+    """The one algorithm a published key verifies, or ``None`` for a key Atlas never signs with (or whose
+    own ``alg`` contradicts its type). ``hint`` (the token's header ``alg``) only chooses between the two
+    algorithms an RSA key allows when the key does not declare one."""
     kty = jwk.get("kty")
     if kty == "RSA":
-        alg = "RS256"
-    elif kty == "EC" and jwk.get("crv") == "P-256":
-        alg = "ES256"
+        declared = jwk.get("alg")
+        if declared is not None:
+            return declared if declared in _RSA_ALGS else None
+        return hint if hint in _RSA_ALGS else "RS256"
+    if kty == "EC":
+        alg = {"P-256": "ES256", "P-384": "ES384"}.get(jwk.get("crv"))  # type: ignore[arg-type]
+    elif kty == "OKP" and jwk.get("crv") == "Ed25519":
+        alg = "EdDSA"
     else:
         return None
     declared = jwk.get("alg")
-    if declared is not None and declared != alg:
+    if alg is None or (declared is not None and declared != alg):
         return None
     return alg
 
 
-def jwk_public_key(jwk: Mapping[str, Any]) -> tuple[Any, str]:
+def jwk_public_key(jwk: Mapping[str, Any], alg_hint: str | None = None) -> tuple[Any, str]:
     """The public key object for a JWKS entry and the single algorithm it verifies."""
     import jwt  # PyJWT
-    from jwt.algorithms import ECAlgorithm, RSAAlgorithm
+    from jwt.algorithms import ECAlgorithm, OKPAlgorithm, RSAAlgorithm
 
-    alg = _jwk_alg(jwk)
+    alg = _jwk_alg(jwk, alg_hint)
     if alg is None:
         raise jwt.InvalidKeyError("unsupported key")
-    algo = RSAAlgorithm if alg == "RS256" else ECAlgorithm
+    algo = RSAAlgorithm if alg in _RSA_ALGS else OKPAlgorithm if alg == "EdDSA" else ECAlgorithm
     return algo.from_jwk(json.dumps(dict(jwk))), alg
 
 

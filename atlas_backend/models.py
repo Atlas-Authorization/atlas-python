@@ -1664,10 +1664,34 @@ class AuditLog(TypedDict):
 # --------------------------------------------------------------------------- #
 
 
-class JwtTemplate(TypedDict):
+class JwtTemplateSettings(TypedDict):
+    """Non-secret mint settings; the HS256 secret is never returned."""
+
+    lifetime_seconds: Optional[int]
+    audience: Optional[str]
+    algorithm: Literal["RS256", "HS256"]
+    has_signing_secret: bool
+
+
+class JwtTemplateSettingsInput(TypedDict, total=False):
+    """Per-template mint settings. ``lifetime_seconds`` is 10-86400 (default: the instance session-token
+    lifetime); ``None`` clears a value on update."""
+
+    lifetime_seconds: Optional[int]
+    audience: Optional[str]
+    algorithm: Literal["RS256", "HS256"]
+    #: HS256 shared secret, at least 16 characters. Write-only.
+    signing_secret: str
+
+
+class _JwtTemplateRequired(TypedDict):
     object: Literal["jwt_template"]
     name: str
     claims: dict[str, str]
+
+
+class JwtTemplate(_JwtTemplateRequired, total=False):
+    settings: JwtTemplateSettings
 
 
 class _CreateJwtTemplateRequired(TypedDict):
@@ -1676,7 +1700,7 @@ class _CreateJwtTemplateRequired(TypedDict):
 
 
 class CreateJwtTemplateBody(_CreateJwtTemplateRequired, total=False):
-    pass
+    settings: JwtTemplateSettingsInput
 
 
 # --------------------------------------------------------------------------- #
