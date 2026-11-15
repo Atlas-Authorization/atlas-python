@@ -39,7 +39,7 @@ def _composite(ns: Any, name: str) -> bool:
 
 def _spec_ops() -> set[tuple[str, str]]:
     out = set()
-    for line in OPS_FILE.read_text().splitlines():
+    for line in OPS_FILE.read_text(encoding="utf-8").splitlines():
         if line.strip() and not line.startswith("#"):
             method, path = line.split()
             out.add((method, re.sub(r"\{[^}]+\}", "{}", path)))
@@ -105,7 +105,7 @@ def _sync_ops(client: Any) -> set[tuple[str, str]]:
         route = mock.route().mock(return_value=httpx.Response(200, json={}))
         for ns in _namespaces(client):
             for name, fn in inspect.getmembers(ns, inspect.ismethod):
-                if name.startswith("_") or _composite(ns, name):
+                if name.startswith(("_", "iter_")) or _composite(ns, name):
                     continue
                 args, kwargs, ph = _args_for(fn)
                 fn(*args, **kwargs)
@@ -121,7 +121,7 @@ def _async_ops(client: Any) -> set[tuple[str, str]]:
             route = mock.route().mock(return_value=httpx.Response(200, json={}))
             for ns in _namespaces(client):
                 for name, fn in inspect.getmembers(ns, inspect.ismethod):
-                    if name.startswith("_") or _composite(ns, name):
+                    if name.startswith(("_", "iter_")) or _composite(ns, name):
                         continue
                     args, kwargs, ph = _args_for(fn)
                     await fn(*args, **kwargs)

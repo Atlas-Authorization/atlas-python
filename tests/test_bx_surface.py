@@ -412,7 +412,7 @@ def test_session_verifier_accepts_es256_and_pins_algorithms() -> None:
         "tickets:write"
     )
     assert backend.verify(mint_token()).sub == "user_test_1"  # RS256 still verifies
-    assert SIGNING_ALGS == ("RS256", "ES256")
+    assert SIGNING_ALGS == ("RS256", "ES256", "ES384", "PS256", "EdDSA")
     # An ES256 signature presented under the RSA key's kid fails.
     with pytest.raises(VerificationError):
         backend.verify(_es256(_session_claims(), kid="kid-test-1"))

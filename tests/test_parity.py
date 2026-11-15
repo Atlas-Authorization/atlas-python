@@ -24,8 +24,8 @@ def _load_generator():  # type: ignore[no-untyped-def]
 
 def test_async_module_matches_the_sync_module() -> None:
     gen = _load_generator()
-    expected = gen.convert((ROOT / "atlas_backend" / "resources.py").read_text())
-    actual = (ROOT / "atlas_backend" / "aresources.py").read_text()
+    expected = gen.convert((ROOT / "atlas_backend" / "resources.py").read_text(encoding="utf-8"))
+    actual = (ROOT / "atlas_backend" / "aresources.py").read_text(encoding="utf-8")
     assert ast.dump(ast.parse(expected)) == ast.dump(ast.parse(actual)), (
         "aresources.py is stale: run `python scripts/gen_async.py && "
         "ruff format atlas_backend/aresources.py`"

@@ -169,7 +169,7 @@ class LogoutTokenVerifier:
             raise VerificationError(VerificationError.INVALID)
 
         try:
-            key, alg = jwk_public_key(jwk)
+            key, alg = jwk_public_key(jwk, header.get("alg") if isinstance(header.get("alg"), str) else None)
             claims = jwt.decode(
                 logout_token,
                 key=key,

@@ -16,8 +16,12 @@ from types import TracebackType
 
 import httpx
 
+from . import _acatalog as ac
+from . import _catalog as c
 from . import aresources as ar
 from . import resources as r
+from ._resilience import RetryPolicy
+from ._telemetry import Telemetry
 from ._transport import (
     DEFAULT_BASE_URL,
     UnknownFieldsHook,
@@ -26,7 +30,15 @@ from ._transport import (
 )
 
 
-class AtlasClient:
+def _retry_of(retry: RetryPolicy | int | None) -> RetryPolicy | None:
+    return RetryPolicy(max_retries=retry) if isinstance(retry, int) and not isinstance(retry, bool) else retry
+
+
+def _telemetry_of(telemetry: Telemetry | bool | None) -> Telemetry | None:
+    return Telemetry() if telemetry is True else (telemetry or None)
+
+
+class AtlasClient(c.CatalogClient):
     """Synchronous Backend API client.
 
     Args:
@@ -49,6 +61,10 @@ class AtlasClient:
             succeeded but Atlas ignored some body fields (the
             ``Atlas-Unknown-Fields`` response header). Without a hook the SDK
             logs a warning on the ``atlas_backend`` logger.
+        retry: A :class:`RetryPolicy` (or a max retry count): honour ``Retry-After``, back off on
+            429 / 502 / 503 / 504 and retry network errors. Off by default.
+        telemetry: ``True`` or a :class:`Telemetry`: an OpenTelemetry span and metrics per call
+            (needs ``atlas-backend[otel]``). Off by default.
     """
 
     def __init__(
@@ -62,6 +78,8 @@ class AtlasClient:
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
         secret_recipient: str | None = None,
+        retry: RetryPolicy | int | None = None,
+        telemetry: Telemetry | bool | None = None,
     ) -> None:
         if not secret_key:
             raise ValueError("AtlasClient requires a secret_key.")
@@ -76,11 +94,14 @@ class AtlasClient:
                 on_unknown_fields=on_unknown_fields,
                 traceparent=traceparent,
                 secret_recipient=secret_recipient,
+                retry=_retry_of(retry),
+                telemetry=_telemetry_of(telemetry),
             )
         )
 
     def _wire(self, transport: _SyncTransport) -> None:
         self._transport = transport
+        self._wire_catalog(transport)
         self.users = r.Users(transport)
         self.sessions = r.Sessions(transport)
         self.organizations = r.Organizations(transport)
@@ -271,7 +292,7 @@ class AtlasClient:
         self.close()
 
 
-class AsyncAtlasClient:
+class AsyncAtlasClient(ac.AsyncCatalogClient):
     """Asynchronous Backend API client — the ``asyncio`` peer of :class:`AtlasClient`."""
 
     def __init__(
@@ -285,6 +306,8 @@ class AsyncAtlasClient:
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
         secret_recipient: str | None = None,
+        retry: RetryPolicy | int | None = None,
+        telemetry: Telemetry | bool | None = None,
     ) -> None:
         if not secret_key:
             raise ValueError("AsyncAtlasClient requires a secret_key.")
@@ -299,11 +322,14 @@ class AsyncAtlasClient:
                 on_unknown_fields=on_unknown_fields,
                 traceparent=traceparent,
                 secret_recipient=secret_recipient,
+                retry=_retry_of(retry),
+                telemetry=_telemetry_of(telemetry),
             )
         )
 
     def _wire(self, transport: _AsyncTransport) -> None:
         self._transport = transport
+        self._wire_catalog(transport)
         self.users = ar.AsyncUsers(transport)
         self.sessions = ar.AsyncSessions(transport)
         self.organizations = ar.AsyncOrganizations(transport)
@@ -490,7 +516,7 @@ class AsyncAtlasClient:
         await self.aclose()
 
 
-class AtlasPlatformClient:
+class AtlasPlatformClient(c.CatalogPlatformClient):
     """Synchronous Platform API client, authenticated by a platform key (``psk_...``).
 
     The platform key is the management-plane credential above a per-instance
@@ -510,6 +536,8 @@ class AtlasPlatformClient:
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
         secret_recipient: str | None = None,
+        retry: RetryPolicy | int | None = None,
+        telemetry: Telemetry | bool | None = None,
     ) -> None:
         if not platform_key:
             raise ValueError("AtlasPlatformClient requires a platform_key.")
@@ -524,11 +552,14 @@ class AtlasPlatformClient:
                 on_unknown_fields=on_unknown_fields,
                 traceparent=traceparent,
                 secret_recipient=secret_recipient,
+                retry=_retry_of(retry),
+                telemetry=_telemetry_of(telemetry),
             )
         )
 
     def _wire(self, transport: _SyncTransport) -> None:
         self._transport = transport
+        self._wire_catalog(transport)
         self.apps = r.PlatformApps(transport)
         self.accountless_apps = r.PlatformAccountlessApps(transport)
         self.atlas_id_apps = r.PlatformAtlasIdApps(transport)
@@ -579,7 +610,7 @@ class AtlasPlatformClient:
         self.close()
 
 
-class AsyncAtlasPlatformClient:
+class AsyncAtlasPlatformClient(ac.AsyncCatalogPlatformClient):
     """Asynchronous Platform API client — the ``asyncio`` peer of :class:`AtlasPlatformClient`."""
 
     def __init__(
@@ -593,6 +624,8 @@ class AsyncAtlasPlatformClient:
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
         secret_recipient: str | None = None,
+        retry: RetryPolicy | int | None = None,
+        telemetry: Telemetry | bool | None = None,
     ) -> None:
         if not platform_key:
             raise ValueError("AsyncAtlasPlatformClient requires a platform_key.")
@@ -607,11 +640,14 @@ class AsyncAtlasPlatformClient:
                 on_unknown_fields=on_unknown_fields,
                 traceparent=traceparent,
                 secret_recipient=secret_recipient,
+                retry=_retry_of(retry),
+                telemetry=_telemetry_of(telemetry),
             )
         )
 
     def _wire(self, transport: _AsyncTransport) -> None:
         self._transport = transport
+        self._wire_catalog(transport)
         self.apps = ar.AsyncPlatformApps(transport)
         self.accountless_apps = ar.AsyncPlatformAccountlessApps(transport)
         self.atlas_id_apps = ar.AsyncPlatformAtlasIdApps(transport)

@@ -2,6 +2,22 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.25.0 — 2026-11-14
+
+### Added
+
+- **The whole Backend API and Platform API.** Every operation is now a typed method: 640+ new methods across new namespaces (`client.iga`, `client.fga`-adjacent resources, `client.mcp_gateways`, ...) and on the existing ones (`client.users`, `client.organizations`, `client.instance`, ...). Request and response shapes are `TypedDict`s in `atlas_backend.catalog_models`; every list that pages has an `iter_<name>(...)` generator that follows the cursor. Writes take `idempotency_key=`; operations that preview take `dry_run=`. The async client has the same methods.
+- **Hosted sign-in relying party.** `RelyingParty` (authorization code + PKCE, state, nonce, an AES-GCM sealed flow cookie, ID-token verification against the issuer's keys, step-up with `require_recent_auth`, `touch_if_due`, `revoke_session`, `end_app_session`, back-channel logout with a sid store, server-side sign-out) with adapters `atlas_backend.django.rp.rp_urlpatterns`, `atlas_backend.flask.rp.register_rp` and `atlas_backend.fastapi.rp.rp_router`.
+- **Local verification primitives.** `KeyMirror` (end-user API keys), `ResourceRoleMirror`, `SidRevocationList` / `EdgeRevocationChecker` (feed or signed status list), `verify_and_dedupe` with memory and SQL stores, `verify_transaction_token`, `WebBotAuthVerifier` (RFC 9421, Ed25519), `MachineClient` (enrol, challenge-signed tokens, DPoP proofs).
+- **Async everywhere.** `AsyncRelyingParty`, `AsyncKeyMirror`, `AsyncResourceRoleMirror`, `AsyncSidRevocationList` / `AsyncEdgeRevocationChecker`, `AsyncMemoryWebhookStore` and `verify_and_dedupe_async` (stores, callbacks and API clients may be sync or async), built for `AsyncAtlasClient` and generated from the sync modules. The FastAPI adapter now takes an `AsyncRelyingParty`.
+- **SQL stores.** `SqlSidStore` / `AsyncSqlSidStore` (table `atlas_rp_sessions`, DDL in the docstring) and the webhook dedupe SQL stores run on any DB-API 2.0 connection (`dbapi_executor`) or a SQLAlchemy engine (`sqlalchemy_executor`, optional).
+- **Signing algorithms.** Session tokens, ID tokens, logout tokens, status lists and transaction tokens verify under RS256, PS256, ES256, ES384 and EdDSA; the published key's type decides which algorithms apply, and `none` / HS* never verify.
+- A PATCH body of the generated methods can carry an explicit `None` to clear a field; an unset key is omitted.
+- `authenticated_within`, `used_multi_factor`, `mfa_satisfied`, `mfa_org_satisfied`; `CliLogin` (device flow and loopback sign-in for your own CLI) with `start_device_authorization` / `poll_device_authorization`; `jwt_templates.update(name, claims=None, settings=...)` and typed template settings.
+- **Opt-in OpenTelemetry**: `AtlasClient(..., telemetry=True)` records a client span and request metrics per call (`pip install 'atlas-backend[otel]'`); nothing is imported when it is off.
+- **Opt-in resilience**: `AtlasClient(..., retry=RetryPolicy(...))` honours `Retry-After`, backs off on 429 / 502 / 503 / 504, retries network errors, never replays a write without an idempotency key, and can read the Atlas status endpoint.
+- **`python -m atlas_backend doctor`** and `doctor()`: key shape, API reachability, clock skew, key acceptance, JWKS reachability, status and issuer discovery.
+
 ## 0.24.0 — 2026-11-06
 
 ### Added

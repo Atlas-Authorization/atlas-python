@@ -9,13 +9,18 @@ request-building helpers below.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
+from contextlib import nullcontext
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable, Union
 
 import httpx
 
+from ._resilience import RetryPolicy, parse_retry_after
+from ._telemetry import Telemetry
 from ._errors import AtlasError, ErrorItem
 
 #: The default BAPI origin, overridable per instance via ``base_url``.
@@ -163,7 +168,11 @@ class _BaseTransport:
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
         secret_recipient: str | None = None,
+        retry: RetryPolicy | None = None,
+        telemetry: Telemetry | None = None,
     ) -> None:
+        self._retry = retry
+        self._telemetry = telemetry
         self._secret_key = secret_key
         self._base_url = base_url
         self._strict = strict
@@ -214,7 +223,9 @@ class _BaseTransport:
 
     def _finish(self, response: httpx.Response, method: str, path: str, raw: bool | str) -> Any:
         if not response.is_success:
-            raise _to_error(response.status_code, response.text)
+            err = _to_error(response.status_code, response.text)
+            err.retry_after = parse_retry_after(response.headers.get("retry-after"))  # type: ignore[attr-defined]
+            raise err
         if raw == "bytes":
             return response.content  # binary download (e.g. a gzip archive): never decode as text
         _report_unknown_fields(response, method, path, self._on_unknown_fields)
@@ -234,6 +245,8 @@ class _SyncTransport(_BaseTransport):
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
         secret_recipient: str | None = None,
+        retry: RetryPolicy | None = None,
+        telemetry: Telemetry | None = None,
     ) -> None:
         super().__init__(
             secret_key,
@@ -242,6 +255,8 @@ class _SyncTransport(_BaseTransport):
             on_unknown_fields=on_unknown_fields,
             traceparent=traceparent,
             secret_recipient=secret_recipient,
+            retry=retry,
+            telemetry=telemetry,
         )
         self._client = client
 
@@ -261,6 +276,8 @@ class _SyncTransport(_BaseTransport):
             on_unknown_fields=on_unknown_fields or self._on_unknown_fields,
             traceparent=traceparent or self._traceparent,
             secret_recipient=secret_recipient or self._secret_recipient,
+            retry=self._retry,
+            telemetry=self._telemetry,
         )
 
     def request(
@@ -277,12 +294,64 @@ class _SyncTransport(_BaseTransport):
         strict: bool | None = None,
         headers: dict[str, str] | None = None,
     ) -> Any:
-        response = self._client.request(
-            **self._prepare(
-                method, path, query, body, idempotency_key, content, content_type, strict, headers
-            )
+        prepared = self._prepare(
+            method, path, query, body, idempotency_key, content, content_type, strict, headers
         )
-        return self._finish(response, method, path, raw)
+        if self._retry is None and self._telemetry is None:
+            return self._finish(self._client.request(**prepared), method, path, raw)
+        span = self._telemetry.request(method, path) if self._telemetry else nullcontext()
+        with span as call:
+            if call is not None:
+                self._telemetry.inject(prepared["headers"])  # type: ignore[union-attr]
+            retry, attempt = self._retry, 0
+            while True:
+                try:
+                    response = self._client.request(**prepared)
+                except httpx.TransportError:
+                    if not (retry and retry.retry_network_errors and attempt < retry.max_retries and retry.allows(method, idempotency_key)):
+                        raise
+                    self._pause(retry, attempt, None, None, method, path)
+                    attempt += 1
+                    continue
+                if call is not None:
+                    call.status, call.retries = response.status_code, attempt
+                if (
+                    retry
+                    and response.status_code in retry.statuses
+                    and attempt < retry.max_retries
+                    and retry.allows(method, idempotency_key)
+                ):
+                    self._pause(retry, attempt, response.status_code, response.headers.get("retry-after"), method, path)
+                    attempt += 1
+                    continue
+                break
+            try:
+                return self._finish(response, method, path, raw)
+            except AtlasError as e:
+                if retry and retry.status_aware and response.status_code >= 500:
+                    e.status_indicator = self._read_status(retry)  # type: ignore[attr-defined]
+                raise
+
+    def _read_status(self, retry: RetryPolicy) -> str | None:
+        """``GET /v1/status`` (cached); never raises."""
+        now = time.time()
+        fresh, indicator = retry.cached_indicator(now)
+        if fresh:
+            return indicator
+        try:
+            res = self._client.get(
+                _join_url(self._base_url, "/v1/status"), headers={"accept": "application/json"}, timeout=3.0
+            )
+            return retry.remember_indicator(now, res.json() if res.is_success else None)
+        except Exception:
+            return retry.remember_indicator(now, None)
+
+    def _pause(self, retry: RetryPolicy, attempt: int, status: int | None, retry_after: str | None, method: str, path: str) -> None:
+        indicator = self._read_status(retry) if retry.status_aware and (status is None or status >= 500) else None
+        delay = retry.wait_for(attempt, parse_retry_after(retry_after), indicator)
+        if retry.on_retry:
+            retry.on_retry({"attempt": attempt + 1, "delay": delay, "status": status, "method": method, "path": path})
+        (retry.sleep or time.sleep)(delay)
 
 
 class _AsyncTransport(_BaseTransport):
@@ -298,6 +367,8 @@ class _AsyncTransport(_BaseTransport):
         on_unknown_fields: UnknownFieldsHook | None = None,
         traceparent: str | None = None,
         secret_recipient: str | None = None,
+        retry: RetryPolicy | None = None,
+        telemetry: Telemetry | None = None,
     ) -> None:
         super().__init__(
             secret_key,
@@ -306,6 +377,8 @@ class _AsyncTransport(_BaseTransport):
             on_unknown_fields=on_unknown_fields,
             traceparent=traceparent,
             secret_recipient=secret_recipient,
+            retry=retry,
+            telemetry=telemetry,
         )
         self._client = client
 
@@ -325,6 +398,8 @@ class _AsyncTransport(_BaseTransport):
             on_unknown_fields=on_unknown_fields or self._on_unknown_fields,
             traceparent=traceparent or self._traceparent,
             secret_recipient=secret_recipient or self._secret_recipient,
+            retry=self._retry,
+            telemetry=self._telemetry,
         )
 
     async def request(
@@ -341,9 +416,61 @@ class _AsyncTransport(_BaseTransport):
         strict: bool | None = None,
         headers: dict[str, str] | None = None,
     ) -> Any:
-        response = await self._client.request(
-            **self._prepare(
-                method, path, query, body, idempotency_key, content, content_type, strict, headers
-            )
+        prepared = self._prepare(
+            method, path, query, body, idempotency_key, content, content_type, strict, headers
         )
-        return self._finish(response, method, path, raw)
+        if self._retry is None and self._telemetry is None:
+            return self._finish(await self._client.request(**prepared), method, path, raw)
+        span = self._telemetry.request(method, path) if self._telemetry else nullcontext()
+        with span as call:
+            if call is not None:
+                self._telemetry.inject(prepared["headers"])  # type: ignore[union-attr]
+            retry, attempt = self._retry, 0
+            while True:
+                try:
+                    response = await self._client.request(**prepared)
+                except httpx.TransportError:
+                    if not (retry and retry.retry_network_errors and attempt < retry.max_retries and retry.allows(method, idempotency_key)):
+                        raise
+                    await self._pause(retry, attempt, None, None, method, path)
+                    attempt += 1
+                    continue
+                if call is not None:
+                    call.status, call.retries = response.status_code, attempt
+                if (
+                    retry
+                    and response.status_code in retry.statuses
+                    and attempt < retry.max_retries
+                    and retry.allows(method, idempotency_key)
+                ):
+                    await self._pause(retry, attempt, response.status_code, response.headers.get("retry-after"), method, path)
+                    attempt += 1
+                    continue
+                break
+            try:
+                return self._finish(response, method, path, raw)
+            except AtlasError as e:
+                if retry and retry.status_aware and response.status_code >= 500:
+                    e.status_indicator = await self._read_status(retry)  # type: ignore[attr-defined]
+                raise
+
+    async def _read_status(self, retry: RetryPolicy) -> str | None:
+        """``GET /v1/status`` (cached); never raises."""
+        now = time.time()
+        fresh, indicator = retry.cached_indicator(now)
+        if fresh:
+            return indicator
+        try:
+            res = await self._client.get(
+                _join_url(self._base_url, "/v1/status"), headers={"accept": "application/json"}, timeout=3.0
+            )
+            return retry.remember_indicator(now, res.json() if res.is_success else None)
+        except Exception:
+            return retry.remember_indicator(now, None)
+
+    async def _pause(self, retry: RetryPolicy, attempt: int, status: int | None, retry_after: str | None, method: str, path: str) -> None:
+        indicator = await self._read_status(retry) if retry.status_aware and (status is None or status >= 500) else None
+        delay = retry.wait_for(attempt, parse_retry_after(retry_after), indicator)
+        if retry.on_retry:
+            retry.on_retry({"attempt": attempt + 1, "delay": delay, "status": status, "method": method, "path": path})
+        await (retry.sleep or asyncio.sleep)(delay)

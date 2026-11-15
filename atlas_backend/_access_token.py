@@ -280,7 +280,7 @@ class AccessTokenVerifier:
             if jwk is None:
                 return fail(401, "invalid_token", invalid)
             try:
-                key, alg = jwk_public_key(jwk)
+                key, alg = jwk_public_key(jwk, JwksCache.read_alg(token))
                 claims = jwt.decode(
                     token,
                     key=key,
