@@ -924,4 +924,6 @@ from atlas_backend import AtlasClient, RetryPolicy, Telemetry
 atlas = AtlasClient("sk_live_...", retry=RetryPolicy(max_retries=3, status_aware=True), telemetry=Telemetry())
 ```
 
+Every client also retries once, after a short jittered delay, when a request fails with a connection reset before any response (an idle pooled socket the server closed). That applies to GET, HEAD, OPTIONS, PUT, DELETE and to any call with an `idempotency_key`; timeouts and other writes are never replayed. Keep your own `httpx` keep-alive expiry below 60 s.
+
 `retry` honours `Retry-After` and never replays a write without `idempotency_key`; `telemetry` needs `pip install 'atlas-backend[otel]'` and is off by default. `python -m atlas_backend doctor` checks the key, clock skew, reachability, the JWKS and the status endpoint (`ATLAS_SECRET_KEY`, `ATLAS_API_URL`, `ATLAS_JWKS_URL`, `ATLAS_ISSUER`).
