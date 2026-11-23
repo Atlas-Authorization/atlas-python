@@ -2,6 +2,12 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.26.1 — 2026-11-23
+
+### Fixed
+
+- **Connection resets on reused sockets.** A request that fails with a connection reset before any response is retried once, after a short jittered delay, when it is a GET, HEAD, OPTIONS, PUT or DELETE or carries an `idempotency_key`. Timeouts and other writes are never retried.
+
 ## 0.26.0 — 2026-11-22
 
 ### Added

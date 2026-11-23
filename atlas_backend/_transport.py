@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import time
 from contextlib import nullcontext
 from collections.abc import Mapping, Sequence
@@ -38,6 +39,22 @@ logger = logging.getLogger("atlas_backend")
 
 QueryScalar = Union[str, int, float, bool, None]
 QueryParams = Mapping[str, Union[QueryScalar, Sequence[QueryScalar]]]
+
+
+# A pooled keep-alive socket the server or edge closed while idle fails before any response; one
+# retry on a fresh socket fixes it. Timeouts are never retried (the request may have been applied).
+_RESET_ERRORS = (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError, httpx.ConnectError)
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+
+
+def _reset_retryable(exc: Exception, method: str, headers: Mapping[str, str]) -> bool:
+    if not isinstance(exc, _RESET_ERRORS) or isinstance(exc, httpx.TimeoutException):
+        return False
+    return method.upper() in _IDEMPOTENT_METHODS or any(k.lower() == "idempotency-key" for k in headers)
+
+
+def _reset_delay() -> float:
+    return 0.025 + random.random() * 0.1
 
 
 def _join_url(base: str, path: str) -> str:
@@ -235,6 +252,15 @@ class _BaseTransport:
 class _SyncTransport(_BaseTransport):
     """Config-bound synchronous requester handed to every resource namespace."""
 
+    def _send(self, prepared: dict[str, Any], method: str) -> httpx.Response:
+        try:
+            return self._client.request(**prepared)
+        except Exception as e:
+            if not _reset_retryable(e, method, prepared["headers"]):
+                raise
+            time.sleep(_reset_delay())
+            return self._client.request(**prepared)
+
     def __init__(
         self,
         secret_key: str,
@@ -298,7 +324,7 @@ class _SyncTransport(_BaseTransport):
             method, path, query, body, idempotency_key, content, content_type, strict, headers
         )
         if self._retry is None and self._telemetry is None:
-            return self._finish(self._client.request(**prepared), method, path, raw)
+            return self._finish(self._send(prepared, method), method, path, raw)
         span = self._telemetry.request(method, path) if self._telemetry else nullcontext()
         with span as call:
             if call is not None:
@@ -306,7 +332,7 @@ class _SyncTransport(_BaseTransport):
             retry, attempt = self._retry, 0
             while True:
                 try:
-                    response = self._client.request(**prepared)
+                    response = self._send(prepared, method)
                 except httpx.TransportError:
                     if not (retry and retry.retry_network_errors and attempt < retry.max_retries and retry.allows(method, idempotency_key)):
                         raise
@@ -356,6 +382,15 @@ class _SyncTransport(_BaseTransport):
 
 class _AsyncTransport(_BaseTransport):
     """Config-bound asynchronous requester handed to every async namespace."""
+
+    async def _send(self, prepared: dict[str, Any], method: str) -> httpx.Response:
+        try:
+            return await self._client.request(**prepared)
+        except Exception as e:
+            if not _reset_retryable(e, method, prepared["headers"]):
+                raise
+            await asyncio.sleep(_reset_delay())
+            return await self._client.request(**prepared)
 
     def __init__(
         self,
@@ -420,7 +455,7 @@ class _AsyncTransport(_BaseTransport):
             method, path, query, body, idempotency_key, content, content_type, strict, headers
         )
         if self._retry is None and self._telemetry is None:
-            return self._finish(await self._client.request(**prepared), method, path, raw)
+            return self._finish(await self._send(prepared, method), method, path, raw)
         span = self._telemetry.request(method, path) if self._telemetry else nullcontext()
         with span as call:
             if call is not None:
@@ -428,7 +463,7 @@ class _AsyncTransport(_BaseTransport):
             retry, attempt = self._retry, 0
             while True:
                 try:
-                    response = await self._client.request(**prepared)
+                    response = await self._send(prepared, method)
                 except httpx.TransportError:
                     if not (retry and retry.retry_network_errors and attempt < retry.max_retries and retry.allows(method, idempotency_key)):
                         raise

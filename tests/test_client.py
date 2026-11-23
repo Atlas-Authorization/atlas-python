@@ -412,3 +412,41 @@ async def test_async_create_and_error_and_pagination() -> None:
 
         orgs = await acollect(c.organizations.list)
         assert [o["id"] for o in orgs] == ["o1", "o2"]
+
+
+# --------------------------------------------------------------------------- #
+# One retry after a connection reset before any response                      #
+# --------------------------------------------------------------------------- #
+
+
+@respx.mock
+def test_connection_reset_retried_once_for_idempotent_and_keyed_requests() -> None:
+    route = respx.get(f"{API_URL}/v1/users").mock(
+        side_effect=[httpx.ReadError("reset"), httpx.Response(200, json={"data": []})]
+    )
+    client()._transport.request(method="GET", path="/v1/users")
+    assert route.call_count == 2
+
+    keyed = respx.post(f"{API_URL}/v1/users").mock(
+        side_effect=[httpx.RemoteProtocolError("closed"), httpx.Response(200, json={})]
+    )
+    client()._transport.request(method="POST", path="/v1/users", body={}, idempotency_key="k1")
+    assert keyed.call_count == 2
+
+
+@respx.mock
+def test_connection_reset_not_retried_for_plain_write_timeout_or_second_failure() -> None:
+    plain = respx.post(f"{API_URL}/v1/users").mock(side_effect=httpx.ReadError("reset"))
+    with pytest.raises(httpx.ReadError):
+        client()._transport.request(method="POST", path="/v1/users", body={})
+    assert plain.call_count == 1
+
+    slow = respx.get(f"{API_URL}/v1/slow").mock(side_effect=httpx.ReadTimeout("t"))
+    with pytest.raises(httpx.ReadTimeout):
+        client()._transport.request(method="GET", path="/v1/slow")
+    assert slow.call_count == 1
+
+    twice = respx.get(f"{API_URL}/v1/twice").mock(side_effect=httpx.ReadError("reset"))
+    with pytest.raises(httpx.ReadError):
+        client()._transport.request(method="GET", path="/v1/twice")
+    assert twice.call_count == 2
