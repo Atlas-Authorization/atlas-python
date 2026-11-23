@@ -2,6 +2,12 @@
 
 All notable changes to the `atlas-backend` Python package are documented here.
 
+## 0.26.0 — 2026-11-22
+
+### Added
+
+- **Key-pair API keys.** `sign_api_key_assertion(private_key_pem, key_id, audience, ttl_seconds=300, scope=None, jti=None)` signs the short-lived JWT a key-pair key presents (ES256 for P-256, EdDSA for Ed25519). `create` takes `credential`, `audience` and `public_key`, key reads carry `credential`, `audience` and `key_id`, a generated pair returns `private_key` once, and `verify` / `create_token` accept the assertion as `token` / `assertion`. `KeyMirror.verify_assertion` (and the async mirror) verifies an assertion locally with the server's refusal codes; the mirrored row carries `credential`, `public_key_pem`, `audience`, `max_token_lifetime_seconds` and `enabled` (a disabled key is refused by `verify` and `verify_assertion`), and `apply_webhook` copies `enabled`.
+
 ## 0.25.0 — 2026-11-14
 
 ### Added

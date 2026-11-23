@@ -371,6 +371,28 @@ dev.get()
 dev.disable()  # back to standard mode; the provider stays
 ```
 
+## Key-pair API keys
+
+A key-pair key has no shared secret: Atlas returns a PKCS#8 private key once and keeps only the public key. Sign a short-lived assertion and present it where you would present a secret.
+
+```python
+from atlas_backend import sign_api_key_assertion
+
+key = client.api_keys.create({
+    "subject_type": "user", "subject_id": "user_123",
+    "credential": "key_pair", "audience": "https://api.example.com",
+})
+private_key = key["private_key"]  # shown once; store it like a .p8 file
+
+assertion = sign_api_key_assertion(private_key, key["key_id"], "https://api.example.com", ttl_seconds=300)
+client.api_keys.verify({"token": assertion})
+client.api_keys.create_token({"assertion": assertion})
+```
+
+ES256 (P-256) and EdDSA (Ed25519) keys are supported. Pass `public_key` on create to bring your own key; no private key is returned then.
+
+`mirror.verify_assertion(assertion)` checks an assertion against the mirrored public key with no network call, with the same refusal codes Atlas answers (`wrong_audience`, `assertion_expired`, `assertion_replayed`, ...). A store may add `claim_assertion_jti(key_id, jti, expires_at_ms)` to share used ids between processes.
+
 ## API key spend caps
 
 Give an end-user API key caps per unit and period (`"request"`, `"day"`, `"month"` or

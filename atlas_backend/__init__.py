@@ -105,6 +105,7 @@ from ._device_authorization import (
     format_user_code,
     user_code_from_url,
 )
+from ._api_key_assertion import sign_api_key_assertion
 from ._dpop import (
     DPOP_ALGS,
     DpopNonceSource,
@@ -318,7 +319,7 @@ from .resources import (
     split_bundle_parts,
 )
 
-__version__ = "0.25.0"
+__version__ = "0.26.0"
 
 __all__ = [
     "OIDC_ORGANIZATION_PARAM",
@@ -470,6 +471,7 @@ __all__ = [
     "MemoryDpopReplayStore",
     "dpop_access_token_hash",
     "jwk_thumbprint",
+    "sign_api_key_assertion",
     "normalize_htu",
     "build_www_authenticate",
     "protected_resource_metadata",

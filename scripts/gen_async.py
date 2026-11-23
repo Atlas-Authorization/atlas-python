@@ -291,7 +291,7 @@ def convert_mirrors(src: str) -> str:
     return _convert_ext(
         src, "_mirrors.py", "Asynchronous mirrors and revocation: the asyncio peers of :mod:`atlas_backend._mirrors`.",
         {
-            "KeyMirror": {"last_sync_at", "mint", "rotate", "import_key", "revoke", "verify", "sync", "apply_webhook"},
+            "KeyMirror": {"_freshness", "verify_assertion", "last_sync_at", "mint", "rotate", "import_key", "revoke", "verify", "sync", "apply_webhook"},
             "ResourceRoleMirror": {"_chain", "check", "can", "sync", "apply_webhook"},
             "EdgeRevocationChecker": {"_refresh", "check"},
             "SidRevocationList": {"is_revoked", "_poll"},

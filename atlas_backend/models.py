@@ -2453,6 +2453,10 @@ CreateApiKeyBody = TypedDict(
         "public_key": "str | None",
         "limits": "list[ApiKeyLimit] | None",
         "import": "CreateApiKeyBodyImport",
+        # "secret" (default) or "key_pair"; a key pair has no shared secret.
+        "credential": 'Literal["secret", "key_pair"]',
+        # Assertion audience of a key-pair key (default: the instance id).
+        "audience": "str",
         # Alternative to expires_at; without either the instance default lifetime applies.
         "expires_in_seconds": "int",
         # A custom secret prefix, e.g. "acme" gives acme_<id>_<secret>.
@@ -2495,15 +2499,25 @@ class ApiKeyCreate(_ApiKeyCreateRequired, SealedSecrets, total=False):
     public_key: str | None
     #: RFC 7638 JWK thumbprint of public_key — the cnf.jkt minted tokens carry.
     public_key_jkt: str | None
+    #: ``"secret"`` or ``"key_pair"``.
+    credential: Literal["secret", "key_pair"]
+    #: Assertion audience of a key-pair key; ``None`` for a secret key.
+    audience: str | None
+    #: The JWT ``kid`` of a key-pair key (equal to ``id``).
+    key_id: str
     #: Per-key spend caps; ``None`` when the key has none.
     limits: list[ApiKeyLimit] | None
     #: Each cap with its current-window usage.
     usage: list[ApiKeyLimitState]
     note: str
+    #: PKCS#8 PEM of an Atlas-generated key pair, returned once (key-pair keys only).
+    private_key: str
 
 
 class CreateApiKeyTokenBody(TypedDict, total=False):
     secret: str
+    #: A signed key-pair assertion, sent instead of ``secret``.
+    assertion: str
     ttl_seconds: float
     audience: Any
 
@@ -2542,6 +2556,8 @@ class ApiKeyToken(_ApiKeyTokenRequired, total=False):
 
 class VerifyApiKeyBody(TypedDict, total=False):
     secret: str
+    #: A signed key-pair assertion (see ``sign_api_key_assertion``), instead of ``secret``.
+    token: str
     #: Scopes the key must carry; a key missing one answers ``valid: False`` with
     #: ``code: "insufficient_scope"`` and ``missing_scopes``.
     required_scopes: list[str]
@@ -2591,6 +2607,10 @@ class ApiKeyVerificationVariant2(_ApiKeyVerificationVariant2Required, total=Fals
     expires_at: int | None
     #: Uses left after this verify (``None`` = unlimited).
     remaining: int | None
+    #: ``"key_pair"`` when an assertion was verified; ``jti`` and ``exp`` are the assertion's.
+    credential: Literal["secret", "key_pair"]
+    jti: str
+    exp: int
 
 
 ApiKeyVerification = Union[ApiKeyVerificationVariant1, ApiKeyVerificationVariant2]
@@ -2622,6 +2642,12 @@ class ApiKey(_ApiKeyRequired, total=False):
     public_key: str | None
     #: RFC 7638 JWK thumbprint of public_key — the cnf.jkt minted tokens carry.
     public_key_jkt: str | None
+    #: ``"secret"`` or ``"key_pair"``.
+    credential: Literal["secret", "key_pair"]
+    #: Assertion audience of a key-pair key; ``None`` for a secret key.
+    audience: str | None
+    #: The JWT ``kid`` of a key-pair key (equal to ``id``).
+    key_id: str
     #: Per-key spend caps; ``None`` when the key has none.
     limits: list[ApiKeyLimit] | None
     #: Each cap with its current-window usage (empty when the key has no caps).

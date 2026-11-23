@@ -24,6 +24,7 @@ from typing import Any, Protocol
 
 import httpx
 
+from ._api_key_assertion import parse_assertion, verify_assertion_signature
 from ._transport import DEFAULT_BASE_URL
 from ._verify import SIGNING_ALGS, JwksCache, _b64url_decode, jwk_public_key
 from ._webhooks import WebhookVerification, verify_standard_webhook, verify_webhook
@@ -169,7 +170,18 @@ def _mirrored(key: Mapping[str, Any], hash: str) -> dict[str, Any]:
         "revoked_at": key.get("revoked_at"),
         "organization_id": key.get("organization_id"),
         "revoked_reason": key.get("revoked_reason"),
+        # Key pair: the holder signs assertions, so there is no secret hash; these verify them locally.
+        "enabled": key.get("enabled"),
+        "credential": key.get("credential") or "secret",
+        "public_key_pem": key.get("public_key"),
+        "audience": key.get("audience"),
+        "max_token_lifetime_seconds": key.get("max_token_lifetime_seconds"),
     }
+
+
+def _key_hash(key: Mapping[str, Any]) -> str:
+    """A secret key's sha256; a key-pair key has no secret, so its row carries a placeholder nothing can match."""
+    return hash_api_key_secret(key["secret"]) if key.get("secret") else f"key_pair:{key['id']}"
 
 
 @dataclass
@@ -188,6 +200,10 @@ class KeyVerification:
     #: True when the answer came from the last synced data inside ``serve_stale_for_ms``.
     stale: bool = False
     last_sync_at: int | None = None
+    #: ``"key_pair"`` after :meth:`KeyMirror.verify_assertion`, with the assertion's ``jti`` and ``exp`` (epoch seconds).
+    credential: str | None = None
+    jti: str | None = None
+    exp: int | None = None
 
 
 class KeyMirror:
@@ -233,6 +249,8 @@ class KeyMirror:
         self._on_serve_stale = on_serve_stale
         self._membership = membership
         self._now = now or _now_ms
+        self._used_jtis: dict[str, int] = {}
+        self._jti_lock = threading.Lock()
 
     def last_sync_at(self) -> int | None:
         """Epoch ms of the last completed :meth:`sync`; ``None`` = never."""
@@ -241,13 +259,13 @@ class KeyMirror:
     def mint(self, body: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
         """Mint at Atlas, then mirror it. Returns the key with its one-time ``secret``."""
         created = self.api_keys.create(body, idempotency_key=idempotency_key)
-        self.store.put(_mirrored(created, hash_api_key_secret(created["secret"])))
+        self.store.put(_mirrored(created, _key_hash(created)))
         return created
 
     def rotate(self, key_id: str, body: dict[str, Any] | None = None, idempotency_key: str | None = None) -> dict[str, Any]:
         """Rotate at Atlas, then mirror both sides: the successor is added, the old key ends at the end of the overlap."""
         rotated = self.api_keys.rotate(key_id, body or {}, idempotency_key=idempotency_key)
-        self.store.put(_mirrored(rotated, hash_api_key_secret(rotated["secret"])))
+        self.store.put(_mirrored(rotated, _key_hash(rotated)))
         old = self.store.get(key_id)
         if old:
             prev = rotated.get("previous_key") or {}
@@ -299,20 +317,27 @@ class KeyMirror:
             if getattr(e, "status", None) not in (404, 409):
                 raise
 
+    def _freshness(self) -> tuple[KeyVerification | None, bool]:
+        """(a refusal when the mirror is too stale to answer, whether the answer is served stale)."""
+        if self._max_staleness is None:
+            return None, False
+        at = self.last_sync_at()
+        behind = float("inf") if at is None else self._now() - at - self._max_staleness
+        if behind <= 0:
+            return None, False
+        if at is None or behind > self._serve_stale:
+            return KeyVerification(False, code="stale", last_sync_at=at), False
+        if self._on_serve_stale:
+            self._on_serve_stale({"last_sync_at": at, "stale_for_ms": behind})
+        return None, True
+
     def verify(self, secret: str, *, required_scopes: Sequence[str] = (), client_ip: str | None = None) -> KeyVerification:
         """Verify a presented secret against the mirror: no network call (unless ``verify_at_atlas``)."""
         if not isinstance(secret, str) or not secret:
             return KeyVerification(False)
-        served_stale = False
-        if self._max_staleness is not None:
-            at = self.last_sync_at()
-            behind = float("inf") if at is None else self._now() - at - self._max_staleness
-            if behind > 0:
-                if at is None or behind > self._serve_stale:
-                    return KeyVerification(False, code="stale", last_sync_at=at)
-                served_stale = True
-                if self._on_serve_stale:
-                    self._on_serve_stale({"last_sync_at": at, "stale_for_ms": behind})
+        refuse, served_stale = self._freshness()
+        if refuse:
+            return refuse
         digest = hash_api_key_secret(secret)
         key = self.store.get_by_hash(digest)
         ip_arg = {"client_ip": client_ip} if client_ip else {}
@@ -321,7 +346,7 @@ class KeyMirror:
             if remote.get("valid"):
                 key = _mirrored(self.api_keys.get(remote["id"]), digest)
                 self.store.put(key)
-        if key is None or key.get("revoked_at") is not None:
+        if key is None or key.get("revoked_at") is not None or key.get("enabled") is False:
             return KeyVerification(False)
         if key.get("expires_at") is not None and key["expires_at"] <= self._now():
             return KeyVerification(False)
@@ -352,6 +377,98 @@ class KeyMirror:
         if missing:
             return KeyVerification(False, code="insufficient_scope", missing_scopes=missing)
         return KeyVerification(True, key=key, effective_scopes=effective, organization=organization, stale=served_stale)
+
+    def verify_assertion(self, token: str, *, required_scopes: Sequence[str] = (), client_ip: str | None = None) -> KeyVerification:
+        """Verify a key-pair assertion (``sign_api_key_assertion``) locally with the checks Atlas verify makes:
+        signature with the stored public key (``alg`` must fit its type), ``iss`` = ``kid``, ``aud``, ``iat``,
+        ``exp`` and the lifetime cap, ``nbf``, ``scope`` (a subset of the key's, narrows the result), revocation,
+        expiry, the IP allowlist, then the single-use ``jti``. A refusal carries the server's ``code``; a key the
+        mirror does not hold answers ``valid=False`` with no code. The ``jti`` is claimed through the store's
+        optional ``claim_assertion_jti(key_id, jti, expires_at_ms) -> bool``, else in this process's memory."""
+        refuse, served_stale = self._freshness()
+        if refuse:
+            return refuse
+        parsed = parse_assertion(token)
+        if parsed is None:
+            return KeyVerification(False, code="invalid_assertion")
+        header, claims, signing_input, signature = parsed
+        kid = header.get("kid")
+        if not isinstance(kid, str) or not kid:
+            return KeyVerification(False, code="invalid_assertion")
+        key = self.store.get(kid)
+        if key is None:
+            return KeyVerification(False)
+        if key.get("credential") != "key_pair" or not key.get("public_key_pem"):
+            return KeyVerification(False, code="invalid_assertion")
+        if not verify_assertion_signature(header, signing_input, signature, key["public_key_pem"]) or claims.get("iss") != kid:
+            return KeyVerification(False, code="invalid_assertion")
+        if key.get("enabled") is False:
+            return KeyVerification(False, code="invalid_assertion")
+        if key.get("revoked_at") is not None:
+            return KeyVerification(False)
+        now_ms = self._now()
+        if key.get("expires_at") is not None and key["expires_at"] <= now_ms:
+            return KeyVerification(False)
+        now_s = now_ms // 1000
+
+        def num(v: Any) -> bool:
+            return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+        aud, iat, exp, nbf, jti, scope = (claims.get(k) for k in ("aud", "iat", "exp", "nbf", "jti", "scope"))
+        if not (aud == key.get("audience") if isinstance(aud, str) else isinstance(aud, list) and key.get("audience") in aud):
+            return KeyVerification(False, code="wrong_audience")
+        if not num(iat) or not num(exp) or ("nbf" in claims and not num(nbf)):
+            return KeyVerification(False, code="invalid_assertion")
+        if ("jti" in claims and (not isinstance(jti, str) or not jti)) or ("scope" in claims and not isinstance(scope, str)):
+            return KeyVerification(False, code="invalid_assertion")
+        if iat > now_s + 60 or (nbf is not None and nbf > now_s + 60):
+            return KeyVerification(False, code="assertion_not_yet_valid")
+        if exp <= now_s - 30:
+            return KeyVerification(False, code="assertion_expired")
+        if exp - iat > min(key.get("max_token_lifetime_seconds") or 3600, 86400):
+            return KeyVerification(False, code="assertion_lifetime_too_long")
+        if key.get("allowed_ips"):
+            if not client_ip:
+                return KeyVerification(False, code="client_ip_required")
+            if not ip_in_allowlist(client_ip, key["allowed_ips"]):
+                return KeyVerification(False, code="ip_not_allowed")
+        effective = _expand(key.get("scopes") or [], self._implications, self._allowed)
+        organization: dict[str, Any] | None = None
+        if key.get("subject_type") == "user" and key.get("organization_id"):
+            held = self._membership(key["subject_id"], key["organization_id"]) if self._membership else None
+            if not self._membership:
+                return KeyVerification(False, code="membership_unresolved")
+            if not held:
+                return KeyVerification(False)
+            organization = dict(held)
+            effective = intersect_scopes_with_permissions(effective, held.get("permissions", []))
+        if isinstance(scope, str) and scope.strip():
+            asked = scope.split()
+            not_granted = [x for x in asked if x not in effective]
+            if not_granted:
+                return KeyVerification(False, code="scope_not_granted", missing_scopes=not_granted)
+            effective = [x for x in effective if x in asked]
+        missing = [x for x in required_scopes if x not in effective]
+        if missing:
+            return KeyVerification(False, code="insufficient_scope", missing_scopes=missing)
+        # Last, so a refused assertion never burns its jti.
+        if isinstance(jti, str):
+            until = int(exp * 1000)
+            if hasattr(self.store, "claim_assertion_jti"):
+                first = self.store.claim_assertion_jti(key["id"], jti, until)
+            else:
+                with self._jti_lock:
+                    self._used_jtis = {k: t for k, t in self._used_jtis.items() if t > now_ms}
+                    ident = f"{key['id']}\n{jti}"
+                    first = ident not in self._used_jtis
+                    if first:
+                        self._used_jtis[ident] = until
+            if not first:
+                return KeyVerification(False, code="assertion_replayed")
+        return KeyVerification(
+            True, key=key, effective_scopes=effective, organization=organization, stale=served_stale,
+            credential="key_pair", jti=jti if isinstance(jti, str) else None, exp=int(exp),
+        )
 
     def sync(self) -> int:
         """Consume the revocation feed from the stored cursor, revoking each listed key locally.
@@ -400,7 +517,7 @@ class KeyMirror:
             return True
         if etype in ("api_key.updated", "api_key.created"):
             self.store.put(
-                {**held, **{k: data[k] for k in ("name", "scopes", "allowed_ips", "expires_at") if k in data}}
+                {**held, **{k: data[k] for k in ("name", "scopes", "allowed_ips", "expires_at", "enabled") if k in data}}
             )
             return True
         return False
