@@ -1178,6 +1178,14 @@ class UserReferral(_UserReferralRequired, total=False):
     flagged: bool
 
 
+class UserPhoneNumbersItem(TypedDict, total=False):
+    object: Literal['phone_number']
+    id: str
+    phone_number: str
+    verified: bool
+    primary: bool
+
+
 class _UserExternalAccountRequired(TypedDict):
     object: Literal['external_account']
     id: str
@@ -1240,6 +1248,8 @@ class User(_UserRequired, total=False):
     has_passkey: bool
     #: Factor classes this user must always use (POL-04); empty = none.
     required_factors: list[str]
+    #: A sandbox user: set at creation, never changed. Nothing is ever sent to it (email, SMS, push, voice, WhatsApp), it is not counted as a monthly active 
+    sandbox: bool
     ban_reason: str | None
     ban_note: str | None
     #: One account state, the same value as the ID token's account_status: banned (an active ban; deactivation by SCIM, directory sync or a workflow is a ban
@@ -1258,6 +1268,12 @@ class User(_UserRequired, total=False):
     warnings: list[str]
     #: The user's own share link: the link the referral platform returned for the partner, else the referral settings' link_template with {code} replaced by 
     referral_link: str | None
+    #: Every phone number of the user. Present on read, list, update and user webhooks.
+    phone_numbers: list[UserPhoneNumbersItem]
+    #: The primary phone number (E.164): the one the person made primary, else their oldest verified number; null when none.
+    primary_phone_number: str | None
+    #: True only when the primary phone number was proven.
+    phone_number_verified: bool
     #: Every linked provider identity, however it was linked (a sign-in, a connect flow, identities on create, a bulk import or identities/import); the same 
     external_accounts: list[UserExternalAccount]
 
@@ -1603,6 +1619,8 @@ class GetUsersQuery(TypedDict, total=False):
     username: str
     phone_number: str
     external_id: str
+    provider: str
+    provider_user_id: str
     banned: bool
     email_verified: bool
     organization_id: str
@@ -1677,6 +1695,7 @@ class PostUsersBody(TypedDict, total=False):
     referral: PostUsersBodyReferral
     referral_code: str | None
     notify: bool
+    sandbox: bool
     mfa: PostUsersBodyMfa
 
 
@@ -1856,6 +1875,16 @@ class DeleteUsersByIdDeviceKeysByKeyIdResponse(TypedDict):
     deleted: Literal[True]
 
 
+class SessionNativeClient(TypedDict, total=False):
+    """Present for a native app session: kind unregistered, development or registered, the native
+    app id when one was named, and binding device_key when its refresh token is bound to a key
+    the device holds.
+    """
+    kind: Literal['unregistered', 'development', 'registered']
+    app_id: str | None
+    binding: Literal['device_key', None]
+
+
 class _SessionLocation1Required(TypedDict):
     #: ISO country code.
     country: str
@@ -1899,6 +1928,10 @@ class Session(_SessionRequired, total=False):
     sign_in_method: str | None
     #: The social provider id when sign_in_method is oauth; otherwise null.
     provider: str | None
+    #: Present for a native app session: kind unregistered, development or registered, the native app id when one was named, and binding device_key when its 
+    native_client: SessionNativeClient
+    #: Present for an unregistered or development native session: "Unregistered app on <device>" or "Development app on <device>".
+    device_label: str
     #: The authentication methods proven at sign-in (RFC 8176, e.g. pwd, otp, webauthn, ext, mfa); updated by a step-up. Null for a session created before th
     amr: list[str] | None
     #: The user agent of the device that signed in. Null when none was sent.
@@ -2191,15 +2224,23 @@ class UserErasureExport(TypedDict):
 
 class PostUsersByIdApprovalRequestsBodyApprovers(TypedDict, total=False):
     """Who decides. Leave out for the v1 flow (the user answers on their own device with number
-    matching). Name `user_ids` (1 to 20) or an `organization_id` with a `role`; `required` of
-    them must approve (default 1, at most the number of user ids). Any one denial ends the
-    request. A role with fewer holders than `required` is refused with 422 (`meta.reason` =
+    matching). Name `user_ids` (1 to 20), a `group_id` (every member of the group may decide),
+    or an `organization_id` with a `role` (or up to 10 `roles`; a holder of any of them may
+    decide). A role or group is the way to name a big set: "any 2 of ops" is the role `ops` with
+    `required: 2`. `required` of them must approve (default 1; at most the number of user ids,
+    and at most 50 for a role or group). Membership is read when someone decides, so leaving the
+    group or role ends the right to decide. Any one denial ends the request. A role or group
+    with fewer members than `required` is refused with 422 (`meta.reason` =
     `approvers_insufficient`). A request with approvers always needs signed approvals.
     """
     user_ids: list[str]
     organization_id: str
     #: An organization role key; members holding it may decide.
     role: str
+    #: Several role keys of `organization_id`; a holder of any may decide. Not together with `role`.
+    roles: list[str]
+    #: A group; its members may decide. Not together with `user_ids` or `organization_id`.
+    group_id: str
     required: int
 
 
@@ -2213,10 +2254,14 @@ class PostUsersByIdApprovalRequestsBody(_PostUsersByIdApprovalRequestsBodyRequir
     context: dict[str, str]
     #: How long the request stays open: 10 to 604800 seconds. Default 120.
     ttl_seconds: int
-    #: Who decides. Leave out for the v1 flow (the user answers on their own device with number matching). Name `user_ids` (1 to 20) or an `organization_id` 
+    #: Who decides. Leave out for the v1 flow (the user answers on their own device with number matching). Name `user_ids` (1 to 20), a `group_id` (every mem
     approvers: PostUsersByIdApprovalRequestsBodyApprovers
     #: Demand a signature over the canonical request even from the user themselves. Default false.
     require_signature: bool
+    #: The user the request is about can never approve or reject it, even holding the approver role (403 with `meta.reason` = `requester_excluded`). Needs `a
+    exclude_requester: bool
+    #: Name of a step-up policy. An approver may then approve from a signed-in session that has just met that policy (within its max age) instead of signing 
+    step_up_policy: str
     #: Only an approval from a device the approver trusted (a signing key, passkey or push device marked trusted) counts; a denial never needs one. Refused w
     require_trusted_device: bool
     #: An opaque value (for example a hash of the tool and its arguments) the receipt can only be consumed against.
@@ -2236,16 +2281,22 @@ class PostUsersByIdApprovalRequestsResponse(TypedDict, total=False):
     approvers: dict[str, Any]
     require_signature: bool
     require_trusted_device: bool
+    exclude_requester: bool
+    step_up_policy: str | None
     digest: str | None
     reference: str | None
     binding: str | None
 
 
 class GetUsersByIdApprovalRequestsByApprovalIdResponseApprovers(TypedDict, total=False):
-    mode: Literal['subject', 'users', 'role']
+    mode: Literal['subject', 'users', 'role', 'group']
     user_ids: list[str]
     organization_id: str | None
     role: str | None
+    #: Present when several roles of the organization were named.
+    roles: list[str]
+    #: Present in mode `group`.
+    group_id: str
     #: How many distinct approvers must approve.
     required: int
 
@@ -2253,7 +2304,10 @@ class GetUsersByIdApprovalRequestsByApprovalIdResponseApprovers(TypedDict, total
 class GetUsersByIdApprovalRequestsByApprovalIdResponseDecisionsItem(TypedDict, total=False):
     approver_user_id: str
     decision: Literal['approve', 'deny']
-    method: Literal['device_key', 'passkey', 'number_match']
+    #: `step_up` means the approver decided with a fresh step-up for the request's step-up policy instead of a device signature.
+    method: Literal['device_key', 'passkey', 'step_up', 'number_match']
+    #: The free-text note the approver left with this decision.
+    note: str | None
     key_id: str | None
     #: The trusted device the decision came from; null when it came from a device that is not trusted.
     trusted_device_id: str | None
@@ -2281,6 +2335,10 @@ class GetUsersByIdApprovalRequestsByApprovalIdResponse(TypedDict, total=False):
     require_signature: bool
     #: The request only accepts an approval from a trusted device.
     require_trusted_device: bool
+    #: The user the request is about cannot decide it.
+    exclude_requester: bool
+    #: The step-up policy an approver may satisfy instead of a device signature.
+    step_up_policy: str | None
     approvers: GetUsersByIdApprovalRequestsByApprovalIdResponseApprovers
     #: SHA-256 of the canonical request (base64url): what an approver signs.
     digest: str | None
@@ -3026,11 +3084,28 @@ class PostPrivacyLookupBodyAtlas(TypedDict, total=False):
     principal: str
 
 
+class PostPrivacyLookupBodyIdentity(TypedDict, total=False):
+    """Alias of `atlas`: same object, same validation and lookup order."""
+    #: The issuer that minted `sub`.
+    iss: str
+    #: The Atlas user id (or the Sign in with Atlas sub).
+    sub: str
+    #: Your own account id (the user's `external_id`).
+    ext: str
+    #: Optional: the kind of account the person signed in as (the principal claim). Narrows an email lookup to the account that signed in as it; on a sub or 
+    principal: str
+
+
 class PostPrivacyLookupBody(TypedDict, total=False):
-    """Provide `emails` or `atlas.sub` / `atlas.ext`."""
+    """Provide `emails` or `atlas.sub` / `atlas.ext`. `identity` is an alias of `atlas`; send
+    either, or both with identical values (differing values are a 400 on `identity`). An
+    identity match wins over an email match.
+    """
     emails: list[str]
     #: The person as the suite knows them. `sub` (with `iss`) is matched ALONE when present — never an email fallback. `iss` may be this instance's issuer (c
     atlas: PostPrivacyLookupBodyAtlas
+    #: Alias of `atlas`: same object, same validation and lookup order.
+    identity: PostPrivacyLookupBodyIdentity
 
 
 class _PrivacyLookupRequired(TypedDict):
@@ -3284,6 +3359,7 @@ class PostUsersByIdIdentitiesBody(TypedDict, total=False):
     secondary_user_id: str
     user_id: str
     link_with: str
+    external_id: str
 
 
 class PostUsersByIdIdentitiesResponseCollisionsItem(TypedDict):
@@ -3355,8 +3431,10 @@ class _GetUsersByIdGrantsResponseDataItemRequired(TypedDict):
 
 
 class GetUsersByIdGrantsResponseDataItem(_GetUsersByIdGrantsResponseDataItemRequired, total=False):
+    type: Literal['consent']
     client_id: str | None
     client_name: str | None
+    metadata: dict[str, Any]
 
 
 class GetUsersByIdGrantsResponse(TypedDict):
@@ -3371,11 +3449,15 @@ class DeleteUsersByIdGrantsResponse(TypedDict):
     tokens_revoked: int
 
 
-class DeleteGrantsByIdResponse(TypedDict):
+class _DeleteGrantsByIdResponseRequired(TypedDict):
     object: Literal['grant']
     id: str
     deleted: Literal[True]
     tokens_revoked: int
+
+
+class DeleteGrantsByIdResponse(_DeleteGrantsByIdResponseRequired, total=False):
+    type: Literal['consent', 'managed']
 
 
 class _GetGrantManagementGrantsResponseDataItemRequired(TypedDict):
@@ -3397,6 +3479,8 @@ class GetGrantManagementGrantsResponseDataItem(_GetGrantManagementGrantsResponse
     #: The API (resource server identifier) the grant covers, or null.
     resource: str | None
     authorization_details: list[dict[str, Any]] | None
+    #: The metadata you set on the grant.
+    metadata: dict[str, Any]
     revoked_at: int | None
     revoked_by: Literal['client', 'user', 'admin', 'system', None]
 
@@ -3419,11 +3503,16 @@ class PatchGrantManagementGrantsByIdBody(TypedDict, total=False):
     authorization_details: list[dict[str, Any]]
 
 
-class DeleteGrantManagementGrantsByIdResponse(TypedDict):
+class _DeleteGrantManagementGrantsByIdResponseRequired(TypedDict):
     object: Literal['managed_grant']
     id: str
     deleted: Literal[True]
     tokens_ended: int
+
+
+class DeleteGrantManagementGrantsByIdResponse(_DeleteGrantManagementGrantsByIdResponseRequired, total=False):
+    #: Refresh grants the consent revoke ended beyond the grant's own.
+    tokens_revoked: int
 
 
 class GetLeastPrivilegeReportResponseSummary(TypedDict, total=False):
@@ -3673,6 +3762,8 @@ class WebhookEndpoint(_WebhookEndpointRequired, total=False):
     oauth: dict[str, Any] | None
     #: Deliveries per second this endpoint may receive; null = unlimited.
     max_rps: int | None
+    #: Membership events to this endpoint carry the seat private_metadata.
+    include_private_membership: bool
     #: Where deliveries go: { type: "https" } or an event destination with its non-secret settings. Credentials are never returned (credentials_set says whet
     destination: WebhookEndpointDestination
     health: Literal['healthy', 'failing', 'disabled']
@@ -3846,6 +3937,8 @@ class PostWebhookEndpointsBody(TypedDict, total=False):
     headers: dict[str, str] | None
     #: Have Atlas get an OAuth bearer token with the client-credentials grant and send it as `Authorization: Bearer` on every delivery. Replaces the whole se
     oauth: PostWebhookEndpointsBodyOauth | None
+    #: Opt in to the seat private_metadata on organization_membership events sent to this endpoint. Only instance-owned endpoints can; org-owned and per-app 
+    include_private_membership: bool
     #: Most deliveries per second Atlas sends to this endpoint; the rest wait their turn. null = unlimited.
     max_rps: int | None
     #: Where deliveries go instead of an HTTPS URL: { type: "aws_eventbridge", region, event_bus_name, source? } | { type: "gcp_pubsub", project_id, topic_id
@@ -3894,6 +3987,8 @@ class WebhookEndpointCreate(_WebhookEndpointCreateRequired, total=False):
     oauth: dict[str, Any] | None
     #: Deliveries per second this endpoint may receive; null = unlimited.
     max_rps: int | None
+    #: Membership events to this endpoint carry the seat private_metadata.
+    include_private_membership: bool
     #: Where deliveries go: { type: "https" } or an event destination with its non-secret settings. Credentials are never returned (credentials_set says whet
     destination: WebhookEndpointDestination
     health: Literal['healthy', 'failing', 'disabled']
@@ -3947,6 +4042,8 @@ class PutWebhookEndpointsByUrlBody(_PutWebhookEndpointsByUrlBodyRequired, total=
     headers: dict[str, str] | None
     #: Have Atlas get an OAuth bearer token with the client-credentials grant and send it as `Authorization: Bearer` on every delivery. Replaces the whole se
     oauth: PostWebhookEndpointsBodyOauth | None
+    #: Opt in to the seat private_metadata on organization_membership events sent to this endpoint. Only instance-owned endpoints can; org-owned and per-app 
+    include_private_membership: bool
     #: Most deliveries per second Atlas sends to this endpoint; the rest wait their turn. null = unlimited.
     max_rps: int | None
     #: Where deliveries go instead of an HTTPS URL: { type: "aws_eventbridge", region, event_bus_name, source? } | { type: "gcp_pubsub", project_id, topic_id
@@ -3987,6 +4084,8 @@ class PutWebhookEndpointsByUrlResponse(_PutWebhookEndpointsByUrlResponseRequired
     oauth: dict[str, Any] | None
     #: Deliveries per second this endpoint may receive; null = unlimited.
     max_rps: int | None
+    #: Membership events to this endpoint carry the seat private_metadata.
+    include_private_membership: bool
     #: Where deliveries go: { type: "https" } or an event destination with its non-secret settings. Credentials are never returned (credentials_set says whet
     destination: WebhookEndpointDestination
     health: Literal['healthy', 'failing', 'disabled']
@@ -4039,6 +4138,8 @@ class PatchWebhookEndpointsByIdBody(TypedDict, total=False):
     headers: dict[str, str] | None
     #: Have Atlas get an OAuth bearer token with the client-credentials grant and send it as `Authorization: Bearer` on every delivery. Replaces the whole se
     oauth: PostWebhookEndpointsBodyOauth | None
+    #: Opt in to the seat private_metadata on organization_membership events sent to this endpoint. Only instance-owned endpoints can; org-owned and per-app 
+    include_private_membership: bool
     #: Most deliveries per second Atlas sends to this endpoint; the rest wait their turn. null = unlimited.
     max_rps: int | None
     #: Where deliveries go instead of an HTTPS URL: { type: "aws_eventbridge", region, event_bus_name, source? } | { type: "gcp_pubsub", project_id, topic_id
@@ -4346,6 +4447,7 @@ class PostPlatformAppsBody(TypedDict, total=False):
     create_development_sibling: bool
     secret_key_preset: str
     provisioning_key: bool
+    secret_key_profile: str
     tags: list[str]
     metadata: dict[str, str | float | bool]
     external_ref: str
@@ -4551,6 +4653,14 @@ class PlatformAppWithSecret(_PlatformAppWithSecretRequired, total=False):
     #: With `provisioning_key: true`: a full-scope setup key, shown once, that expires at `onboarding_secret_expires_at`.
     onboarding_secret: str
     onboarding_key_id: str
+    #: With `secret_key_profile: "web_app"`: the narrow key for the app's server, shown once.
+    runtime_secret: str
+    runtime_key_id: str
+    runtime_secret_scopes: list[str]
+    #: With `secret_key_profile`: the name of `secret` (`provisioning`).
+    secret_key_label: str
+    #: With `secret_key_profile`: when `secret` stops working (epoch ms) unless renewed.
+    secret_expires_at: int | None
     #: When the setup key stops working (epoch ms), 24 hours after the create.
     onboarding_secret_expires_at: int
     #: Present when `secret` holds every scope (`full_scope_secret_key`).
@@ -5376,6 +5486,8 @@ class _PreflightFindingRequired(TypedDict):
 class PreflightFinding(_PreflightFindingRequired, total=False):
     #: Only where one exact Backend API call is the whole remedy: that call, ready to send. It is one of the remedies fix describes, so read fix first.
     fix_call: PreflightFindingFixCall
+    #: With fix_call: the complete body of that call, ready to send as it is.
+    autofix_body: dict[str, Any]
     #: With fix_call: true only when the call cannot lock anyone out or change sign-in for existing users.
     safe_to_autofix: bool
     #: Ids of what the finding is about (provider, id/client_id, origin, domain_id/host, site_id, …).
@@ -6331,6 +6443,7 @@ class PostOrganizationsByIdInvitationsByInvitationIdRevokeResponse(TypedDict):
 
 class PostOrganizationsByIdInvitationsByInvitationIdResendBody(TypedDict, total=False):
     redirect_url: str
+    keep_old_link: bool
 
 
 class PostOrganizationsByIdInvitationsByInvitationIdResendResponse(TypedDict, total=False):
@@ -6719,6 +6832,10 @@ class AuthConfigAccountUxLastSignInMethod(TypedDict):
     enabled: bool
 
 
+class AuthConfigAccountUxLinking(TypedDict):
+    requireExternalId: bool
+
+
 class AuthConfigAccountUxPasskeyAdoptionEndpoints(TypedDict):
     enroll: str | None
     manage: str | None
@@ -6767,6 +6884,10 @@ class AuthConfigAccountUxPasskeySignUp(TypedDict):
     preferred: bool
 
 
+class AuthConfigAccountUxPasswordImport(TypedDict):
+    importedPasswordPolicy: Literal['active', 'until_email_verified']
+
+
 class AuthConfigAccountUxSecurityNotifications(TypedDict):
     accountChanges: bool
     newDeviceSignIn: bool
@@ -6785,8 +6906,10 @@ class AuthConfigAccountUx(TypedDict):
     emailVerification: Literal['both', 'code', 'link']
     impersonation: AuthConfigAccountUxImpersonation
     lastSignInMethod: AuthConfigAccountUxLastSignInMethod
+    linking: AuthConfigAccountUxLinking
     passkeyAdoption: AuthConfigAccountUxPasskeyAdoption
     passkeySignUp: AuthConfigAccountUxPasskeySignUp
+    passwordImport: AuthConfigAccountUxPasswordImport
     passwordReset: Literal['both', 'code', 'link']
     securityNotifications: AuthConfigAccountUxSecurityNotifications
     username: AuthConfigAccountUxUsername
@@ -6805,6 +6928,7 @@ class AuthConfigAgentFabric(TypedDict):
 
 class AuthConfigAppApproval(TypedDict):
     firstFactor: bool
+    revealNoAccount: bool
     stepUp: bool
     ttlSeconds: float
 
@@ -7040,6 +7164,7 @@ class AuthConfigComplianceRetention(TypedDict):
     deletionReminders: list[str]
     dsrDueDays: float
     erasureGraceDays: float
+    maxPauses: float
     ownershipTransfer: Literal['block', 'off', 'require_action']
     requireFinalNotice: bool
 
@@ -7052,6 +7177,26 @@ class AuthConfigCompliance(TypedDict):
     inactiveUsers: AuthConfigComplianceInactiveUsers
     minors: AuthConfigComplianceMinors
     retention: AuthConfigComplianceRetention
+
+
+class AuthConfigDelegationTokensAudiencesItem(TypedDict):
+    audience: str
+    scopes: list[str]
+
+
+class AuthConfigDelegationTokens(TypedDict):
+    """Server-minted delegation tokens (POST /v1/users/{id}/delegation_tokens and the token-
+    exchange grant). Off by default.
+    """
+    #: The audiences a token may be minted for, and the scopes allowed for each. Anything else is refused.
+    audiences: list[AuthConfigDelegationTokensAudiencesItem]
+    #: 30 to maxTtlSeconds, default 120.
+    defaultTtlSeconds: float
+    enabled: bool
+    #: OAuth client ids of confidential clients that may use the token-exchange grant for delegation tokens. Empty means none.
+    exchangeClientIds: list[str]
+    #: 30 to 300, default 300.
+    maxTtlSeconds: float
 
 
 class _AuthConfigEndUserApiKeysRequired(TypedDict):
@@ -7167,6 +7312,14 @@ class _AuthConfigIdentityTraitsRequired(TypedDict):
 class AuthConfigIdentityTraits(_AuthConfigIdentityTraitsRequired, total=False):
     audienceKey: str
     groups: list[AuthConfigIdentityTraitsGroupsItem]
+
+
+class _AuthConfigIssuerAliasesItemRequired(TypedDict):
+    issuer: str
+
+
+class AuthConfigIssuerAliasesItem(_AuthConfigIssuerAliasesItemRequired, total=False):
+    acceptedUntil: str
 
 
 class AuthConfigJwtTemplateSettingsValue(TypedDict, total=False):
@@ -7341,9 +7494,37 @@ class AuthConfigNativeAppsAndroidAppsItem(TypedDict):
     sha256CertFingerprints: list[str]
 
 
-class AuthConfigNativeApps(TypedDict):
+class _AuthConfigNativeAppsAppsItemRequired(TypedDict):
+    callback_urls: list[str]
+    created_at: float
+    id: str
+    platform: Literal['android', 'development', 'ios']
+
+
+class AuthConfigNativeAppsAppsItem(_AuthConfigNativeAppsAppsItemRequired, total=False):
+    allowed_users: list[str]
+    bundle_id: str
+    expires_at: float
+    package_name: str
+    sha256_cert_fingerprints: list[str]
+    team_id: str
+
+
+class AuthConfigNativeAppsUnregisteredSession(TypedDict, total=False):
+    absoluteMs: float
+    requireMfa: bool
+
+
+class _AuthConfigNativeAppsRequired(TypedDict):
     androidApps: list[AuthConfigNativeAppsAndroidAppsItem]
     appleAppIds: list[str]
+    apps: list[AuthConfigNativeAppsAppsItem]
+    publishableKeyAppIds: list[str]
+
+
+class AuthConfigNativeApps(_AuthConfigNativeAppsRequired, total=False):
+    unregistered: Literal['allow', 'device_bound', 'refuse']
+    unregisteredSession: AuthConfigNativeAppsUnregisteredSession
 
 
 class AuthConfigOauthProviderAdvancedClientAttestationIssuersItemJwks(TypedDict):
@@ -7441,7 +7622,9 @@ class _AuthConfigOauthProviderCustomScopesItemRequired(TypedDict):
 class AuthConfigOauthProviderCustomScopesItem(_AuthConfigOauthProviderCustomScopesItemRequired, total=False):
     descriptions: dict[str, str]
     labels: dict[str, str]
+    ownerExempt: bool
     parameters: list[str]
+    requiresClientLevel: Literal['any', 'certified', 'verified']
     requiresVerifiedClient: bool
     sensitive: bool
 
@@ -7538,10 +7721,86 @@ class AuthConfigPasswordPolicy(TypedDict):
     requireUppercase: bool
 
 
-class AuthConfigPca(TypedDict):
+AuthConfigPcaObjectiveRiskGraphEdgesItem = TypedDict(
+    'AuthConfigPcaObjectiveRiskGraphEdgesItem',
+    {
+    'from': 'str',
+    'kind': 'str',
+    'to': 'str',
+    },
+    total=False,
+)
+
+
+class _AuthConfigPcaObjectiveRiskGraphNodesItemRequired(TypedDict):
+    id: str
+
+
+class AuthConfigPcaObjectiveRiskGraphNodesItem(_AuthConfigPcaObjectiveRiskGraphNodesItemRequired, total=False):
+    harm: dict[str, float]
+
+
+class AuthConfigPcaObjectiveRiskGraph(TypedDict, total=False):
+    edges: list[AuthConfigPcaObjectiveRiskGraphEdgesItem]
+    nodes: list[AuthConfigPcaObjectiveRiskGraphNodesItem]
+
+
+class AuthConfigPcaObjectiveRiskRegistryEntriesItemVerification(TypedDict):
+    evidence_digest: str
+    verifier_id: str
+
+
+class _AuthConfigPcaObjectiveRiskRegistryEntriesItemRequired(TypedDict):
+    fidelity: Literal['exact', 'partial']
+    inverse_kind: str
+    verb: str
+
+
+class AuthConfigPcaObjectiveRiskRegistryEntriesItem(_AuthConfigPcaObjectiveRiskRegistryEntriesItemRequired, total=False):
+    verification: AuthConfigPcaObjectiveRiskRegistryEntriesItemVerification
+
+
+class AuthConfigPcaObjectiveRiskRegistry(TypedDict, total=False):
+    entries: list[AuthConfigPcaObjectiveRiskRegistryEntriesItem]
+    trusted_verifiers: list[str]
+
+
+class AuthConfigPcaObjectiveRisk(TypedDict, total=False):
+    allow_heuristic_fallback: bool
+    calibration: list[float]
+    graph: AuthConfigPcaObjectiveRiskGraph
+    registry: AuthConfigPcaObjectiveRiskRegistry
+
+
+class AuthConfigPcaQuotas(TypedDict, total=False):
+    grantActionsPerMin: float
+    instanceActionsPerMin: float
+    maxActiveGrants: float
+    maxActiveGrantsPerPrincipal: float
+    maxPlansPerGrant: float
+    maxRevocationsPerGrant: float
+    maxStepupsPerGrant: float
+    maxUnverifiedGrants: float
+    maxUnverifiedGrantsPerKey: float
+    pqVerifyUnitsPerSourcePerMin: float
+    publicPerNetworkPerMin: float
+    publicPreAuthGlobalPerMin: float
+    unverifiedRegistrationsPerMin: float
+
+
+class _AuthConfigPcaRequired(TypedDict):
     enabled: bool
     maxPlanNodes: float
     publicRateLimitPerMin: float
+
+
+class AuthConfigPca(_AuthConfigPcaRequired, total=False):
+    allowedSuites: list[str]
+    beacons: Literal['both', 'operator', 'principal']
+    objectiveRisk: AuthConfigPcaObjectiveRisk
+    optimistic: bool
+    quotas: AuthConfigPcaQuotas
+    undoSigner: str
 
 
 class AuthConfigPhoneChannels(TypedDict):
@@ -7713,7 +7972,12 @@ class AuthConfigSessionCustomData(TypedDict):
 class _AuthConfigSessionRequired(TypedDict):
     #: Absolute session lifetime in ms. At most 90 days; 365 days while longLived is on.
     absoluteMs: float
+    browserHandoff: bool
+    #: Explicit Domain for the session cookies, for example ".example.com". Needed by a path-mounted instance, where cookies are otherwise host-only. It must
+    cookieDomain: str | None
     crossSubdomainCookies: bool
+    #: Set a readable __atlas_csrf cookie with each session token: a signed token tied to the session, replaced whenever the session token is. Verify it in y
+    csrfCookie: bool
     customData: AuthConfigSessionCustomData
     deviceBoundSessions: bool
     idleMs: float
@@ -7724,7 +7988,10 @@ class _AuthConfigSessionRequired(TypedDict):
     #: Add the eu_orgs reader claim.
     includeEndUserPoolClaim: bool
     includeOrgsClaim: bool
+    #: Add a res claim with the user direct resource role assignments (capped; resource_claims_truncated when over the cap).
+    includeResourceRoleClaims: bool
     includeRiskClaim: bool
+    #: Lifetime of the session token (the __session JWT) in seconds, 30 to 900, default 60. A shorter lifetime means faster revocation: a signed-out or banne
     jwtTtlSeconds: float
     #: Long first-party sessions: raises the absoluteMs ceiling from 90 to 365 days. Needs refreshRotation (refused while it is off). Organization caps still
     longLived: bool
@@ -7732,8 +7999,12 @@ class _AuthConfigSessionRequired(TypedDict):
     multiSession: bool
     nonPersistentAbsoluteMs: float | None
     nonPersistentIdleMs: float | None
+    #: Seconds after a refresh token rotates during which presenting the previous one returns the same new token instead of ending the session. 0 to 30, defa
+    refreshGraceSeconds: float
     refreshRotation: bool
     rememberMe: bool
+    #: Cap for the res claim (default 25).
+    resourceRoleClaimsMax: float
     revokeOnPasswordChange: bool
     tokenIncludedSettingsKeys: list[str]
     tokenStrategy: Literal['refresh', 'sliding']
@@ -7868,11 +8139,15 @@ class _AuthConfigRequired(TypedDict):
     compliance: AuthConfigCompliance
     #: DANGEROUS. When true, addresses that skipped proof because requireEmailVerification was false are reported as verified again in users, tokens, webhook
     dangerouslyReportSkippedEmailsAsVerified: bool
+    #: Server-minted delegation tokens (POST /v1/users/{id}/delegation_tokens and the token-exchange grant). Off by default.
+    delegationTokens: AuthConfigDelegationTokens
     deletedUserReturn: Literal['allow', 'block']
     entitlements: AuthConfigEntitlements
     #: Trust JWTs minted by an EXTERNAL issuer as a sign-in credential (e.g. a legacy IdP or your own token service). The linked identity is stored under pro
     externalJwt: AuthConfigExternalJwt
     identityTraits: AuthConfigIdentityTraits
+    #: Previous issuers of this instance that verification should still accept, for a host or mount move made before Atlas recorded it. Listed in discovery a
+    issuerAliases: list[AuthConfigIssuerAliasesItem]
     jwtTemplates: dict[str, dict[str, str]]
     jwtTemplateSettings: dict[str, AuthConfigJwtTemplateSettingsValue]
     kerberos: AuthConfigKerberos
@@ -7886,6 +8161,7 @@ class _AuthConfigRequired(TypedDict):
     passkeyPolicy: AuthConfigPasskeyPolicy
     passwordPolicy: AuthConfigPasswordPolicy
     phoneChannels: AuthConfigPhoneChannels
+    previousIssuerOverlapDays: float
     qrSignIn: AuthConfigQrSignIn
     rateLimit: AuthConfigRateLimit
     #: Whether a password sign-up must prove the address with an emailed code before it completes. When false the sign-up completes at once, but the address 
@@ -7976,6 +8252,10 @@ class GetInstanceResponse(TypedDict, total=False):
     inactive_methods: list[GetInstanceResponseInactiveMethodsItem]
     #: Sign-in methods that still work without an email provider, minus the parts that need email: password sign-in for users who already hold a password, wi
     limited_methods: list[GetInstanceResponseLimitedMethodsItem]
+    #: GET only. Whether a new user can create an account right now. False when no first-factor sign-up method is active (email methods without an email prov
+    signup_usable: bool
+    #: GET only. When signup_usable is false: why, and the fix (turn on Sign in with Atlas first). Null otherwise.
+    signup_unusable_reason: str | None
     #: Created (epoch ms).
     created_at: int
 
@@ -8003,6 +8283,10 @@ class AuthConfigPatchAccountUxImpersonation(TypedDict, total=False):
 
 class AuthConfigPatchAccountUxLastSignInMethod(TypedDict, total=False):
     enabled: bool
+
+
+class AuthConfigPatchAccountUxLinking(TypedDict, total=False):
+    requireExternalId: bool
 
 
 class AuthConfigPatchAccountUxPasskeyAdoptionEndpoints(TypedDict, total=False):
@@ -8053,6 +8337,10 @@ class AuthConfigPatchAccountUxPasskeySignUp(TypedDict, total=False):
     preferred: bool
 
 
+class AuthConfigPatchAccountUxPasswordImport(TypedDict, total=False):
+    importedPasswordPolicy: Literal['active', 'until_email_verified']
+
+
 class AuthConfigPatchAccountUxSecurityNotifications(TypedDict, total=False):
     accountChanges: bool
     newDeviceSignIn: bool
@@ -8071,8 +8359,10 @@ class AuthConfigPatchAccountUx(TypedDict, total=False):
     emailVerification: Literal['both', 'code', 'link']
     impersonation: AuthConfigPatchAccountUxImpersonation
     lastSignInMethod: AuthConfigPatchAccountUxLastSignInMethod
+    linking: AuthConfigPatchAccountUxLinking
     passkeyAdoption: AuthConfigPatchAccountUxPasskeyAdoption
     passkeySignUp: AuthConfigPatchAccountUxPasskeySignUp
+    passwordImport: AuthConfigPatchAccountUxPasswordImport
     passwordReset: Literal['both', 'code', 'link']
     securityNotifications: AuthConfigPatchAccountUxSecurityNotifications
     username: AuthConfigPatchAccountUxUsername
@@ -8091,6 +8381,7 @@ class AuthConfigPatchAgentFabric(TypedDict, total=False):
 
 class AuthConfigPatchAppApproval(TypedDict, total=False):
     firstFactor: bool
+    revealNoAccount: bool
     stepUp: bool
     ttlSeconds: float
 
@@ -8269,6 +8560,7 @@ class AuthConfigPatchComplianceRetention(TypedDict, total=False):
     deletionReminders: list[str]
     dsrDueDays: float
     erasureGraceDays: float
+    maxPauses: float
     ownershipTransfer: Literal['block', 'off', 'require_action']
     requireFinalNotice: bool
 
@@ -8281,6 +8573,21 @@ class AuthConfigPatchCompliance(TypedDict, total=False):
     inactiveUsers: AuthConfigPatchComplianceInactiveUsers
     minors: AuthConfigPatchComplianceMinors
     retention: AuthConfigPatchComplianceRetention
+
+
+class AuthConfigPatchDelegationTokens(TypedDict, total=False):
+    """Server-minted delegation tokens (POST /v1/users/{id}/delegation_tokens and the token-
+    exchange grant). Off by default.
+    """
+    #: The audiences a token may be minted for, and the scopes allowed for each. Anything else is refused.
+    audiences: list[AuthConfigDelegationTokensAudiencesItem]
+    #: 30 to maxTtlSeconds, default 120.
+    defaultTtlSeconds: float
+    enabled: bool
+    #: OAuth client ids of confidential clients that may use the token-exchange grant for delegation tokens. Empty means none.
+    exchangeClientIds: list[str]
+    #: 30 to 300, default 300.
+    maxTtlSeconds: float
 
 
 class AuthConfigPatchEndUserApiKeys(TypedDict, total=False):
@@ -8449,6 +8756,10 @@ class AuthConfigPatchMfa(TypedDict, total=False):
 class AuthConfigPatchNativeApps(TypedDict, total=False):
     androidApps: list[AuthConfigNativeAppsAndroidAppsItem]
     appleAppIds: list[str]
+    apps: list[AuthConfigNativeAppsAppsItem]
+    publishableKeyAppIds: list[str]
+    unregistered: Literal['allow', 'device_bound', 'refuse']
+    unregisteredSession: AuthConfigNativeAppsUnregisteredSession
 
 
 class AuthConfigPatchOauthProviderAdvancedFederation(TypedDict, total=False):
@@ -8571,9 +8882,15 @@ class AuthConfigPatchPasswordPolicy(TypedDict, total=False):
 
 
 class AuthConfigPatchPca(TypedDict, total=False):
+    allowedSuites: list[str]
+    beacons: Literal['both', 'operator', 'principal']
     enabled: bool
     maxPlanNodes: float
+    objectiveRisk: AuthConfigPcaObjectiveRisk
+    optimistic: bool
     publicRateLimitPerMin: float
+    quotas: AuthConfigPcaQuotas
+    undoSigner: str
 
 
 class AuthConfigPatchPhoneChannels(TypedDict, total=False):
@@ -8687,7 +9004,12 @@ class AuthConfigPatchSession(TypedDict, total=False):
     #: Absolute session lifetime in ms. At most 90 days; 365 days while longLived is on.
     absoluteMs: float
     audience: str | list[str]
+    browserHandoff: bool
+    #: Explicit Domain for the session cookies, for example ".example.com". Needed by a path-mounted instance, where cookies are otherwise host-only. It must
+    cookieDomain: str | None
     crossSubdomainCookies: bool
+    #: Set a readable __atlas_csrf cookie with each session token: a signed token tied to the session, replaced whenever the session token is. Verify it in y
+    csrfCookie: bool
     customData: AuthConfigPatchSessionCustomData
     deviceBoundSessions: bool
     idleMs: float
@@ -8698,7 +9020,10 @@ class AuthConfigPatchSession(TypedDict, total=False):
     #: Add the eu_orgs reader claim.
     includeEndUserPoolClaim: bool
     includeOrgsClaim: bool
+    #: Add a res claim with the user direct resource role assignments (capped; resource_claims_truncated when over the cap).
+    includeResourceRoleClaims: bool
     includeRiskClaim: bool
+    #: Lifetime of the session token (the __session JWT) in seconds, 30 to 900, default 60. A shorter lifetime means faster revocation: a signed-out or banne
     jwtTtlSeconds: float
     #: Long first-party sessions: raises the absoluteMs ceiling from 90 to 365 days. Needs refreshRotation (refused while it is off). Organization caps still
     longLived: bool
@@ -8706,8 +9031,12 @@ class AuthConfigPatchSession(TypedDict, total=False):
     multiSession: bool
     nonPersistentAbsoluteMs: float | None
     nonPersistentIdleMs: float | None
+    #: Seconds after a refresh token rotates during which presenting the previous one returns the same new token instead of ending the session. 0 to 30, defa
+    refreshGraceSeconds: float
     refreshRotation: bool
     rememberMe: bool
+    #: Cap for the res claim (default 25).
+    resourceRoleClaimsMax: float
     revokeOnPasswordChange: bool
     tokenIncludedSettingsKeys: list[str]
     tokenStrategy: Literal['refresh', 'sliding']
@@ -8815,12 +9144,16 @@ class AuthConfigPatch(TypedDict, total=False):
     compliance: AuthConfigPatchCompliance
     #: DANGEROUS. When true, addresses that skipped proof because requireEmailVerification was false are reported as verified again in users, tokens, webhook
     dangerouslyReportSkippedEmailsAsVerified: bool
+    #: Server-minted delegation tokens (POST /v1/users/{id}/delegation_tokens and the token-exchange grant). Off by default.
+    delegationTokens: AuthConfigPatchDelegationTokens
     deletedUserReturn: Literal['allow', 'block']
     endUserApiKeys: AuthConfigPatchEndUserApiKeys
     entitlements: AuthConfigPatchEntitlements
     #: Trust JWTs minted by an EXTERNAL issuer as a sign-in credential (e.g. a legacy IdP or your own token service). The linked identity is stored under pro
     externalJwt: AuthConfigPatchExternalJwt
     identityTraits: AuthConfigPatchIdentityTraits
+    #: Previous issuers of this instance that verification should still accept, for a host or mount move made before Atlas recorded it. Listed in discovery a
+    issuerAliases: list[AuthConfigIssuerAliasesItem]
     jwtTemplates: dict[str, dict[str, str]]
     jwtTemplateSettings: dict[str, AuthConfigJwtTemplateSettingsValue]
     kerberos: AuthConfigPatchKerberos
@@ -8836,6 +9169,7 @@ class AuthConfigPatch(TypedDict, total=False):
     passwordPolicy: AuthConfigPatchPasswordPolicy
     pca: AuthConfigPatchPca
     phoneChannels: AuthConfigPatchPhoneChannels
+    previousIssuerOverlapDays: float
     qrSignIn: AuthConfigPatchQrSignIn
     rateLimit: AuthConfigPatchRateLimit
     #: Whether a password sign-up must prove the address with an emailed code before it completes. When false the sign-up completes at once, but the address 
@@ -9655,7 +9989,12 @@ class DeleteNotificationCategoriesByKeyResponse(TypedDict, total=False):
     deleted: bool
 
 
-class GetNotificationTemplatesResponseDataItem(TypedDict):
+class GetNotificationTemplatesResponseDataItemLocalesValue(TypedDict, total=False):
+    subject: str
+    body: str
+
+
+class _GetNotificationTemplatesResponseDataItemRequired(TypedDict):
     object: Literal['notification_template']
     id: str
     #: The template name — the `template` a send passes.
@@ -9669,12 +10008,22 @@ class GetNotificationTemplatesResponseDataItem(TypedDict):
     updated_at: int
 
 
+class GetNotificationTemplatesResponseDataItem(_GetNotificationTemplatesResponseDataItemRequired, total=False):
+    #: Language variants keyed by tag: { subject, body } each.
+    locales: dict[str, GetNotificationTemplatesResponseDataItemLocalesValue]
+
+
 class GetNotificationTemplatesResponse(TypedDict, total=False):
     object: Literal['list']
     data: list[GetNotificationTemplatesResponseDataItem]
 
 
-class PostNotificationTemplatesBody(TypedDict):
+class PostNotificationTemplatesBodyLocalesValue(TypedDict):
+    subject: str
+    body: str
+
+
+class _PostNotificationTemplatesBodyRequired(TypedDict):
     #: The template name a send passes; unique per instance.
     name: str
     subject: str
@@ -9684,12 +10033,22 @@ class PostNotificationTemplatesBody(TypedDict):
     category: str
 
 
-class PutNotificationTemplatesByNameBody(TypedDict):
+class PostNotificationTemplatesBody(_PostNotificationTemplatesBodyRequired, total=False):
+    #: Language variants, keyed by tag (fr, pt-BR): { subject, body } each. `POST /v1/messages` sends the one matching its `locale`, else the user's own loca
+    locales: dict[str, PostNotificationTemplatesBodyLocalesValue]
+
+
+class _PutNotificationTemplatesByNameBodyRequired(TypedDict):
     subject: str
     #: Email body with `{{variables}}`.
     body: str
     #: A built-in category (new_device, unattended_access, credential_change) or a tenant-defined one (POST /v1/notification_categories), so the send honours
     category: str
+
+
+class PutNotificationTemplatesByNameBody(_PutNotificationTemplatesByNameBodyRequired, total=False):
+    #: Language variants, keyed by tag (fr, pt-BR): { subject, body } each. `POST /v1/messages` sends the one matching its `locale`, else the user's own loca
+    locales: dict[str, PostNotificationTemplatesBodyLocalesValue]
 
 
 class DeleteNotificationTemplatesByNameResponse(TypedDict, total=False):
@@ -9814,6 +10173,12 @@ class ApiKeyRateLimit(TypedDict, total=False):
     window_seconds: int
 
 
+class ApiKeyRevokedBy1(TypedDict):
+    #: api_key, user, system, scim or sso.
+    type: str
+    id: str | None
+
+
 class _ApiKeyRequired(TypedDict):
     object: Literal['api_key']
     id: str
@@ -9840,8 +10205,14 @@ class ApiKey(_ApiKeyRequired, total=False):
     max_token_lifetime_seconds: int | None
     #: Registered SPKI PEM public key for proof-of-possession, or null for a bearer key.
     public_key: str | None
-    #: RFC 7638 JWK thumbprint of public_key — the cnf.jkt minted tokens carry.
+    #: RFC 7638 JWK thumbprint of public_key — the cnf.jkt minted tokens carry (a key_pair key's tokens carry none).
     public_key_jkt: str | None
+    #: `secret`: a shared `ak_` secret. `key_pair`: no secret exists; the holder signs short-lived JWT assertions with a private key Atlas never holds, and `
+    credential: Literal['secret', 'key_pair']
+    #: key_pair only: the `aud` an assertion must carry (default: the instance id). Null for a secret key.
+    audience: str | None
+    #: The key id (the same as `id`): the `kid` header and `iss` claim of an assertion.
+    key_id: str
     #: Per-key spend caps, metered with POST /v1/api_keys/{id}/usage. null when the key has none.
     limits: list[ApiKeyLimit] | None
     #: Each cap with its current-window usage (empty when the key has no caps).
@@ -9860,6 +10231,16 @@ class ApiKey(_ApiKeyRequired, total=False):
     organization_id: str | None
     #: The member who created an ORGANIZATION key, when recorded.
     created_by_user_id: str | None
+    #: Why the key ended, always answered once it has: the stored `revoked_reason`, else `revoked_by_api` (a secret key or person revoked it) or `revoked_by_
+    end_reason: str | None
+    #: Epoch ms the key ended (the same value as `revoked_at`).
+    ended_at: int | None
+    #: Who revoked the key. Null while live and for keys revoked before this was recorded.
+    revoked_by: ApiKeyRevokedBy1 | None
+    #: `sign_out_everywhere`: the key is revoked when its user subject signs out everywhere. Null = independent of sessions.
+    dies_with: Literal['sign_out_everywhere', None]
+    #: The same object as `claims`, under the name most integrators use: your own vocabulary (scopes, team, label), echoed back on verify.
+    metadata: dict[str, Any]
 
 
 class GetApiKeysResponse(TypedDict, total=False):
@@ -9910,6 +10291,8 @@ PostApiKeysBody = TypedDict(
     'created_by_user_id': 'str',
     'name': 'str',
     'claims': 'dict[str, Any]',
+    'metadata': 'dict[str, Any]',
+    'dies_with': "Literal['sign_out_everywhere', None]",
     'expires_at': 'float | None',
     'expires_in_seconds': 'float',
     'prefix': 'str',
@@ -9923,6 +10306,8 @@ PostApiKeysBody = TypedDict(
     'max_token_lifetime_seconds': 'float | None',
     'limits': 'list[PostApiKeysBodyLimitsItem] | None',
     'public_key': 'str | None',
+    'credential': "Literal['secret', 'key_pair']",
+    'audience': 'str',
     'import': 'PostApiKeysBodyImport',
     },
     total=False,
@@ -9942,8 +10327,8 @@ class _ApiKeyCreateRequired(TypedDict):
     revoked_at: int | None
     #: Created (epoch ms).
     created_at: int
-    #: Reveal-once plaintext ak_ key (create-only).
-    secret: str
+    #: Reveal-once plaintext ak_ key (create-only). Null for a key_pair key, which has no secret.
+    secret: str | None
 
 
 class ApiKeyCreate(_ApiKeyCreateRequired, total=False):
@@ -9957,8 +10342,14 @@ class ApiKeyCreate(_ApiKeyCreateRequired, total=False):
     max_token_lifetime_seconds: int | None
     #: Registered SPKI PEM public key for proof-of-possession, or null for a bearer key.
     public_key: str | None
-    #: RFC 7638 JWK thumbprint of public_key — the cnf.jkt minted tokens carry.
+    #: RFC 7638 JWK thumbprint of public_key — the cnf.jkt minted tokens carry (a key_pair key's tokens carry none).
     public_key_jkt: str | None
+    #: `secret`: a shared `ak_` secret. `key_pair`: no secret exists; the holder signs short-lived JWT assertions with a private key Atlas never holds, and `
+    credential: Literal['secret', 'key_pair']
+    #: key_pair only: the `aud` an assertion must carry (default: the instance id). Null for a secret key.
+    audience: str | None
+    #: The key id (the same as `id`): the `kid` header and `iss` claim of an assertion.
+    key_id: str
     #: Per-key spend caps, metered with POST /v1/api_keys/{id}/usage. null when the key has none.
     limits: list[ApiKeyLimit] | None
     #: Each cap with its current-window usage (empty when the key has no caps).
@@ -9977,11 +10368,24 @@ class ApiKeyCreate(_ApiKeyCreateRequired, total=False):
     organization_id: str | None
     #: The member who created an ORGANIZATION key, when recorded.
     created_by_user_id: str | None
+    #: Why the key ended, always answered once it has: the stored `revoked_reason`, else `revoked_by_api` (a secret key or person revoked it) or `revoked_by_
+    end_reason: str | None
+    #: Epoch ms the key ended (the same value as `revoked_at`).
+    ended_at: int | None
+    #: Who revoked the key. Null while live and for keys revoked before this was recorded.
+    revoked_by: ApiKeyRevokedBy1 | None
+    #: `sign_out_everywhere`: the key is revoked when its user subject signs out everywhere. Null = independent of sessions.
+    dies_with: Literal['sign_out_everywhere', None]
+    #: The same object as `claims`, under the name most integrators use: your own vocabulary (scopes, team, label), echoed back on verify.
+    metadata: dict[str, Any]
+    #: key_pair only, and only when Atlas generated the pair: the PKCS#8 PEM private key (the same format as an Apple .p8 file), shown once. Atlas never stor
+    private_key: str
     note: str
 
 
 class PostApiKeysVerifyBody(TypedDict, total=False):
     secret: str
+    token: str
     required_scopes: list[str]
     client_ip: str
 
@@ -10032,6 +10436,14 @@ class ApiKeyVerificationValid(_ApiKeyVerificationValidRequired, total=False):
     name: str | None
     #: The key scopes (null when none are set).
     scopes: list[str] | None
+    #: Present only when a key-pair assertion was verified (send `token`).
+    credential: Literal['key_pair']
+    #: key_pair: the audience the assertion named and the key allows.
+    audience: str
+    #: key_pair: the assertion `jti` (single-use until `exp`), null when it carried none.
+    jti: str | None
+    #: key_pair: the assertion `exp`, in epoch SECONDS as signed.
+    exp: int
     #: The key scopes (and any `claims.scope`) expanded through the instance scope implications (`endUserApiKeys.scopeImplications`, e.g. calls:write ⇒ calls
     effective_scopes: list[str]
     #: Present for a user key bound to an organization: the user's CURRENT membership. `effective_scopes` is then the key scopes (after implications) that th
@@ -10057,7 +10469,7 @@ class _ApiKeyVerificationInvalidRequired(TypedDict):
 
 class ApiKeyVerificationInvalid(_ApiKeyVerificationInvalidRequired, total=False):
     #: Present only when a LIVE key was refused by its own policy. Absent for unknown, revoked, expired, disabled or subject-deleted keys (never says which).
-    code: Literal['insufficient_scope', 'rate_limited', 'usage_exhausted', 'ip_not_allowed', 'client_ip_required']
+    code: Literal['insufficient_scope', 'rate_limited', 'usage_exhausted', 'ip_not_allowed', 'client_ip_required', 'invalid_assertion', 'assertion_expired', 'assertion_not_yet_valid', 'wrong_audience', 'assertion_lifetime_too_long', 'assertion_replayed', 'scope_not_granted']
     #: The key id (with code only).
     id: str
     #: insufficient_scope: the required scopes the key lacks.
@@ -10071,6 +10483,8 @@ class ApiKeyVerificationInvalid(_ApiKeyVerificationInvalidRequired, total=False)
 class PatchApiKeysByIdBody(TypedDict, total=False):
     name: str | None
     claims: dict[str, Any]
+    metadata: dict[str, Any]
+    dies_with: Literal['sign_out_everywhere', None]
     expires_at: float | None
     scopes: list[str]
     constraints: dict[str, Any]
@@ -10232,9 +10646,11 @@ class PostUsersByIdAppRolesBody(TypedDict, total=False):
 
 class PostApiKeysTokenBody(TypedDict, total=False):
     secret: str
+    assertion: str
     ttl_seconds: float
     audience: str | list[str]
     client_ip: str
+    include_metadata: bool
 
 
 class ApiKeyTokenOrganization(TypedDict, total=False):
@@ -10280,6 +10696,11 @@ class ApiKeyToken(_ApiKeyTokenRequired, total=False):
     cnf: ApiKeyTokenCnf
 
 
+class RevokedApiKeyRevokedBy1(TypedDict):
+    type: str
+    id: str | None
+
+
 class _RevokedApiKeyRequired(TypedDict):
     object: Literal['api_key']
     id: str
@@ -10293,6 +10714,10 @@ class RevokedApiKey(_RevokedApiKeyRequired, total=False):
     subject_id: str
     #: The organization the key was bound to, if any.
     organization_id: str | None
+    #: Always answered once the key ended (secret-key callers only): the stored reason, else `revoked_by_api` or `revoked_by_admin`.
+    end_reason: str | None
+    #: Who revoked the key (secret-key callers only).
+    revoked_by: RevokedApiKeyRevokedBy1 | None
 
 
 class GetApiKeysRevokedResponse(TypedDict, total=False):
@@ -10307,6 +10732,44 @@ class GetApiKeysRevokedQuery(TypedDict, total=False):
     starting_after: str
     since: str
     limit: int
+
+
+class OauthProviderModesNative(TypedDict, total=False):
+    credential_fields: list[dict[str, Any]]
+    hint: str
+
+
+class OauthProviderModes(TypedDict, total=False):
+    """For a provider with a native (in-page) mode: the credential fields and a hint for each sign-
+    in mode. Native needs no client secret. Null for a redirect-only provider.
+    """
+    native: OauthProviderModesNative
+    redirect: OauthProviderModesNative
+
+
+class _OauthProviderConnectionExtrasItemRequired(TypedDict):
+    #: The `host_params` key.
+    key: str
+    label: str
+    #: Must be present on a connection OAuth client of this provider.
+    required: bool
+    description: str
+
+
+class OauthProviderConnectionExtrasItem(_OauthProviderConnectionExtrasItemRequired, total=False):
+    #: Anchored regular expression the whole value must match.
+    pattern: str
+
+
+class OauthProviderHostedIdToken(TypedDict):
+    """For a provider whose authorize page can return an id_token (google, apple, microsoft,
+    twitch): sign-in with only the client_id on every platform (native apps, Expo Go, desktop,
+    web), used automatically while the provider has no client secret. `available` says whether
+    that is the case now; `redirect_uri` is the URL to register with the provider for it. Null
+    for other providers.
+    """
+    available: bool
+    redirect_uri: str
 
 
 class _OauthProviderRequired(TypedDict):
@@ -10327,8 +10790,13 @@ class OauthProvider(_OauthProviderRequired, total=False):
     setup_docs_url: str | None
     default_scopes: list[str]
     api_scopes: list[str]
+    #: The fields the redirect flow needs (client id and secret).
     credential_fields: list[dict[str, Any]]
+    #: For a provider with a native (in-page) mode: the credential fields and a hint for each sign-in mode. Native needs no client secret. Null for a redirec
+    modes: OauthProviderModes | None
     settings: list[dict[str, Any]]
+    #: Non-secret settings a connection OAuth client of this provider (`PUT /v1/connections/oauth_clients`) carries in `host_params`, such as TikTok Shop's `
+    connection_extras: list[OauthProviderConnectionExtrasItem]
     #: Credential-less providers only (siwe, siws, siwb, siwf): the stored verifier settings, e.g. { domain, chain_ids, rpc_url }. Empty for every other prov
     setting_values: dict[str, str]
     #: True when this provider signs in through an in-page native library (e.g. Google One Tap / GSI) that verifies an id_token, rather than a redirect. A na
@@ -10341,10 +10809,12 @@ class OauthProvider(_OauthProviderRequired, total=False):
     redirect_uri: str
     #: Atlas's own callback URL; a custom_redirect_uri forwards ?code&state here.
     atlas_callback: str
-    #: The extra audiences a native app id_token may carry (set with settings.native_client_ids on PUT, a comma list; an empty string clears it). Empty when 
+    #: The extra audiences a native app id_token may carry (set with `native_client_ids` on PUT, an array or a comma list, or settings.native_client_ids; an 
     native_client_ids: list[str]
     #: A tenant's own already-registered callback (migration): Atlas uses it in the authorize + token exchange and it forwards to atlas_callback. Null when u
     custom_redirect_uri: str | None
+    #: For a provider whose authorize page can return an id_token (google, apple, microsoft, twitch): sign-in with only the client_id on every platform (nati
+    hosted_id_token: OauthProviderHostedIdToken | None
     client_id: str | None
     has_secret: bool
     scopes: list[str]
@@ -10381,6 +10851,8 @@ class PutOauthProvidersByProviderBody(TypedDict, total=False):
     #: Non-secret provider settings. For a redirect provider: e.g. redirect_uri. For a native provider: native_client_ids, the extra audiences an app id_toke
     settings: dict[str, Any]
     custom_redirect_uri: str
+    #: The extra audiences a native app id_token may carry (an iOS bundle or Android client id), as GET returns them: an array, or a comma-separated string. 
+    native_client_ids: list[str] | str
     native: bool
     #: Force the sign-in mode; "" clears the override. Applied together with credentials in one call.
     mode: Literal['native', 'redirect', '']
@@ -10388,6 +10860,8 @@ class PutOauthProvidersByProviderBody(TypedDict, total=False):
     display_name: str
     #: An http(s) or data:image icon URL for the button; empty clears.
     icon_url: str
+    #: The built-in atlas_test provider only (development instances): its whole configuration. Other providers are enabled with POST /v1/oauth_providers/{pro
+    enabled: bool
 
 
 class _PutOauthProvidersByProviderResponseRequired(TypedDict):
@@ -10669,7 +11143,7 @@ class GetAnalyticsBreakdownResponse(TypedDict, total=False):
 GetAnalyticsBreakdownQuery = TypedDict(
     'GetAnalyticsBreakdownQuery',
     {
-    'dimension': "Literal['method', 'device', 'browser', 'os', 'country']",
+    'dimension': "Literal['method', 'device', 'browser', 'os', 'country', 'failure_code']",
     'from': 'int | str',
     'to': 'int | str',
     'days': 'int',
@@ -11079,6 +11553,8 @@ class MessagingProvider(_MessagingProviderRequired, total=False):
     id: str
     #: How the provider sends.
     mode: Literal['standard', 'development', 'managed_domain']
+    #: For each write-only secret config field that is set: the first 8 hex characters of sha256 of its value, to compare with the value you hold. Never the 
+    secret_fingerprints: dict[str, str]
 
 
 class GetMessagingProvidersResponseManagedEmail1(TypedDict):
@@ -11757,7 +12233,7 @@ class PostMessagingProvidersEmailDevelopmentBody(TypedDict, total=False):
     #: The id of your configured email provider (GET /v1/messaging_providers).
     provider_id: str
     #: Instead of provider_id: your provider, configured as PUT /v1/messaging_providers/email takes it.
-    transport: Literal['resend', 'ses', 'smtp', 'brevo', 'mailgun', 'smtp2go']
+    transport: Literal['resend', 'ses', 'smtp', 'brevo', 'mailgun', 'smtp2go', 'hermetica', 'webhook']
     #: A sender your provider accepts without a verified domain. Default for Resend: onboarding@resend.dev (delivers only to your Resend account address). Re
     from_address: str
     #: The transport's settings, as for PUT /v1/messaging_providers/email (secrets write-only).
@@ -12639,9 +13115,14 @@ class PostMcpResponse(TypedDict, total=False):
     error: PostMcpResponseError
 
 
-class PostPcaRevocationsBody(TypedDict):
+class _PostPcaRevocationsBodyRequired(TypedDict):
     grant_ref: str
     cap_id: str
+
+
+class PostPcaRevocationsBody(_PostPcaRevocationsBodyRequired, total=False):
+    #: Principal-signed revocation (no Authorization header): Ed25519 over the domain-separated {grant_ref, cap_id}, by the grant principal key.
+    principal_sig: str
 
 
 class PostPcaRevocationsResponse(TypedDict, total=False):
@@ -12649,6 +13130,8 @@ class PostPcaRevocationsResponse(TypedDict, total=False):
     grant_ref: str
     cap_id: str
     revoked: bool
+    #: The bumped guardian-signed revocation epoch.
+    revocation_epoch: dict[str, Any]
 
 
 class PostPcaFreezeResponse(TypedDict, total=False):
@@ -13778,6 +14261,10 @@ class GetOauthClientsResponseDataItem(TypedDict, total=False):
     login_url: str | None
     #: Your own consent page for this client.
     consent_url: str | None
+    #: 'always' when a first-party client's consent is sent to consent_url.
+    delegate_consent: Literal['always', None]
+    #: Your own device-approval page for this client.
+    device_url: str | None
     #: `cimd` when the client was created from its Client ID Metadata Document (its client_id is that document's URL); null for a registered client.
     discovery_source: Literal['cimd', None]
     post_logout_redirect_uris: list[str]
@@ -13802,8 +14289,19 @@ class GetOauthClientsResponseDataItem(TypedDict, total=False):
     approved_scopes: list[str]
     #: Token endpoint requests per minute this client may make; null = no limit.
     rate_limit_per_minute: int | None
-    #: The `sub` this client sees: the user id, or a per-sector pairwise identifier.
-    subject_type: Literal['public', 'pairwise']
+    #: Scopes a request without `scope` gets; null = none.
+    default_scopes: list[str] | None
+    default_resource: str | None
+    #: false = a pure-API client: no openid required, no ID token issued.
+    require_openid: bool
+    #: The instance certified this client (the level above approved).
+    certified: bool
+    #: When the client was certified (epoch ms); null = not certified.
+    certified_at: int | None
+    #: The `sub` this client sees: the user id, a per-sector pairwise identifier, or the user's external_id.
+    subject_type: Literal['public', 'pairwise', 'external_id']
+    #: With subject_type external_id: what a user without an external_id gets.
+    subject_fallback: Literal['atlas_user_id', 'refuse']
     sector_identifier_uri: str | None
     #: When the current client secret stops authenticating (epoch ms). Null = it does not expire.
     client_secret_expires_at: int | None
@@ -13895,16 +14393,30 @@ class PostOauthClientsBody(_PostOauthClientsBodyRequired, total=False):
     testers: list[str]
     #: Gated scopes (requires_verified_client) approved for this client alone, so it may request them before the whole app is approved. Only the instance set
     approved_scopes: list[str]
+    #: The scopes an authorization or device request without `scope` gets (each must be one the client may request; include `openid` unless require_openid is
+    default_scopes: list[str] | None
+    #: The identifier of the API (resource server) an authorization or device request without `resource` or `audience` is made for. Must be a registered API.
+    default_resource: str | None
+    #: Default true. false makes this a pure-API client: /oauth2/authorize accepts a request without `openid` and the token response carries an access token 
+    require_openid: bool
+    #: The instance certifies (true) or withdraws certification of an approved client: the level above verified, for scopes whose requires_client_level is ce
+    certified: bool
     #: Most token endpoint requests per minute this client may make; over it the endpoint answers 429 with Retry-After. null removes the limit.
     rate_limit_per_minute: int | None
     #: https URL of your own sign-in page; /oauth2/authorize then redirects there with a login_challenge. null clears (update).
     login_url: str | None
     #: https URL of your own consent page (consent_challenge). null clears (update).
     consent_url: str | None
+    #: 'always': a first-party client's consent is also sent to its consent_url instead of being granted silently. Needs the client's own consent_url. null c
+    delegate_consent: Literal['always', None]
+    #: https URL of your own device-approval page; /oauth2/device then sends the signed-in user there with a device_challenge. null clears (update).
+    device_url: str | None
     #: How long the issued client secret authenticates, in seconds (reported as client_secret_expires_at). Omit for a secret that does not expire. Ignored fo
     secret_expires_in_seconds: int
     #: OpenID Connect `sub` for this client. `public` (default): the user id. `pairwise`: a per-sector identifier, the same in the id_token, access token, us
-    subject_type: Literal['public', 'pairwise']
+    subject_type: Literal['public', 'pairwise', 'external_id']
+    #: With subject_type external_id, for a user who has no external_id: `atlas_user_id` (default) uses the Atlas user id as `sub`; `refuse` fails the author
+    subject_fallback: Literal['atlas_user_id', 'refuse']
     #: An https URL serving a JSON array that lists every redirect_uri of the client. Its host is the pairwise sector. Required for a pairwise client whose r
     sector_identifier_uri: str | None
     #: `jwt`: a signed JWT verifiable against the JWKS. `opaque`: a random `oat_…` reference validated at the introspection endpoint (and by Atlas's own endp
@@ -13952,16 +14464,30 @@ class PatchOauthClientsByIdBody(TypedDict, total=False):
     testers: list[str]
     #: Gated scopes (requires_verified_client) approved for this client alone, so it may request them before the whole app is approved. Only the instance set
     approved_scopes: list[str]
+    #: The scopes an authorization or device request without `scope` gets (each must be one the client may request; include `openid` unless require_openid is
+    default_scopes: list[str] | None
+    #: The identifier of the API (resource server) an authorization or device request without `resource` or `audience` is made for. Must be a registered API.
+    default_resource: str | None
+    #: Default true. false makes this a pure-API client: /oauth2/authorize accepts a request without `openid` and the token response carries an access token 
+    require_openid: bool
+    #: The instance certifies (true) or withdraws certification of an approved client: the level above verified, for scopes whose requires_client_level is ce
+    certified: bool
     #: Most token endpoint requests per minute this client may make; over it the endpoint answers 429 with Retry-After. null removes the limit.
     rate_limit_per_minute: int | None
     #: https URL of your own sign-in page; /oauth2/authorize then redirects there with a login_challenge. null clears (update).
     login_url: str | None
     #: https URL of your own consent page (consent_challenge). null clears (update).
     consent_url: str | None
+    #: 'always': a first-party client's consent is also sent to its consent_url instead of being granted silently. Needs the client's own consent_url. null c
+    delegate_consent: Literal['always', None]
+    #: https URL of your own device-approval page; /oauth2/device then sends the signed-in user there with a device_challenge. null clears (update).
+    device_url: str | None
     #: How long the issued client secret authenticates, in seconds (reported as client_secret_expires_at). Omit for a secret that does not expire. Ignored fo
     secret_expires_in_seconds: int
     #: OpenID Connect `sub` for this client. `public` (default): the user id. `pairwise`: a per-sector identifier, the same in the id_token, access token, us
-    subject_type: Literal['public', 'pairwise']
+    subject_type: Literal['public', 'pairwise', 'external_id']
+    #: With subject_type external_id, for a user who has no external_id: `atlas_user_id` (default) uses the Atlas user id as `sub`; `refuse` fails the author
+    subject_fallback: Literal['atlas_user_id', 'refuse']
     #: An https URL serving a JSON array that lists every redirect_uri of the client. Its host is the pairwise sector. Required for a pairwise client whose r
     sector_identifier_uri: str | None
     #: `jwt`: a signed JWT verifiable against the JWKS. `opaque`: a random `oat_…` reference validated at the introspection endpoint (and by Atlas's own endp
@@ -14025,6 +14551,10 @@ class PostOauthClientsByIdRotateSecretResponse(_PostOauthClientsByIdRotateSecret
     login_url: str | None
     #: Your own consent page for this client.
     consent_url: str | None
+    #: 'always' when a first-party client's consent is sent to consent_url.
+    delegate_consent: Literal['always', None]
+    #: Your own device-approval page for this client.
+    device_url: str | None
     #: `cimd` when the client was created from its Client ID Metadata Document (its client_id is that document's URL); null for a registered client.
     discovery_source: Literal['cimd', None]
     post_logout_redirect_uris: list[str]
@@ -14049,8 +14579,19 @@ class PostOauthClientsByIdRotateSecretResponse(_PostOauthClientsByIdRotateSecret
     approved_scopes: list[str]
     #: Token endpoint requests per minute this client may make; null = no limit.
     rate_limit_per_minute: int | None
-    #: The `sub` this client sees: the user id, or a per-sector pairwise identifier.
-    subject_type: Literal['public', 'pairwise']
+    #: Scopes a request without `scope` gets; null = none.
+    default_scopes: list[str] | None
+    default_resource: str | None
+    #: false = a pure-API client: no openid required, no ID token issued.
+    require_openid: bool
+    #: The instance certified this client (the level above approved).
+    certified: bool
+    #: When the client was certified (epoch ms); null = not certified.
+    certified_at: int | None
+    #: The `sub` this client sees: the user id, a per-sector pairwise identifier, or the user's external_id.
+    subject_type: Literal['public', 'pairwise', 'external_id']
+    #: With subject_type external_id: what a user without an external_id gets.
+    subject_fallback: Literal['atlas_user_id', 'refuse']
     sector_identifier_uri: str | None
     #: When the current client secret stops authenticating (epoch ms). Null = it does not expire.
     client_secret_expires_at: int | None
@@ -14402,6 +14943,10 @@ class PutOauthClientsByIdDelegatedUiBody(TypedDict, total=False):
     login_url: str | None
     #: https URL of your consent page; null clears it. Omit to leave unchanged.
     consent_url: str | None
+    #: 'always' sends a first-party client's consent to consent_url too (needs the client's own consent_url); null clears it.
+    delegate_consent: Literal['always', None]
+    #: https URL of your device-approval page (device_challenge); null clears it.
+    device_url: str | None
 
 
 class PutOauthClientsByIdDelegatedUiResponse(TypedDict, total=False):
@@ -14409,6 +14954,8 @@ class PutOauthClientsByIdDelegatedUiResponse(TypedDict, total=False):
     client_id: str
     login_url: str | None
     consent_url: str | None
+    delegate_consent: Literal['always', None]
+    device_url: str | None
 
 
 class GetOauthLoginRequestsResponseClient(TypedDict, total=False):
@@ -14429,6 +14976,14 @@ class GetOauthLoginRequestsResponse(TypedDict, total=False):
     session_subject: str | None
     ui_locales: str | None
     login_hint: str | None
+    #: The application's original /oauth2/authorize request on this instance, every parameter included. Null when the request was too large to carry.
+    request_url: str | None
+    #: The prompt values the application sent.
+    prompt: list[str]
+    #: true when the application sent prompt=select_account: let the visitor choose an account instead of reusing session_subject.
+    select_account: bool
+    #: The max_age (seconds) the application sent, if any.
+    max_age: int | None
     #: The challenge expires (epoch ms).
     expires_at: int
 
@@ -14473,6 +15028,12 @@ class GetOauthConsentRequestsResponse(TypedDict, total=False):
     authorization_details: list[dict[str, Any]]
     organization_id: str | None
     redirect_uri: str
+    #: The application's original /oauth2/authorize request on this instance, every parameter included (use switch_account to restart it at login). Null when
+    request_url: str | None
+    #: The prompt values the application sent.
+    prompt: list[str]
+    #: The max_age (seconds) the application sent, if any.
+    max_age: int | None
     #: The challenge expires (epoch ms).
     expires_at: int
 
@@ -14486,6 +15047,8 @@ class PutOauthConsentRequestsAcceptBody(TypedDict, total=False):
     grant_scope: list[str]
     #: Record the consent so the user is not asked again. Default true.
     remember: bool
+    #: Your own JSON (at most 4 KB) stored on the recorded consent and returned by the grant API and in grant.revoked. Atlas adds `granted_by`, the actor tha
+    metadata: dict[str, Any]
 
 
 class PutOauthConsentRequestsAcceptResponse(TypedDict, total=False):
@@ -14894,15 +15457,52 @@ class GetLogoutNotifyEndpointsByIdDeliveriesQuery(TypedDict, total=False):
     starting_after: str
 
 
-class CustomDomainVerification(TypedDict):
-    """method path: the https file that proves the host. Its whole body is the token; the token is
-    bound to this instance, host and base path.
-    """
+class _CustomDomainVerificationLastObservation1Required(TypedDict):
+    #: The HTTP status.
+    status: int
+    content_type: str | None
+    #: Body bytes seen; headers are not counted.
+    bytes: int
+    #: True when reading stopped at the 64 KiB read limit, so bytes is a lower bound.
+    bytes_capped: bool
+    #: The first 200 bytes of the body (printable characters only).
+    body_prefix: str
+    #: The URL that answered, including the per-check atlas_nonce query parameter. Redirects are not followed.
+    final_url: str
+    #: The Age response header, when present.
+    age: int | None
+    #: The cf-cache-status or x-cache response header, when present.
+    cache_status: str | None
+    #: When the fetch ran (ms since epoch).
+    checked_at: int
+
+
+class CustomDomainVerificationLastObservation1(_CustomDomainVerificationLastObservation1Required, total=False):
+    #: The Location of a 3xx answer.
+    redirect_to: str | None
+    is_html: bool
+    #: True when age is above 0 or a cache header says HIT: a cache answered, not your origin.
+    served_from_cache: bool
+
+
+class _CustomDomainVerificationRequired(TypedDict):
     method: Literal['https_file']
     url: str
     token: str
     content: str
     instructions: str
+
+
+class CustomDomainVerification(_CustomDomainVerificationRequired, total=False):
+    """method path: the https file that proves the host. Its whole body is the token; the token is
+    bound to this instance, host and base path.
+    """
+    #: After a rotation: the replaced token's URL, which still verifies until previous_valid_until.
+    previous_url: str
+    #: After a rotation: when the replaced token stops working (ms since epoch).
+    previous_valid_until: int | None
+    #: What the most recent failed verification fetch got back, so you can see what answered (a cache, a catch-all page) without guessing. Null until a check
+    last_observation: CustomDomainVerificationLastObservation1 | None
 
 
 class CustomDomainDns1(TypedDict):
@@ -15351,7 +15951,7 @@ class _GetInstanceNoticesResponseDataItemRequired(TypedDict):
 
 
 class GetInstanceNoticesResponseDataItem(_GetInstanceNoticesResponseDataItemRequired, total=False):
-    tags: list[Literal['breaking', 'behaviour', 'security']]
+    tags: list[Literal['breaking', 'behaviour', 'security', 'type_widening']]
     title: str
     summary: str
     affects: list[str]
@@ -15678,6 +16278,12 @@ class DeleteRedirectUrlsByIdResponse(TypedDict):
     deleted: Literal[True]
 
 
+class MachineRevokedBy1(TypedDict):
+    #: api_key, user or system.
+    type: str
+    id: str | None
+
+
 class _MachineRequired(TypedDict):
     object: Literal['machine']
     id: str
@@ -15709,6 +16315,14 @@ class Machine(_MachineRequired, total=False):
     enrolled_at: int | None
     #: When the machine last minted a token (epoch ms; null = never).
     last_token_at: int | None
+    #: Why a revoked machine ended: revoked_by_api, revoked_by_user, owner_signed_out, superseded, delegation_ended. Null while not revoked.
+    revoked_reason: str | None
+    #: Who revoked the machine. Null while not revoked.
+    revoked_by: MachineRevokedBy1 | None
+    #: Epoch ms the machine was revoked. Null while not revoked.
+    ended_at: int | None
+    #: `sign_out_everywhere`: the machine is revoked when its owner signs out everywhere. Needs an owner.
+    dies_with: Literal['sign_out_everywhere', None]
     #: Updated (epoch ms).
     updated_at: int
 
@@ -15736,6 +16350,7 @@ class PostMachinesBody(TypedDict, total=False):
     name: str
     owner_user_id: str
     data: dict[str, Any]
+    dies_with: str | None
 
 
 class _MachineWithSecretRequired(TypedDict):
@@ -15771,6 +16386,14 @@ class MachineWithSecret(_MachineWithSecretRequired, total=False):
     enrolled_at: int | None
     #: When the machine last minted a token (epoch ms; null = never).
     last_token_at: int | None
+    #: Why a revoked machine ended: revoked_by_api, revoked_by_user, owner_signed_out, superseded, delegation_ended. Null while not revoked.
+    revoked_reason: str | None
+    #: Who revoked the machine. Null while not revoked.
+    revoked_by: MachineRevokedBy1 | None
+    #: Epoch ms the machine was revoked. Null while not revoked.
+    ended_at: int | None
+    #: `sign_out_everywhere`: the machine is revoked when its owner signs out everywhere. Needs an owner.
+    dies_with: Literal['sign_out_everywhere', None]
     #: Updated (epoch ms).
     updated_at: int
 
@@ -15839,6 +16462,16 @@ class MachineGrant(_MachineGrantRequired, total=False):
     expires_at: int | None
     #: True once `expires_at` has passed. An expired grant mints nothing and is dropped from verify results.
     expired: bool
+    #: Recorded `sign_out_everywhere`. A grant of a machine that has an owner always ends with the owner signing out everywhere.
+    dies_with: Literal['sign_out_everywhere', None]
+    #: Epoch ms the grant was ended (it is kept as a record for 90 days; `GET .../grants?include_ended=true` lists it). Null while live.
+    revoked_at: int | None
+    #: The same value as `revoked_at`.
+    ended_at: int | None
+    #: Why it ended: revoked_by_api or owner_signed_out.
+    revoked_reason: str | None
+    #: Who ended it.
+    revoked_by: RevokedApiKeyRevokedBy1 | None
 
 
 class GetMachinesByIdGrantsResponse(TypedDict, total=False):
@@ -15848,6 +16481,12 @@ class GetMachinesByIdGrantsResponse(TypedDict, total=False):
     has_more: bool
     #: The cursor to pass as `starting_after` for the next page on a keyset-paginated list; null on the last page (and absent on lists that are not cursor-pa
     next_cursor: str | None
+
+
+class GetMachinesByIdGrantsQuery(TypedDict, total=False):
+    include_ended: str
+    limit: int
+    starting_after: str
 
 
 class _PostMachinesByIdGrantsBodyRequired(TypedDict):
@@ -16650,7 +17289,7 @@ class GetServiceConnectorCatalogResponse(TypedDict, total=False):
     next_cursor: str | None
 
 
-class GetServiceConnectorsResponseDataItem(TypedDict):
+class _GetServiceConnectorsResponseDataItemRequired(TypedDict):
     object: Literal['service_connector']
     id: str
     #: Unique within the instance; what Actions and flows call it by.
@@ -16668,6 +17307,13 @@ class GetServiceConnectorsResponseDataItem(TypedDict):
     created_at: int
     #: Updated (epoch ms).
     updated_at: int
+
+
+class GetServiceConnectorsResponseDataItem(_GetServiceConnectorsResponseDataItemRequired, total=False):
+    #: Identity verification kinds only (Persona, Onfido, Veriff, Stripe Identity), present as soon as the connector exists, whether or not identity verifica
+    webhook_url: str
+    #: Identity verification kinds only: the events to subscribe to at the service. Persona: `inquiry.created`, `started`, `completed` (counts as approved), 
+    webhook_events: list[str]
 
 
 class GetServiceConnectorsResponse(TypedDict, total=False):
@@ -16890,14 +17536,28 @@ class PutIdentityVerificationSettingsBody(_PutIdentityVerificationSettingsBodyRe
     verified_attributes: PutIdentityVerificationSettingsBodyVerifiedAttributes | None
 
 
+class GetIdentityVerificationsResponseDataItemLastError(TypedDict):
+    """The latest failed attempt the person can retry: the check stays `pending` and `url` stays
+    usable. Null when no attempt has failed.
+    """
+    #: The service's error code, e.g. `document_unverified_other`, `selfie_face_mismatch`.
+    code: str
+    reason: str | None
+
+
 class GetIdentityVerificationsResponseDataItem(TypedDict):
     object: Literal['identity_verification']
     id: str
     user_id: str
     provider: Literal['persona', 'onfido', 'veriff', 'stripe_identity']
-    status: Literal['pending', 'approved', 'declined', 'needs_review']
+    #: `pending` (not finished, or a failed attempt the person can retry), `processing` (submitted, being checked), then a verdict: `approved`, `declined` or
+    status: Literal['pending', 'processing', 'approved', 'declined', 'needs_review']
     #: The service's short reason for a decline or review.
     reason: str | None
+    #: The latest failed attempt the person can retry: the check stays `pending` and `url` stays usable. Null when no attempt has failed.
+    last_error: GetIdentityVerificationsResponseDataItemLastError | None
+    #: How many failed attempts the service reported for this check.
+    attempts: int
     #: True when the check was recorded from an existing session through the import route.
     imported: bool
     #: When the verification service verified the person (epoch ms); an imported check keeps the service's own time.
@@ -16924,7 +17584,7 @@ class GetIdentityVerificationsResponse(TypedDict, total=False):
 
 
 class GetIdentityVerificationsQuery(TypedDict, total=False):
-    status: Literal['pending', 'approved', 'declined', 'needs_review']
+    status: Literal['pending', 'processing', 'approved', 'declined', 'needs_review']
     limit: int
     starting_after: str
 
@@ -16932,6 +17592,10 @@ class GetIdentityVerificationsQuery(TypedDict, total=False):
 class PostIdentityVerificationsByIdDecideBody(TypedDict, total=False):
     decision: Literal['approved', 'declined']
     reason: str
+
+
+class PostUsersByIdIdentityVerificationsBody(TypedDict, total=False):
+    redirect_url: str
 
 
 class _GetIgaEntitlementsResponseDataItemApprovalRulesStepsItemEscalateToRequired(TypedDict):
@@ -17671,7 +18335,7 @@ class GetActionGalleryResponse(TypedDict, total=False):
 class GetActionGalleryQuery(TypedDict, total=False):
     q: str
     category: Literal['security', 'access-control', 'tokens', 'integrations', 'notifications', 'enrichment', 'compliance', 'organizations', 'other']
-    trigger: Literal['post_login', 'pre_user_registration', 'post_user_registration', 'pre_organization_create', 'pre_member_add', 'pre_invitation_create', 'pre_authentication', 'pre_token', 'post_token_exchange', 'custom_token_exchange', 'pre_user_update', 'pre_user_deletion', 'mfa_verification_attempt', 'password_verification_attempt', 'account_link_decision', 'billing_plan_selected', 'pre_message_send', 'post_change_password', 'post_password_reset', 'post_user_update', 'post_email_verified', 'post_mfa_enroll', 'post_mfa_remove', 'post_logout', 'org_membership_changed', 'custom_challenge_create', 'custom_challenge_verify', 'workflow_step']
+    trigger: Literal['post_login', 'pre_user_registration', 'post_user_registration', 'pre_organization_create', 'pre_member_add', 'pre_invitation_create', 'pre_authentication', 'pre_token', 'post_token_exchange', 'custom_token_exchange', 'pre_user_update', 'pre_user_deletion', 'pre_user_merge', 'mfa_verification_attempt', 'password_verification_attempt', 'account_link_decision', 'billing_plan_selected', 'pre_message_send', 'post_change_password', 'post_password_reset', 'post_user_update', 'post_email_verified', 'post_mfa_enroll', 'post_mfa_remove', 'post_logout', 'org_membership_changed', 'custom_challenge_create', 'custom_challenge_verify', 'workflow_step']
     source: Literal['builtin', 'community']
     limit: int
     starting_after: str
@@ -20739,6 +21403,15 @@ class PostAppEventsBody(_PostAppEventsBodyRequired, total=False):
     idempotency_key: str
 
 
+class GetWhoamiResponseKeyCanMint(TypedDict, total=False):
+    """What this key may hand out through POST /v1/secret_keys: nothing without secret_keys:write;
+    otherwise only scopes it holds itself.
+    """
+    secret_keys: bool
+    scopes: list[str]
+    presets: list[str]
+
+
 class GetWhoamiResponseKey(TypedDict, total=False):
     id: str | None
     type: Literal['secret', 'publishable', 'platform', 'partner_link', 'access_token']
@@ -20747,6 +21420,14 @@ class GetWhoamiResponseKey(TypedDict, total=False):
     scopes: list[str]
     #: Presets (read_only, privacy:execute, …) expanded.
     effective_scopes: list[str]
+    #: The named key preset (app-runtime, provisioning, integrations) whose scopes are exactly this key's; null otherwise.
+    preset: str | None
+    #: What this key may hand out through POST /v1/secret_keys: nothing without secret_keys:write; otherwise only scopes it holds itself.
+    can_mint: GetWhoamiResponseKeyCanMint
+    #: What the key is scoped to: { type: "instance", id } (or the platform/account for a platform key).
+    resource: dict[str, Any]
+    #: Backend API route prefixes (for example /v1/domains) with at least one route this key's scopes allow, sorted.
+    route_prefixes: list[str]
     owner: str | None
     created_at: int | None
     expires_at: int | None
@@ -20844,7 +21525,7 @@ class PostSecretKeysBody(TypedDict, total=False):
     name: str
     scopes: list[str]
     #: A named scope set instead of `scopes[]`. `app-runtime`: what an app server needs to run: read users, read and write sessions, organizations (membershi
-    preset: Literal['app-runtime']
+    preset: Literal['app-runtime', 'web-app', 'provisioning', 'integrations']
     #: Unix ms or ISO 8601; at most one year away. Default one year from now.
     expires_at: int | str
     allowed_ips: list[str]
@@ -20883,7 +21564,7 @@ class PostSecretKeysByIdRotateBody(TypedDict, total=False):
     overlap_seconds: int
     key_format: Literal['atlas', 'legacy']
     #: Give the replacement this named scope set instead of the old key's scopes. The calling key must hold them.
-    preset: Literal['app-runtime']
+    preset: Literal['app-runtime', 'web-app', 'provisioning', 'integrations']
 
 
 class _GetKeysResponseDataItemRequired(TypedDict):
@@ -21728,7 +22409,7 @@ class _GetConnectionsResponseDataItemRequired(TypedDict):
     id: str
     owner: GetConnectionsResponseDataItemOwner
     #: oauth, github_app_installation, admin_consent and a three-legged oauth1 are authorized by a browser step; client_credentials and jwt_bearer mint token
-    kind: Literal['oauth', 'api_key', 'client_credentials', 'bearer', 'basic', 'custom_header', 'hmac_secret', 'jwt_bearer', 'oauth1', 'github_app_installation', 'admin_consent']
+    kind: Literal['oauth', 'api_key', 'client_credentials', 'bearer', 'basic', 'custom_header', 'hmac_secret', 'jwt_bearer', 'oauth1', 'github_app_installation', 'admin_consent', 'cookie_jar']
     provider: str
     #: Your label for this account, for example "Support inbox".
     name: str
@@ -21813,7 +22494,7 @@ class GetConnectionsQuery(TypedDict, total=False):
 
 class _PostConnectionsBodyRequired(TypedDict):
     owner: GetConnectionsResponseDataItemOwner
-    kind: Literal['oauth', 'api_key', 'client_credentials', 'bearer', 'basic', 'custom_header', 'hmac_secret', 'jwt_bearer', 'oauth1', 'github_app_installation', 'admin_consent']
+    kind: Literal['oauth', 'api_key', 'client_credentials', 'bearer', 'basic', 'custom_header', 'hmac_secret', 'jwt_bearer', 'oauth1', 'github_app_installation', 'admin_consent', 'cookie_jar']
     #: A built-in or custom OAuth provider key for oauth; any short key otherwise.
     provider: str
     #: Hostnames, or *.example.com wildcards (1 to 20).
@@ -21863,6 +22544,21 @@ class DeleteConnectionsByIdQuery(TypedDict, total=False):
     revoke: bool
 
 
+class _PutConnectionsByIdCredentialsBodyCookiesItemRequired(TypedDict):
+    name: str
+    value: str
+    domain: str
+
+
+class PutConnectionsByIdCredentialsBodyCookiesItem(_PutConnectionsByIdCredentialsBodyCookiesItemRequired, total=False):
+    path: str
+    #: Epoch seconds or milliseconds, or an ISO date; omit for a session cookie. The earliest expiry becomes the connection's secret expiry (reminders go out
+    expires: int | str | None
+    secure: bool
+    http_only: bool
+    same_site: Literal['Strict', 'Lax', 'None']
+
+
 class PutConnectionsByIdCredentialsBody(TypedDict, total=False):
     """The fields of the connection's kind. Write-only: stored in the vault (the tenant's own KMS
     key when one is set) and never returned. The kind's non-secret settings (see config on POST
@@ -21889,7 +22585,7 @@ class PutConnectionsByIdCredentialsBody(TypedDict, total=False):
     #: https token endpoint (client_credentials, jwt_bearer); `{name}` placeholders are filled from host_params.
     token_url: str
     scopes: list[str]
-    #: jwt_bearer / github_app_installation: a PEM private key (RSA or P-256). Held in the vault; never returned.
+    #: jwt_bearer / github_app_installation: a PEM private key (RSA or P-256). oauth1 with config.signature_method RSA-SHA1 or RSA-SHA256: the consumer's RSA
     private_key: str
     #: jwt_bearer: have Atlas generate the key pair; the public JWK is returned in config.public_jwk for you to register at the provider.
     generate_key: bool
@@ -21899,8 +22595,10 @@ class PutConnectionsByIdCredentialsBody(TypedDict, total=False):
     assertion: str
     #: oauth1.
     consumer_key: str
-    #: oauth1.
+    #: oauth1 (not needed with an RSA signature method; send private_key instead).
     consumer_secret: str
+    #: cookie_jar: the browser session (at most 200 cookies, 256 KiB). Write-only; your backend reads it with GET /v1/connections/{id}/secret. Atlas never se
+    cookies: list[PutConnectionsByIdCredentialsBodyCookiesItem]
     #: oauth1.
     token_secret: str
     #: Non-secret settings to merge (same keys as the connection config).
@@ -21953,7 +22651,7 @@ class _PostConnectionsByIdRevokeResponseRequired(TypedDict):
     id: str
     owner: GetConnectionsResponseDataItemOwner
     #: oauth, github_app_installation, admin_consent and a three-legged oauth1 are authorized by a browser step; client_credentials and jwt_bearer mint token
-    kind: Literal['oauth', 'api_key', 'client_credentials', 'bearer', 'basic', 'custom_header', 'hmac_secret', 'jwt_bearer', 'oauth1', 'github_app_installation', 'admin_consent']
+    kind: Literal['oauth', 'api_key', 'client_credentials', 'bearer', 'basic', 'custom_header', 'hmac_secret', 'jwt_bearer', 'oauth1', 'github_app_installation', 'admin_consent', 'cookie_jar']
     provider: str
     #: Your label for this account, for example "Support inbox".
     name: str
@@ -22081,6 +22779,8 @@ class _GetConnectionsOauthClientsResponseDataItemRequired(TypedDict):
 
 
 class GetConnectionsOauthClientsResponseDataItem(_GetConnectionsOauthClientsResponseDataItemRequired, total=False):
+    #: eBay: the RuName consent runs with.
+    ru_name: str | None
     #: How the client authenticates to the provider's token endpoint.
     auth_method: Literal['client_secret', 'private_key_jwt', 'tls_client_auth']
     #: private_key_jwt: the key id (the RFC 7638 thumbprint) Atlas signs assertions with.
@@ -22135,9 +22835,11 @@ class PutConnectionsOauthClientsBody(_PutConnectionsOauthClientsBodyRequired, to
     #: Write-only. Required when the client is first created; omit it to keep the stored secret.
     client_secret: str
     scopes: list[str]
-    #: Values that fill the provider's host templates for this one connection, for example {"subdomain":"acme"} (Zendesk), {"shop":"acme"} (Shopify), {"domai
+    #: Defaults for connections that use this client: the provider's host values plus its own non-secret settings, such as {"service_id":"…"} for TikTok Shop
     host_params: dict[str, str]
     enabled: bool
+    #: eBay only: the RuName registered for your eBay app (letters, digits, hyphen, underscore). Shorthand for host_params.ru_name. It is sent as redirect_ur
+    ru_name: str | None
     #: How Atlas authenticates to the provider's token endpoint. client_secret (default) keeps the provider's own style. private_key_jwt: send `generate_key:
     auth_method: Literal['client_secret', 'private_key_jwt', 'tls_client_auth']
     #: private_key_jwt: have Atlas generate the key pair.
@@ -22148,6 +22850,10 @@ class PutConnectionsOauthClientsBody(_PutConnectionsOauthClientsBodyRequired, to
     mtls_cert: str
     #: An https redirect URI on your own domain, registered at the provider as this app's redirect URI. Atlas authorizes and exchanges the code with exactly 
     redirect_uri: str | None
+
+
+class DeleteConnectionsOauthClientsByIdQuery(TypedDict, total=False):
+    rehome_to: str
 
 
 class PostConnectionsByIdRelayBodyRetry(TypedDict, total=False):
@@ -22407,6 +23113,11 @@ class PostConnectionsImportBody(_PostConnectionsImportBodyRequired, total=False)
     verify: bool
 
 
+class PostConnectionsImportResponseErrorsItem(TypedDict, total=False):
+    index: int
+    message: str
+
+
 class PostConnectionsImportResponseDataItemError2ProviderError(TypedDict, total=False):
     code: str
     description: str | None
@@ -22441,7 +23152,7 @@ class PostConnectionsImportResponseDataItem(_PostConnectionsImportResponseDataIt
     exchange_error: str
 
 
-class PostConnectionsImportResponse(TypedDict):
+class _PostConnectionsImportResponseRequired(TypedDict):
     object: Literal['connection_import']
     total: int
     dry_run: bool
@@ -22452,7 +23163,14 @@ class PostConnectionsImportResponse(TypedDict):
     would_create: int
     would_update: int
     failed: int
+    #: One entry per failed row.
+    errors: list[PostConnectionsImportResponseErrorsItem]
     data: list[PostConnectionsImportResponseDataItem]
+
+
+class PostConnectionsImportResponse(_PostConnectionsImportResponseRequired, total=False):
+    #: Dry run only: this same report, kept for older callers.
+    would_return: dict[str, Any]
 
 
 class PostConnectionsImportQuery(TypedDict, total=False):
@@ -22462,6 +23180,8 @@ class PostConnectionsImportQuery(TypedDict, total=False):
 class PostConnectionsExportBody(TypedDict, total=False):
     owner_type: Literal['organization', 'user', 'external']
     owner_id: str
+    #: Export only these connections (a rollback of one).
+    connection_ids: list[str]
     #: Restrict to one provider-side account.
     external_id: str
     provider: str
@@ -22475,6 +23195,37 @@ class PostConnectionsExportBody(TypedDict, total=False):
     recipient_public_key: dict[str, Any]
 
 
+class _PostConnectionsExportResponseConnectionsItemRequired(TypedDict):
+    #: oauth, or the credential kind (api_key, bearer, basic, custom_header, hmac_secret, client_credentials, jwt_bearer, oauth1, cookie_jar...). Also a vali
+    kind: str
+    provider: str
+    owner: GetConnectionsResponseDataItemOwner
+    #: The provider environment the credential belongs to. sandbox selects the provider's test hosts (Salesforce test.salesforce.com, PayPal and QuickBooks s
+    environment: Literal['production', 'sandbox']
+    name: str
+    allowed_hosts: list[str]
+    status: str
+
+
+class PostConnectionsExportResponseConnectionsItem(_PostConnectionsExportResponseConnectionsItemRequired, total=False):
+    #: The non-secret config of a non-oauth connection (absent for oauth).
+    config: dict[str, Any]
+    external_id: str | None
+    #: Values that fill the provider's host templates for this one connection, for example {"subdomain":"acme"} (Zendesk), {"shop":"acme"} (Shopify), {"domai
+    host_params: dict[str, str]
+    scopes: list[str]
+    metadata: dict[str, str]
+    expires_at: int | None
+    #: Rows with the same value came from one grant.
+    token_family: str
+    #: Sealed export only, oauth connections.
+    refresh_token: str
+    #: Sealed export only, oauth connections.
+    access_token: str
+    #: Sealed export only. oauth: extra token sets by name. Any other kind: the entered credential as credential entry takes it (api_key, consumer_secret or 
+    credentials: dict[str, Any]
+
+
 class _PostConnectionsExportResponseRequired(TypedDict):
     object: Literal['connection_export']
     #: True when the tokens are included, sealed in `bundle`.
@@ -22486,7 +23237,7 @@ class _PostConnectionsExportResponseRequired(TypedDict):
 
 class PostConnectionsExportResponse(_PostConnectionsExportResponseRequired, total=False):
     #: Present when sealed is false.
-    connections: list[dict[str, Any]]
+    connections: list[PostConnectionsExportResponseConnectionsItem]
     #: The thumbprint of the key the bundle is sealed to.
     recipient_key_id: str
     #: Present when sealed is true: a compact JWE (RSA-OAEP-256 or ECDH-ES+A256KW with A256GCM) of {version, exported_at, connections}.
@@ -26223,7 +26974,7 @@ class PutInstanceCookieConsentBodySettingsLink(_PutInstanceCookieConsentBodySett
     attribute. null or omitted: no link. Unknown fields inside it are reported in Atlas-Unknown-
     Fields (e.g. settings_link.foo).
     """
-    #: Per-language link text, keyed by page locale (en, es, fr, de, pt-BR, ja, nl; any other key is refused with a 400). Each value is 1-60 characters. The 
+    #: Per-language link text, keyed by page locale (any language the hosted pages speak: en, es, fr, de, pt-BR, ja, nl, ar, he, fa, hi, zh-Hans, zh-Hant, ko
     labels: dict[str, str]
     #: Fills in the CMP's reopen trigger: cookiemunch adds data-cc="show-settings"; cookiebot calls Cookiebot.renew(); onetrust calls OneTrust.ToggleInfoDisp
     preset: Literal['cookiemunch', 'cookiebot', 'onetrust', 'custom', None]
@@ -27588,6 +28339,42 @@ class DeleteAllowlistIdentifiersByIdResponse(TypedDict):
     deleted: Literal[True]
 
 
+class GetAnalyticsCaptchaResponseDataItem(TypedDict, total=False):
+    provider: str
+    flow: str
+    issued: int
+    passed: int
+    failed: int
+    blocked: int
+    solve_rate: float
+
+
+class GetAnalyticsCaptchaResponse(TypedDict, total=False):
+    object: Literal['analytics_captcha']
+    window: GetAnalyticsFunnelResponseWindow
+    issued: int
+    passed: int
+    failed: int
+    blocked: int
+    solve_rate: float
+    data: list[GetAnalyticsCaptchaResponseDataItem]
+
+
+class GetAnalyticsSmsResponseDataItem(TypedDict, total=False):
+    country: str
+    messages: int
+    delivered: int
+    failed: int
+    estimated_cost: float
+
+
+class GetAnalyticsSmsResponse(TypedDict, total=False):
+    object: Literal['analytics_sms']
+    window: GetAnalyticsFunnelResponseWindow
+    total: int
+    data: list[GetAnalyticsSmsResponseDataItem]
+
+
 class GetApiKeysPostureResponseThresholds(TypedDict, total=False):
     stale_days: int
     never_used_days: int
@@ -27661,6 +28448,12 @@ class PostApiKeysByIdRotateBody(TypedDict, total=False):
     expires_at: int | None
     #: Relative lifetime of the successor. Not with expires_at.
     expires_in_seconds: int
+    #: Your own secret for the successor: 16-256 printable characters, no whitespace. Needs `prefix`, and must start with it.
+    secret: str
+    #: With `secret`: the public head of the secret, shown in listings. Without `secret`: the brand for a generated secret.
+    prefix: str
+    #: key_pair keys only: your own SPKI PEM public key (P-256 or Ed25519) for the successor. Omit it and Atlas generates a pair and returns `private_key` on
+    public_key: str
 
 
 class PostApiKeysByIdRotateResponsePreviousKey(TypedDict, total=False):
@@ -27672,13 +28465,15 @@ class PostApiKeysByIdRotateResponsePreviousKey(TypedDict, total=False):
 
 
 class _PostApiKeysByIdRotateResponseRequired(TypedDict):
-    #: The successor's secret. Shown once.
-    secret: str
+    #: The successor's secret. Shown once. Null for a key_pair key.
+    secret: str | None
     previous_key: PostApiKeysByIdRotateResponsePreviousKey
     overlap_seconds: int
 
 
 class PostApiKeysByIdRotateResponse(_PostApiKeysByIdRotateResponseRequired, total=False):
+    #: key_pair only, when Atlas generated the pair: the PKCS#8 PEM private key. Shown once; never stored or replayed.
+    private_key: str
     note: str
 
 
@@ -27754,10 +28549,14 @@ class PostApprovalRequestsBody(_PostApprovalRequestsBodyRequired, total=False):
     context: dict[str, str]
     #: How long the request stays open: 10 to 604800 seconds. Default 120.
     ttl_seconds: int
-    #: Who decides. Leave out for the v1 flow (the user answers on their own device with number matching). Name `user_ids` (1 to 20) or an `organization_id` 
+    #: Who decides. Leave out for the v1 flow (the user answers on their own device with number matching). Name `user_ids` (1 to 20), a `group_id` (every mem
     approvers: PostUsersByIdApprovalRequestsBodyApprovers
     #: Demand a signature over the canonical request even from the user themselves. Default false.
     require_signature: bool
+    #: The user the request is about can never approve or reject it, even holding the approver role (403 with `meta.reason` = `requester_excluded`). Needs `a
+    exclude_requester: bool
+    #: Name of a step-up policy. An approver may then approve from a signed-in session that has just met that policy (within its max age) instead of signing 
+    step_up_policy: str
     #: Only an approval from a device the approver trusted (a signing key, passkey or push device marked trusted) counts; a denial never needs one. Refused w
     require_trusted_device: bool
     #: An opaque value (for example a hash of the tool and its arguments) the receipt can only be consumed against.
@@ -29171,6 +29970,8 @@ class GetConfigLimitsResponseLimitsAppRoles(TypedDict, total=False):
 class GetConfigLimitsResponseLimitsPermissions(TypedDict, total=False):
     max_implied_per_permission: int
     key_max_length: int
+    max_parts: int
+    part_max_length: int
 
 
 class GetConfigLimitsResponseLimitsScopes(TypedDict, total=False):
@@ -29345,6 +30146,30 @@ class PutConnectionProviderTopicsBody(TypedDict):
     topics: dict[str, list[str]]
 
 
+class _GetConnectionProvidersPoliciesResponseDataItemRequired(TypedDict):
+    object: Literal['connection_provider_policy']
+    provider: str
+    unique_external_id: bool
+    has_webhook_secret: bool
+    #: Where to point the provider's uninstall or revocation notices; null for a provider without one.
+    events_url: str | None
+
+
+class GetConnectionProvidersPoliciesResponseDataItem(_GetConnectionProvidersPoliciesResponseDataItemRequired, total=False):
+    #: eBay: whether the developer id for Platform Notifications is stored.
+    has_dev_id: bool
+    updated_at: int | None
+
+
+class GetConnectionProvidersPoliciesResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[GetConnectionProvidersPoliciesResponseDataItem]
+    #: Whether another page follows the cursor.
+    has_more: bool
+    #: The cursor to pass as `starting_after` for the next page on a keyset-paginated list; null on the last page (and absent on lists that are not cursor-pa
+    next_cursor: str | None
+
+
 class _GetConnectionProvidersByProviderPolicyResponseRequired(TypedDict):
     object: Literal['connection_provider_policy']
     provider: str
@@ -29385,6 +30210,34 @@ class PutConnectionReconnectSettingsBody(TypedDict, total=False):
     #: An https URL on an allowed origin.
     return_url: str | None
     providers: list[str]
+
+
+class GetConnectionTemplatesResponseDataItem(TypedDict):
+    object: Literal['connection_template']
+    provider: str
+    name: str
+    #: The connection kind to create.
+    kind: str
+    #: connect: the owner authorizes in a browser (POST /v1/connections/{id}/connect). credentials: you enter the secrets (PUT /v1/connections/{id}/credentia
+    flow: Literal['connect', 'credentials']
+    #: The write-only secret fields the credential entry takes.
+    secrets: list[str]
+    #: Non-secret config to send with the connection.
+    config: dict[str, Any]
+    allowed_hosts: list[str]
+    #: host_params names the connection needs (for example the store host).
+    host_params: list[str]
+    signature: str
+    note: str
+
+
+class GetConnectionTemplatesResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[GetConnectionTemplatesResponseDataItem]
+    #: Whether another page follows the cursor.
+    has_more: bool
+    #: The cursor to pass as `starting_after` for the next page on a keyset-paginated list; null on the last page (and absent on lists that are not cursor-pa
+    next_cursor: str | None
 
 
 class _PostConnectionsOauthCompleteBodyRequired(TypedDict):
@@ -29430,6 +30283,44 @@ class PostConnectionsOauthClientsRegisterBody(_PostConnectionsOauthClientsRegist
     redirect_uri: str
     scopes: list[str]
     token_endpoint_auth_method: Literal['client_secret_basic', 'client_secret_post', 'private_key_jwt']
+
+
+class _PostConnectionsRehomeBodyRequired(TypedDict):
+    #: The id of the OAuth client the connections hold now.
+    from_client: str
+    #: The id of the OAuth client to move them to (enabled).
+    to_client: str
+
+
+class PostConnectionsRehomeBody(_PostConnectionsRehomeBodyRequired, total=False):
+    #: Move only these connections (up to 1000 connections move per call).
+    connection_ids: list[str]
+    dry_run: bool
+    #: false is accepted only when both clients are the same provider app.
+    verify: bool
+
+
+class _PostConnectionsRehomeResponseDataItemRequired(TypedDict):
+    connection_id: str
+    status: Literal['moved', 'would_move', 'would_verify', 'failed', 'skipped']
+
+
+class PostConnectionsRehomeResponseDataItem(_PostConnectionsRehomeResponseDataItemRequired, total=False):
+    #: Why a connection did not move (refresh_failed, needs_reauth, not_connected, revoked).
+    reason: str
+
+
+class PostConnectionsRehomeResponse(TypedDict):
+    object: Literal['connection_rehome']
+    from_client: str
+    to_client: str
+    dry_run: bool
+    same_app: bool
+    moved: int
+    would_move: int
+    failed: int
+    skipped: int
+    data: list[PostConnectionsRehomeResponseDataItem]
 
 
 class GetConnectionsRelayLimitsResponse(TypedDict):
@@ -30773,6 +31664,43 @@ class PutFraudEmailRiskSettingsBody(TypedDict, total=False):
     gate_sign_up: bool
 
 
+class _GetGrantsResponseDataItemRequired(TypedDict):
+    object: Literal['grant']
+    id: str
+    #: `consent` is the user's recorded consent; `managed` is an OpenID Grant Management grant (`grant_id`).
+    type: Literal['consent', 'managed']
+    user_id: str
+    status: Literal['active', 'revoked']
+    scopes: list[str]
+    #: The JSON you set at consent accept or with PATCH. Never shown to the user.
+    metadata: dict[str, Any]
+    created_at: int
+
+
+class GetGrantsResponseDataItem(_GetGrantsResponseDataItemRequired, total=False):
+    client_id: str | None
+    client_name: str | None
+    organization_id: str | None
+    #: Managed grants: the API the grant covers.
+    resource: str | None
+    authorization_details: list[dict[str, Any]] | None
+    #: Managed grants: bumped by every merge, replace and narrowing.
+    revision: int
+    updated_at: int
+    #: The last time a token was issued or refreshed under the grant (Unix ms).
+    last_used_at: int | None
+    revoked_at: int | None
+    #: Managed grants: client, user, admin or system.
+    revoked_by: str | None
+
+
+class GetGrantsResponse(TypedDict):
+    object: Literal['list']
+    data: list[GetGrantsResponseDataItem]
+    has_more: bool
+    next_cursor: str | None
+
+
 class _PostGrantsByGrantTypeByIdConsumeBodyRequired(TypedDict):
     counter: str
     idempotency_key: str
@@ -30874,6 +31802,10 @@ class GetGrantsByGrantTypeByIdUsageResponse(TypedDict, total=False):
     live: bool
     counters: list[GetGrantsByGrantTypeByIdUsageResponseCountersItem]
     leases: list[GetGrantsByGrantTypeByIdUsageResponseLeasesItem]
+
+
+class PatchGrantsByIdBody(TypedDict, total=False):
+    metadata: dict[str, Any] | None
 
 
 class GetIgaActivationsResponseDataItem(TypedDict):
@@ -31294,6 +32226,30 @@ class PostInstanceConfigSnapshotsByIdRestoreResponse(_PostInstanceConfigSnapshot
     allowed_origins_changed: bool
 
 
+class PatchInstanceCookieConsentBody(TypedDict, total=False):
+    """The whole setting (script_url required), or just { "enabled": false | true } to switch a
+    stored setting off or on without deleting it, or just { "host_aliases": [...] } to declare
+    hosts.
+    """
+    enabled: bool | None
+    script_url: str | None
+    #: The <script id> some CMPs need.
+    script_id: str | None
+    #: Your CMP site id (sent as data-cbid). Send this or site, not both.
+    site_id: str | None
+    #: Name the CMP site by reference instead of site_id. Atlas looks up the verified site registered for the host (or a parent domain) through the linked pa
+    site: PutInstanceCookieConsentBodySite | None
+    #: The CMP prior-blocking mode, e.g. "auto" (sent as data-blockingmode).
+    blocking_mode: str | None
+    extra_origins: list[str] | None
+    #: A "Cookie settings" link in the footer of the hosted sign-in, sign-up and account pages and Sign in with Atlas pages, for reopening the CMP preference
+    settings_link: PutInstanceCookieConsentBodySettingsLink | None
+    #: page (default): the CMP tag on the hosted pages carries data-culture=<the page language> (?locale=, else Accept-Language), so the banner matches the p
+    culture: Literal['page', 'browser', None]
+    #: Hosts the hosted pages are served on that your consent manager's site is knowingly not registered for, typically the instance's default `<slug>-fapi.a
+    host_aliases: list[str] | None
+
+
 class DeleteInstanceDataKeyProviderBody(TypedDict):
     #: Must be "shred": the confirmation that the data protected by the key is destroyed for good.
     confirm: Literal['shred']
@@ -31425,6 +32381,61 @@ class PostInstanceExportsByIdDownloadUrlResponse(TypedDict):
     expires_at: int
 
 
+class DeleteInstanceHooksBeforeFirstSessionResponseLastCall(TypedDict, total=False):
+    """The outcome of the last call. Null until the first sign-in reaches the hook."""
+    at: int
+    status: Literal['ok', 'timeout', 'error', 'invalid_response']
+    error: str | None
+
+
+class _DeleteInstanceHooksBeforeFirstSessionResponseRequired(TypedDict):
+    object: Literal['before_first_session_hook']
+    enabled: bool
+    #: Your endpoint. https only (http only for localhost on a development instance).
+    url: str | None
+    #: Whether a signing secret is stored (the value is never returned).
+    signing_secret_set: bool
+    #: How long a sign-in waits for the hook (500-5000, default 3000).
+    timeout_ms: int
+
+
+class DeleteInstanceHooksBeforeFirstSessionResponse(_DeleteInstanceHooksBeforeFirstSessionResponseRequired, total=False):
+    #: The outcome of the last call. Null until the first sign-in reaches the hook.
+    last_call: DeleteInstanceHooksBeforeFirstSessionResponseLastCall | None
+    #: Calls that failed since the last good one. A failed call lets the sign-in continue without an external_id; each one is also in the audit log (before_f
+    failed_calls: int
+    updated_at: int | None
+
+
+class PatchInstanceHooksBeforeFirstSessionBody(TypedDict, total=False):
+    enabled: bool | None
+    #: https only (http only for localhost on a development instance); null clears.
+    url: str | None
+    #: Write-only, 16-512 characters; null clears.
+    signing_secret: str | None
+    timeout_ms: int | None
+
+
+class PostInstanceHooksBeforeFirstSessionTestResponseAnswer(TypedDict, total=False):
+    external_id: str | None
+
+
+class _PostInstanceHooksBeforeFirstSessionTestResponseRequired(TypedDict):
+    #: True when the receiver answered as a working one should (2xx for a webhook; a valid answer or a deny for a hook). Null while a webhook test is only qu
+    ok: bool | None
+    #: success or failed once attempted; pending while a webhook test is queued.
+    status: Literal['success', 'failed', 'pending']
+    #: The HTTP status the receiver answered with; null when no answer came (timeout, network error) or nothing was sent yet.
+    http_status: int | None
+    #: How long the attempt took; null when nothing was sent yet.
+    latency_ms: int | None
+
+
+class PostInstanceHooksBeforeFirstSessionTestResponse(_PostInstanceHooksBeforeFirstSessionTestResponseRequired, total=False):
+    answer: PostInstanceHooksBeforeFirstSessionTestResponseAnswer
+    error: PostInstanceHooksBeforeUserCreateTestResponseError
+
+
 class GetInstanceImpersonationPolicyResponse(TypedDict):
     object: Literal['impersonation_policy']
     require_reason: bool
@@ -31459,6 +32470,81 @@ class PostInstanceImportsBody(_PostInstanceImportsBodyRequired, total=False):
     config_mode: Literal['merge', 'skip']
 
 
+class GetInstanceIntegrationsForwardingByDestinationResponse(TypedDict, total=False):
+    object: Literal['integration_forwarding']
+    forwarding: Literal['lucida', 'hermetica', 'seolyticize', 'webhook']
+    event: Literal['user.created']
+    #: The managed webhook endpoint.
+    id: str
+    active: bool
+
+
+class PutInstanceIntegrationsForwardingByDestinationBody(TypedDict, total=False):
+    #: lucida, hermetica, seolyticize: the destination's server-side key (write-only).
+    server_key: str
+    #: seolyticize: the site key.
+    site_key: str
+    #: seolyticize: an https page of the site, used when a sign-up's visit is unknown to Seolyticize. Defaults to the first https allowed origin.
+    site_url: str
+    #: lucida, hermetica: an https host other than the default.
+    host: str
+    #: seolyticize: which event records the conversion.
+    conversion_event: Literal['user.created', 'user.attributed']
+    #: lucida, seolyticize: send email, name, ip and user agent. Default false.
+    include_pii: bool
+    #: webhook: the https receiver.
+    url: str
+    active: bool
+
+
+class PutInstanceIntegrationsForwardingByDestinationResponse(TypedDict, total=False):
+    object: Literal['integration_forwarding']
+    forwarding: Literal['lucida', 'hermetica', 'seolyticize', 'webhook']
+    event: Literal['user.created']
+    created: bool
+    #: The managed webhook endpoint.
+    id: str
+    #: webhook only, on create: the signing secret, shown once.
+    secret: str
+
+
+class GetInstanceIntegrationsHealthResponseDataItemLastFailure(TypedDict, total=False):
+    at: int | None
+    status: int | None
+    error: str | None
+
+
+class _GetInstanceIntegrationsHealthResponseDataItemRequired(TypedDict):
+    kind: Literal['webhook_endpoint', 'integration', 'privacy_orchestrator']
+    id: str | None
+    state: Literal['healthy', 'failing', 'disabled', 'inactive', 'no_deliveries', 'unknown']
+
+
+class GetInstanceIntegrationsHealthResponseDataItem(_GetInstanceIntegrationsHealthResponseDataItemRequired, total=False):
+    name: str | None
+    url: str | None
+    #: The connected platform that owns it, if any.
+    managed_by: str | None
+    #: The receiver type: https, a destination such as lucida, events_receiver, tokens_only or case_api.
+    destination: str
+    last_success_at: int | None
+    last_failure: GetInstanceIntegrationsHealthResponseDataItemLastFailure | None
+    consecutive_failures: int
+    #: integration only: the last token minted for it.
+    last_minted_at: int | None
+
+
+class _GetInstanceIntegrationsHealthResponseRequired(TypedDict):
+    object: Literal['list']
+    data: list[GetInstanceIntegrationsHealthResponseDataItem]
+    unhealthy_count: int
+
+
+class GetInstanceIntegrationsHealthResponse(_GetInstanceIntegrationsHealthResponseRequired, total=False):
+    has_more: bool
+    generated_at: int
+
+
 class _GetInstanceIntegrationsByProductMintsResponseDataItemRequired(TypedDict):
     object: Literal['integration_mint']
     integration: str
@@ -31479,6 +32565,17 @@ class GetInstanceIntegrationsByProductMintsResponseDataItem(_GetInstanceIntegrat
 class GetInstanceIntegrationsByProductMintsResponse(TypedDict):
     object: Literal['list']
     data: list[GetInstanceIntegrationsByProductMintsResponseDataItem]
+
+
+class GetInstanceIssuersResponse(TypedDict):
+    #: The `iss` new tokens carry now.
+    active: str
+    #: The `iss` after a pending domain claim goes active, else null.
+    planned: str | None
+    #: Earlier issuers still accepted.
+    previous: list[str]
+    #: The key set that verifies tokens of every issuer listed.
+    jwks_uri: str
 
 
 class GetInstanceOpKeysResponseDataItem(TypedDict, total=False):
@@ -31608,6 +32705,9 @@ class GetInstanceScopesResponseDataItem(_GetInstanceScopesResponseDataItemRequir
     description: dict[str, str]
     sensitive: bool
     requires_verified_client: bool
+    requires_client_level: Literal['any', 'verified', 'certified']
+    owner_exempt: bool
+    wildcard: bool
 
 
 class GetInstanceScopesResponse(TypedDict):
@@ -31621,12 +32721,16 @@ class _PutInstanceScopesBodyScopesItemRequired(TypedDict):
 
 
 class PutInstanceScopesBodyScopesItem(_PutInstanceScopesBodyScopesItemRequired, total=False):
-    #: Title per locale, e.g. { "en": "Read listings", "es": "Leer anuncios" }. Up to 200 characters each; longer is refused with 422, never cut.
+    #: Title per locale, e.g. { "en": "Read listings", "es": "Leer anuncios" }. Up to 500 characters each; longer is refused with 422 unless ?too_long=trunca
     label: dict[str, str]
-    #: Explanation per locale. Up to 500 characters each; longer is refused with 422 (param scopes.<n>.description), never cut.
+    #: Explanation per locale. Up to 2000 characters each; longer is refused with 422 (param scopes.<n>.description) unless ?too_long=truncate.
     description: dict[str, str]
     sensitive: bool
     requires_verified_client: bool
+    #: The client level that may request the scope.
+    requires_client_level: Literal['any', 'verified', 'certified']
+    #: The developer who owns a client may request the scope with it on their own account whatever its level.
+    owner_exempt: bool
 
 
 class PutInstanceScopesBody(TypedDict):
@@ -31677,6 +32781,134 @@ class PutInstanceSigningKeyScheduleBody(_PutInstanceSigningKeyScheduleBodyRequir
     grace_period_seconds: int | None
     #: Default 24.
     prepublish_hours: int
+
+
+class _GetInstanceStagingCopiesResponseDataItemRequired(TypedDict):
+    object: Literal['instance_clone']
+    id: str
+    kind: Literal['clone', 'preview']
+    #: The new environment name (a preview is `preview-` and a slug of its ref).
+    name: str
+    #: `copying` while a large clone is filled by a background job; poll GET until `completed` or `failed`.
+    status: Literal['pending', 'copying', 'completed', 'failed', 'deleted']
+    source_instance_id: str
+    environment: Literal['development']
+    include: list[str]
+    mask_emails: bool
+    #: Epoch ms.
+    created_at: int
+
+
+class GetInstanceStagingCopiesResponseDataItem(_GetInstanceStagingCopiesResponseDataItemRequired, total=False):
+    ref: str | None
+    #: While copying: `sections.<name>` = { total, copied } rows.
+    progress: dict[str, Any]
+    #: The new instance.
+    instance_id: str | None
+    publishable_key: str | None
+    frontend_api_host: str | None
+    allowed_origins: list[str]
+    #: What was copied, per section.
+    counts: dict[str, Any]
+    #: What could not be placed (at most 100).
+    errors: list[dict[str, Any]]
+    #: Epoch ms.
+    expires_at: int | None
+    created_by: str | None
+    #: Epoch ms.
+    completed_at: int | None
+    #: Epoch ms.
+    deleted_at: int | None
+
+
+class _GetInstanceStagingCopiesResponseRequired(TypedDict):
+    object: Literal['list']
+    data: list[GetInstanceStagingCopiesResponseDataItem]
+    has_more: bool
+
+
+class GetInstanceStagingCopiesResponse(_GetInstanceStagingCopiesResponseRequired, total=False):
+    next_cursor: str | None
+
+
+class _PostInstanceStagingCopiesBodyRequired(TypedDict):
+    #: clone: a named environment that stays. preview: a short-lived one for a pull request, keyed on ref.
+    mode: Literal['clone', 'preview']
+
+
+class PostInstanceStagingCopiesBody(_PostInstanceStagingCopiesBodyRequired, total=False):
+    #: mode clone only: the environment name (lowercase letters, digits, hyphens; not development, production or starting with preview-).
+    name: str
+    #: A stable handle, e.g. a pull request number. Required for a preview. One live clone per ref: a repeat returns it (200) instead of creating another.
+    ref: str
+    #: What to copy. Default: config and roles. memberships needs users and organizations. A section over 2000 rows is refused: move it with a tenant export 
+    include: list[Literal['config', 'roles', 'organizations', 'users', 'memberships']]
+    #: Default true: user email addresses are replaced with unreachable ones and phone numbers, usernames and linked identities are left out. false keeps the
+    mask_emails: bool
+    #: mode preview only: hours until the preview is deleted (default 72).
+    ttl_hours: int
+    #: The origins the new instance accepts (e.g. the preview URL). Not copied from the source.
+    allowed_origins: list[str]
+    #: With an existing ref: re-apply the source's configuration to the clone and restart a preview's clock.
+    refresh: bool
+    #: Platform API only. Scopes of the secret key minted for the new instance (default app-runtime).
+    secret_key_preset: Literal['app-runtime', 'full']
+
+
+class _PostInstanceStagingCopiesResponseRequired(TypedDict):
+    object: Literal['instance_clone']
+    id: str
+    kind: Literal['clone', 'preview']
+    #: The new environment name (a preview is `preview-` and a slug of its ref).
+    name: str
+    #: `copying` while a large clone is filled by a background job; poll GET until `completed` or `failed`.
+    status: Literal['pending', 'copying', 'completed', 'failed', 'deleted']
+    source_instance_id: str
+    environment: Literal['development']
+    include: list[str]
+    mask_emails: bool
+    #: Epoch ms.
+    created_at: int
+
+
+class PostInstanceStagingCopiesResponse(_PostInstanceStagingCopiesResponseRequired, total=False):
+    ref: str | None
+    #: While copying: `sections.<name>` = { total, copied } rows.
+    progress: dict[str, Any]
+    #: The new instance.
+    instance_id: str | None
+    publishable_key: str | None
+    frontend_api_host: str | None
+    allowed_origins: list[str]
+    #: What was copied, per section.
+    counts: dict[str, Any]
+    #: What could not be placed (at most 100).
+    errors: list[dict[str, Any]]
+    #: Epoch ms.
+    expires_at: int | None
+    created_by: str | None
+    #: Epoch ms.
+    completed_at: int | None
+    #: Epoch ms.
+    deleted_at: int | None
+    #: The new instance's first secret key, shown once (null on a repeat for the same ref).
+    secret: str | None
+    secret_key_scopes: list[str]
+    replayed: bool
+    note: str
+
+
+class PostInstanceStagingCopiesByIdRefreshBodySyntheticUsers(TypedDict):
+    count: int
+    seed: str
+
+
+class PostInstanceStagingCopiesByIdRefreshBody(TypedDict, total=False):
+    #: Default: config only.
+    include: list[Literal['config', 'roles', 'organizations', 'users', 'memberships']]
+    synthetic_users: PostInstanceStagingCopiesByIdRefreshBodySyntheticUsers
+    #: A preview only: a new deadline from now.
+    ttl_hours: int
 
 
 class UserTraitsSchema(TypedDict):
@@ -31978,6 +33210,33 @@ class PostMachineTrustPoliciesByIdTestResponse(TypedDict):
     reasons: list[str]
 
 
+class _GetMachinesRevokedResponseDataItemRequired(TypedDict):
+    object: Literal['machine', 'machine_grant']
+    id: str
+    revoked_at: int
+
+
+class GetMachinesRevokedResponseDataItem(_GetMachinesRevokedResponseDataItemRequired, total=False):
+    #: `machine_grant` entries: the machine the grant belonged to.
+    machine_id: str
+    #: `machine_grant` entries: the resource server identifier, the `aud` of the tokens it covered.
+    audience: str
+    #: Secret-key callers only.
+    revoked_reason: str | None
+    #: Secret-key callers only.
+    revoked_by: ConfigChangelogEntryActor | None
+    owner_user_id: str | None
+    organization_id: str | None
+
+
+class GetMachinesRevokedResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[GetMachinesRevokedResponseDataItem]
+    has_more: bool
+    #: Opaque keyset cursor; pass as since on the next poll.
+    next_cursor: str | None
+
+
 class PatchMachinesByIdGrantsByGrantIdBody(TypedDict, total=False):
     scopes: list[str] | None
     scope_presets: list[str] | None
@@ -32220,6 +33479,22 @@ class PostMcpRegistryByIdDecideBody(TypedDict):
     status: Literal['approved', 'rejected']
 
 
+class _PostMessageLinksBodyRequired(TypedDict):
+    email: str
+    type: Literal['unsubscribe', 'preferences']
+
+
+class PostMessageLinksBody(_PostMessageLinksBodyRequired, total=False):
+    #: One of your optional notification categories. Required for `unsubscribe`, not allowed for `preferences`.
+    category: str
+
+
+class PostMessageLinksResponse(TypedDict):
+    object: Literal['message_link']
+    type: Literal['unsubscribe', 'preferences']
+    url: str
+
+
 class _GetMessageReceiversResponseDataItemRequired(TypedDict):
     object: Literal['message_receiver']
     provider: Literal['ses', 'brevo', 'mailgun', 'smtp2go', 'postmark', 'sendgrid', 'resend', 'twilio', 'vonage', 'messagebird', 'plivo']
@@ -32305,6 +33580,12 @@ class _GetMessagesResponseDataItemRequired(TypedDict):
 class GetMessagesResponseDataItem(_GetMessagesResponseDataItemRequired, total=False):
     #: The template that produced it (`verification_code`, `custom:<name>`, `push_mfa_challenge`, `provider_test`, ...). Null for a phone message.
     template: str | None
+    #: `auth` for Atlas's own sign-in mail, `transactional` for mail you sent with POST /v1/messages.
+    category: Literal['auth', 'transactional']
+    #: The `category` you sent with POST /v1/messages (one of your notification categories), or null.
+    message_category: str | None
+    #: The tags you sent with a transactional message.
+    tags: dict[str, str]
     #: ISO country of a phone number.
     country: str | None
     status_detail: str | None
@@ -32323,6 +33604,36 @@ class _GetMessagesResponseRequired(TypedDict):
 class GetMessagesResponse(_GetMessagesResponseRequired, total=False):
     #: Pass as starting_after for the next page.
     next_cursor: str | None
+
+
+class _PostMessagesBodyReplyTo2Required(TypedDict):
+    email: str
+
+
+class PostMessagesBodyReplyTo2(_PostMessagesBodyReplyTo2Required, total=False):
+    name: str
+
+
+PostMessagesBody = TypedDict(
+    'PostMessagesBody',
+    {
+    'to': 'str | list[str]',
+    'template': 'str',
+    'data': 'dict[str, str | float | bool]',
+    'subject': 'str',
+    'html': 'str',
+    'text': 'str',
+    'tags': 'dict[str, str]',
+    'reply_to': 'str | PostMessagesBodyReplyTo2',
+    'from': 'str | PostMessagesBodyReplyTo2',
+    'headers': 'dict[str, str]',
+    'unsubscribe_url': 'str',
+    'unsubscribe': 'bool',
+    'category': 'str',
+    'locale': 'str',
+    },
+    total=False,
+)
 
 
 class GetMessagesSummaryResponse(TypedDict):
@@ -32665,6 +33976,54 @@ class GetMfaFactorQuarantinesResponse(TypedDict, total=False):
     next_cursor: str | None
 
 
+class _PostMigrationsBySourceSessionsBodySessionsItemRequired(TypedDict):
+    #: When the legacy session ends (ISO 8601, or Unix ms). Must be in the future.
+    expires_at: str
+
+
+class PostMigrationsBySourceSessionsBodySessionsItem(_PostMigrationsBySourceSessionsBodySessionsItemRequired, total=False):
+    #: The legacy session token. Exactly one of token or token_hash.
+    token: str
+    #: SHA-256 hex of the token (UTF-8). Exactly one of token or token_hash.
+    token_hash: str
+    #: The Atlas user. Exactly one of user_id or external_id.
+    user_id: str
+    #: Your id for the user. Exactly one of user_id or external_id.
+    external_id: str
+    #: The person had completed a second factor in this session.
+    mfa_verified: bool
+
+
+class _PostMigrationsBySourceSessionsBodyRequired(TypedDict):
+    sessions: list[PostMigrationsBySourceSessionsBodySessionsItem]
+
+
+class PostMigrationsBySourceSessionsBody(_PostMigrationsBySourceSessionsBodyRequired, total=False):
+    #: Validate and count only.
+    dry_run: bool
+
+
+class PostMigrationsBySourceSessionsResponseErrorsItem(TypedDict):
+    index: int
+    code: Literal['invalid_row', 'unknown_field', 'user_not_found', 'session_expired', 'already_exchanged']
+    message: str
+
+
+class _PostMigrationsBySourceSessionsResponseRequired(TypedDict):
+    object: Literal['migration_session_import']
+    source: str
+    dry_run: bool
+    received: int
+    imported: int
+    failed: int
+    errors: list[PostMigrationsBySourceSessionsResponseErrorsItem]
+
+
+class PostMigrationsBySourceSessionsResponse(_PostMigrationsBySourceSessionsResponseRequired, total=False):
+    #: The bridge mode for this source. Imported sessions exchange only in `session_table` mode.
+    bridge_mode: str | None
+
+
 class PostMigrationsBySourceVerifyBody(TypedDict):
     #: The old session token.
     token: str
@@ -32684,6 +34043,84 @@ class GetMigrationsStatusResponse(TypedDict, total=False):
     object: Literal['migration_status']
 
 
+class _GetNativeAppsResponseDataItemRequired(TypedDict):
+    object: Literal['native_app']
+    #: napp_...: send it as `native_app_id` when starting a sign-in and as the `X-Atlas-App-Id` header.
+    id: str
+    platform: Literal['ios', 'android', 'development']
+    callback_urls: list[str]
+    #: Epoch milliseconds.
+    created_at: int
+
+
+class GetNativeAppsResponseDataItem(_GetNativeAppsResponseDataItemRequired, total=False):
+    #: development apps only.
+    allowed_users: list[str]
+    #: development apps only: epoch milliseconds.
+    expires_at: int
+    #: development apps only: expires_at has passed, so the app signs nobody in until it is extended.
+    expired: bool
+    bundle_id: str
+    team_id: str
+    package_name: str
+    sha256_cert_fingerprints: list[str]
+
+
+class GetNativeAppsResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[GetNativeAppsResponseDataItem]
+    #: Whether another page follows the cursor.
+    has_more: bool
+    #: The cursor to pass as `starting_after` for the next page on a keyset-paginated list; null on the last page (and absent on lists that are not cursor-pa
+    next_cursor: str | None
+
+
+class PostNativeAppsBody(TypedDict, total=False):
+    #: Required on create; cannot be changed. development: a test app with no store identity (Expo Go, a dev build), for the users in allowed_users until exp
+    platform: Literal['ios', 'android', 'development']
+    #: ios: the bundle identifier (with team_id).
+    bundle_id: str
+    #: ios: the Apple team id (with bundle_id).
+    team_id: str
+    #: android: the application id (with sha256_cert_fingerprints).
+    package_name: str
+    #: android: signing-certificate SHA-256 fingerprints, 64 hex characters, colons optional; stored in uppercase colon form.
+    sha256_cert_fingerprints: list[str]
+    #: URLs a sign-in may return to: https (Universal Links / App Links) or an app-specific private-use scheme such as exampleapp://oauth-callback (RFC 8252 
+    callback_urls: list[str]
+    #: development: the user ids (user_...) or email addresses that may sign in through this app. PATCH replaces the list.
+    allowed_users: list[str]
+    #: development: epoch milliseconds when the app stops working, in the future and at most 90 days ahead. PATCH extends it (403 NATIVE_APP_EXPIRED at sign-
+    expires_at: int
+
+
+class GetNativeAppsPublishableKeyResponse(TypedDict):
+    object: Literal['native_app_key_restriction']
+    #: Empty = the publishable key works from any app (the default).
+    app_ids: list[str]
+
+
+class PutNativeAppsPublishableKeyBody(TypedDict):
+    app_ids: list[str]
+
+
+class DeleteNativeAppsByIdResponse(TypedDict, total=False):
+    object: Literal['native_app']
+    id: str
+    deleted: Literal[True]
+
+
+class PatchNativeAppsByIdBody(TypedDict, total=False):
+    platform: Literal['ios', 'android', 'development'] | None
+    bundle_id: str | None
+    team_id: str | None
+    package_name: str | None
+    sha256_cert_fingerprints: list[str] | None
+    callback_urls: list[str] | None
+    allowed_users: list[str] | None
+    expires_at: int | None
+
+
 class GetOauthApplicationTypesResponseDataItem(TypedDict):
     object: Literal['oauth_application_type']
     key: str
@@ -32696,6 +34133,45 @@ class GetOauthApplicationTypesResponse(TypedDict):
     object: Literal['list']
     data: list[GetOauthApplicationTypesResponseDataItem]
     has_more: bool
+
+
+class GetOauthClientsByIdConsentsResponseDataItem(TypedDict, total=False):
+    object: Literal['oauth_client_consent']
+    user_id: str
+    scopes: list[str]
+    #: The consent grant id, usable with GET/PATCH/DELETE /v1/grants/{id}. Backend API only.
+    grant_id: str | None
+    #: The metadata set on the grant. Backend API only.
+    metadata: dict[str, Any]
+    status: Literal['active', 'revoked']
+    #: When the user first authorized the client (Unix ms).
+    created_at: int
+    #: The last time a token was issued or refreshed for the user and client (Unix ms).
+    last_used_at: int | None
+    #: When the consent was revoked, for status revoked.
+    revoked_at: int | None
+
+
+class GetOauthClientsByIdConsentsResponse(TypedDict, total=False):
+    object: Literal['list']
+    client_id: str
+    data: list[GetOauthClientsByIdConsentsResponseDataItem]
+    has_more: bool
+    #: Pass as starting_after for the next page.
+    next_cursor: str | None
+
+
+class PostOauthClientsByIdConsentsRevokeBody(TypedDict, total=False):
+    #: Only revoke these users. Omit to revoke every active consent.
+    user_ids: list[str]
+
+
+class PostOauthClientsByIdConsentsRevokeResponse(TypedDict, total=False):
+    object: Literal['oauth_client_consents_revocation']
+    client_id: str
+    consents_revoked: int
+    #: Active refresh grants that were revoked with the consents.
+    tokens_revoked: int
 
 
 class PutOauthClientsByIdOrganizationAccessBody(TypedDict):
@@ -32772,6 +34248,15 @@ class GetOauthClientsByIdUsageResponseTotals(TypedDict, total=False):
     rate_limited: int
 
 
+class GetOauthClientsByIdUsageResponseLatestError(TypedDict, total=False):
+    """The most recent failed token endpoint request in the window; null when there was none."""
+    #: The OAuth error code, for example invalid_grant.
+    code: str
+    endpoint: str
+    #: Unix ms.
+    at: int
+
+
 class GetOauthClientsByIdUsageResponseDataItem(TypedDict, total=False):
     day: str
     #: Token endpoint requests that passed client authentication.
@@ -32782,6 +34267,8 @@ class GetOauthClientsByIdUsageResponseDataItem(TypedDict, total=False):
     active_users: int
     #: Token endpoint requests answered with an error.
     errors: int
+    #: The day's errors by OAuth error code, for example {"invalid_grant": 1}. Errors recorded without a code count under "unknown".
+    errors_by_code: dict[str, int]
     #: Requests refused by the per-client rate limit.
     rate_limited: int
 
@@ -32795,6 +34282,8 @@ class GetOauthClientsByIdUsageResponse(TypedDict, total=False):
     #: Last day (UTC date).
     until: str
     totals: GetOauthClientsByIdUsageResponseTotals
+    #: The most recent failed token endpoint request in the window; null when there was none.
+    latest_error: GetOauthClientsByIdUsageResponseLatestError | None
     data: list[GetOauthClientsByIdUsageResponseDataItem]
 
 
@@ -32818,6 +34307,25 @@ class _PutOauthClientsByIdWebhookBodyRequired(TypedDict):
 class PutOauthClientsByIdWebhookBody(_PutOauthClientsByIdWebhookBodyRequired, total=False):
     #: Defaults to all of them.
     enabled_events: list[Literal['user.updated', 'user.deleted', 'grant.revoked', 'user.deletion_scheduled', 'user.deletion_canceled', 'signing_key.staged', 'signing_key.activated']]
+
+
+class GetOauthDeviceRequestsResponse(TypedDict, total=False):
+    object: Literal['oauth_device_request']
+    #: The signed-in Atlas user id.
+    subject: str
+    #: The code the person entered.
+    user_code: str
+    client: GetOauthLoginRequestsResponseClient
+    requested_scope: list[str]
+    audience: str | None
+    #: The challenge expires (epoch ms).
+    expires_at: int
+
+
+class PutOauthDeviceRequestsAcceptResponse(TypedDict, total=False):
+    object: Literal['oauth_device_redirect']
+    #: Send the end user’s browser here next.
+    redirect_to: str
 
 
 class _PostOauthGrantsImportBodyGrantsItemRefreshTokensItemRequired(TypedDict):
@@ -32863,6 +34371,11 @@ class PostOauthGrantsImportResponseResultsItem(TypedDict, total=False):
     message: str
 
 
+class PostOauthGrantsImportResponseDataItem(TypedDict, total=False):
+    index: int
+    status: Literal['imported', 'failed']
+
+
 class PostOauthGrantsImportResponseErrorsItem(TypedDict, total=False):
     index: int
     message: str
@@ -32877,6 +34390,8 @@ class PostOauthGrantsImportResponse(TypedDict, total=False):
     refresh_tokens: int
     #: One entry per submitted grant, in order.
     results: list[PostOauthGrantsImportResponseResultsItem]
+    #: The same entries as `results`, under the name every import report shares.
+    data: list[PostOauthGrantsImportResponseDataItem]
     errors: list[PostOauthGrantsImportResponseErrorsItem]
     note: str
 
@@ -33223,6 +34738,16 @@ class _PostOrganizationConnectionsByIdAcceptBodyRequired(TypedDict):
 
 class PostOrganizationConnectionsByIdAcceptBody(_PostOrganizationConnectionsByIdAcceptBodyRequired, total=False):
     accepted_by: str
+
+
+class _GetOrganizationInvitationsResponseRequired(TypedDict):
+    object: Literal['list']
+    data: list[dict[str, Any]]
+    has_more: bool
+
+
+class GetOrganizationInvitationsResponse(_GetOrganizationInvitationsResponseRequired, total=False):
+    next_cursor: str | None
 
 
 class _PostOrganizationsByIdAppWebhookEndpointsByEndpointIdDeliveriesByDeliveryIdRedeliverResponseRequired(TypedDict):
@@ -33779,6 +35304,1039 @@ class PostPasskeyCampaignsBody(_PostPasskeyCampaignsBodyRequired, total=False):
     ends_at: int
 
 
+class GetPcaActionRegistryResponseNamespacesItemCounts(TypedDict, total=False):
+    actions: int
+    confirmed: int
+    unconfirmed: int
+    deprecated: int
+
+
+class GetPcaActionRegistryResponseNamespacesItem(TypedDict, total=False):
+    ns: str
+    active_version: str
+    digest: str
+    pinned: bool
+    updated_at: str
+    counts: GetPcaActionRegistryResponseNamespacesItemCounts
+
+
+class GetPcaActionRegistryResponsePublisherKeysItem(TypedDict, total=False):
+    kid: str
+    #: The Ed25519 public key.
+    pk: str
+    display_name: str | None
+    created_at: str
+
+
+class GetPcaActionRegistryResponseReviewerKeysItem(TypedDict, total=False):
+    kid: str
+    #: The Ed25519 public key.
+    pk: str
+    reviewer_id: str | None
+    display_name: str | None
+
+
+class GetPcaActionRegistryResponse(TypedDict, total=False):
+    object: Literal['pca_action_registry']
+    #: true once any namespace has a published version.
+    registry_mode: bool
+    namespaces: list[GetPcaActionRegistryResponseNamespacesItem]
+    publisher_keys: list[GetPcaActionRegistryResponsePublisherKeysItem]
+    reviewer_keys: list[GetPcaActionRegistryResponseReviewerKeysItem]
+
+
+class GetPcaActionRegistryActionsResponseDataItem(TypedDict, total=False):
+    verb: str
+    ns: str
+    version: str
+    title: str
+    state: Literal['confirmed', 'unconfirmed', 'stale', 'deprecated']
+    traits: list[str]
+    risk: int
+    rules_text: list[str]
+
+
+class GetPcaActionRegistryActionsResponse(TypedDict, total=False):
+    data: list[GetPcaActionRegistryActionsResponseDataItem]
+
+
+class GetPcaActionRegistryActionsByVerbResponseCard(TypedDict, total=False):
+    text: str
+    lines: list[dict[str, Any]]
+
+
+GetPcaActionRegistryActionsByVerbResponseHistoryItemRules = TypedDict(
+    'GetPcaActionRegistryActionsByVerbResponseHistoryItemRules',
+    {
+    'class': "Literal['equal', 'narrow', 'widen', 'incomparable']",
+    'reasons': 'list[str]',
+    },
+    total=False,
+)
+
+
+GetPcaActionRegistryActionsByVerbResponseHistoryItem = TypedDict(
+    'GetPcaActionRegistryActionsByVerbResponseHistoryItem',
+    {
+    'version': 'str',
+    'class': 'str',
+    'reasons': 'list[str]',
+    'rules': 'GetPcaActionRegistryActionsByVerbResponseHistoryItemRules',
+    },
+    total=False,
+)
+
+
+GetPcaActionRegistryActionsByVerbResponse = TypedDict(
+    'GetPcaActionRegistryActionsByVerbResponse',
+    {
+    'object': "Literal['pca_action']",
+    'verb': 'str',
+    'ns': 'str',
+    'version': 'str',
+    'state': "Literal['confirmed', 'unconfirmed', 'stale', 'deprecated']",
+    'def': 'dict[str, Any]',
+    'def_digest': 'str',
+    'card': 'GetPcaActionRegistryActionsByVerbResponseCard',
+    'effective': 'dict[str, Any]',
+    'rules': 'dict[str, Any] | None',
+    'rules_text': 'list[str]',
+    'compiled_rules': 'dict[str, Any] | None',
+    'history': 'list[GetPcaActionRegistryActionsByVerbResponseHistoryItem]',
+    },
+    total=False,
+)
+
+
+class PostPcaActionRegistryActionsByVerbReviewResponseLintItem(TypedDict, total=False):
+    rule: str
+    severity: Literal['error', 'warning', 'note']
+    verb: str
+    param: str
+    message: str
+
+
+PostPcaActionRegistryActionsByVerbReviewResponse = TypedDict(
+    'PostPcaActionRegistryActionsByVerbReviewResponse',
+    {
+    'verb': 'str',
+    'ns': 'str',
+    'origin': "Literal['import', 'template', 'sync', 'edit']",
+    'change': "Literal['added', 'changed', 'removed', None]",
+    'source_id': 'str | None',
+    'def': 'dict[str, Any]',
+    'def_digest': 'str | None',
+    'state': "Literal['authored', 'unreviewed', 'suggested', 'confirmed', 'stale']",
+    'review': 'dict[str, Any]',
+    'card_text': 'str',
+    'lint': 'list[PostPcaActionRegistryActionsByVerbReviewResponseLintItem]',
+    'rules': 'dict[str, Any] | None',
+    'rules_text': 'list[str]',
+    'rules_lint': 'list[PostPcaActionRegistryActionsByVerbReviewResponseLintItem]',
+    'rules_review': 'dict[str, Any] | None',
+    'rules_review_needed': 'bool',
+    'registry_traits': 'list[dict[str, Any]]',
+    'diff_vs_active': 'GetPcaActionRegistryActionsByVerbResponseHistoryItemRules',
+    'rules_diff_vs_active': 'GetPcaActionRegistryActionsByVerbResponseHistoryItemRules',
+    'updated_by': 'str | None',
+    'updated_at': 'str',
+    },
+    total=False,
+)
+
+
+class GetPcaActionRegistryDraftsResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[PostPcaActionRegistryActionsByVerbReviewResponse]
+
+
+class DeletePcaActionRegistryDraftsByVerbResponse(TypedDict, total=False):
+    object: Literal['pca_action_draft']
+    verb: str
+    deleted: Literal[True]
+
+
+class PatchPcaActionRegistryDraftsByVerbBody(TypedDict, total=False):
+    """Any edit drops a confirmation and a rules review: the definition is unreviewed again."""
+    title: str | None
+    description: str | None
+    effects: list[str] | None
+    params: dict[str, Any] | None
+    reversibility: dict[str, Any] | None
+    compensates: str | None
+    traits: list[str] | None
+    #: The business rules (null removes them).
+    rules: dict[str, Any] | None
+
+
+class PostPcaActionRegistryDraftsByVerbConfirmBodyAttestationDismissedItem(TypedDict, total=False):
+    trait: str
+    reason: str
+
+
+class PostPcaActionRegistryDraftsByVerbConfirmBodyAttestation(TypedDict):
+    """The reviewer's signed decision over the definition with `traits` = final_traits (signed in
+    the browser with the reviewer key the passkey unwraps).
+    """
+    def_digest: str
+    traits_digest: str
+    facts_digest: str
+    final_traits: list[str]
+    dismissed: list[PostPcaActionRegistryDraftsByVerbConfirmBodyAttestationDismissedItem]
+    reviewer_kid: str
+    #: Seconds; at most 10 minutes old and 2 minutes ahead.
+    ts: int
+    sig: str
+
+
+class PostPcaActionRegistryDraftsByVerbConfirmBodyRulesReview(TypedDict, total=False):
+    """A signed rules review (needed to publish widened rules)."""
+    verb: str
+    def_digest: str
+    rules_digest: str
+    reviewer_kid: str
+    ts: int
+    sig: str
+
+
+class PostPcaActionRegistryDraftsByVerbConfirmBodyAssertion(TypedDict):
+    """WebAuthn assertion by the reviewer's passkey over sha256('atlas-pca/action-review-
+    challenge/v1\\0' || review message || rules review message).
+    """
+    #: The passkey credential id.
+    credential_id: str
+    #: response.authenticatorData.
+    authenticatorData: str
+    #: response.clientDataJSON.
+    clientDataJSON: str
+    #: response.signature.
+    signature: str
+
+
+class _PostPcaActionRegistryDraftsByVerbConfirmBodyRequired(TypedDict):
+    #: The reviewer's signed decision over the definition with `traits` = final_traits (signed in the browser with the reviewer key the passkey unwraps).
+    attestation: PostPcaActionRegistryDraftsByVerbConfirmBodyAttestation
+    #: WebAuthn assertion by the reviewer's passkey over sha256('atlas-pca/action-review-challenge/v1\0' || review message || rules review message).
+    assertion: PostPcaActionRegistryDraftsByVerbConfirmBodyAssertion
+
+
+class PostPcaActionRegistryDraftsByVerbConfirmBody(_PostPcaActionRegistryDraftsByVerbConfirmBodyRequired, total=False):
+    #: A signed rules review (needed to publish widened rules).
+    rules_review: PostPcaActionRegistryDraftsByVerbConfirmBodyRulesReview
+
+
+PostPcaActionRegistryImportsBody = TypedDict(
+    'PostPcaActionRegistryImportsBody',
+    {
+    'ns': 'str',
+    'from': "Literal['openapi', 'mcp', 'graphql', 'grpc', 'asyncapi', 'jsonschema']",
+    'url': 'str',
+    'source': 'str',
+    'verb': 'str',
+    'track': 'bool',
+    'schedule': "Literal['off', 'hourly', 'daily']",
+    },
+    total=False,
+)
+
+
+class PostPcaActionRegistryImportsResponseTodoItem(TypedDict, total=False):
+    where: str
+    code: str
+    message: str
+
+
+class PostPcaActionRegistryImportsResponse(TypedDict, total=False):
+    object: Literal['pca_action_import']
+    #: Drafts written (operations equal to the current definition are skipped).
+    imported: int
+    verbs: list[str]
+    todo: list[PostPcaActionRegistryImportsResponseTodoItem]
+    source_id: str
+
+
+GetPcaActionRegistryNamespacesByNsDiffResponseChangesItem = TypedDict(
+    'GetPcaActionRegistryNamespacesByNsDiffResponseChangesItem',
+    {
+    'verb': 'str',
+    'class': "Literal['equal', 'narrow', 'widen', 'incomparable', 'added', 'removed', 'deprecated']",
+    'reasons': 'list[str]',
+    'rules': 'GetPcaActionRegistryActionsByVerbResponseHistoryItemRules',
+    'reviewed': 'bool',
+    },
+    total=False,
+)
+
+
+GetPcaActionRegistryNamespacesByNsDiffResponse = TypedDict(
+    'GetPcaActionRegistryNamespacesByNsDiffResponse',
+    {
+    'ok': 'bool',
+    'from': 'str',
+    'to': 'str',
+    'code': 'str',
+    'message': 'str',
+    'verbs': 'list[str]',
+    'changes': 'list[GetPcaActionRegistryNamespacesByNsDiffResponseChangesItem]',
+    },
+    total=False,
+)
+
+
+class DeletePcaActionRegistryNamespacesByNsPinResponse(TypedDict, total=False):
+    object: Literal['pca_action_head']
+    ns: str
+    active_version: str
+    pinned: bool
+    changes: list[GetPcaActionRegistryNamespacesByNsDiffResponseChangesItem]
+
+
+class PutPcaActionRegistryNamespacesByNsPinBody(TypedDict):
+    #: The stored version to activate and pin (MAJOR.MINOR.PATCH).
+    version: str
+
+
+class GetPcaActionRegistryNamespacesByNsVersionsResponseDataItem(TypedDict, total=False):
+    version: str
+    digest: str
+    prev: str | None
+    status: Literal['active', 'staged']
+    #: How it was published: `secret_key`, a console user, or a publisher key.
+    published_by: str
+    created_at: str
+    changes: list[GetPcaActionRegistryNamespacesByNsDiffResponseChangesItem]
+
+
+class GetPcaActionRegistryNamespacesByNsVersionsResponse(TypedDict, total=False):
+    data: list[GetPcaActionRegistryNamespacesByNsVersionsResponseDataItem]
+
+
+class GetPcaActionRegistryNamespacesByNsVersionsByVersionResponse(TypedDict, total=False):
+    object: Literal['pca_action_version']
+    version: str
+    digest: str
+    prev: str | None
+    status: Literal['active', 'staged']
+    #: How it was published: `secret_key`, a console user, or a publisher key.
+    published_by: str
+    created_at: str
+    changes: list[GetPcaActionRegistryNamespacesByNsDiffResponseChangesItem]
+    ns: str
+    pack: dict[str, Any]
+    rules: dict[str, Any]
+    traits: dict[str, Any]
+    deprecated: list[str]
+
+
+class _PostPcaActionRegistryPacksBodyRequired(TypedDict):
+    #: The signed action pack (its namespace, version, definitions and publisher signature).
+    pack: dict[str, Any]
+
+
+class PostPcaActionRegistryPacksBody(_PostPcaActionRegistryPacksBodyRequired, total=False):
+    #: The business rules of the pack, keyed by verb.
+    rules: dict[str, Any]
+    #: The custom traits of the namespace (omit for the core set).
+    traits: dict[str, Any]
+
+
+class PostPcaActionRegistryPacksResponse(TypedDict, total=False):
+    object: Literal['pca_action_version']
+    ns: str
+    version: str
+    digest: str
+    prev: str | None
+    status: Literal['active', 'staged']
+    changes: list[GetPcaActionRegistryNamespacesByNsDiffResponseChangesItem]
+    published_drafts: int
+
+
+class _PostPcaActionRegistryPublishBodyRequired(TypedDict):
+    #: The action namespace.
+    ns: str
+
+
+class PostPcaActionRegistryPublishBody(_PostPcaActionRegistryPublishBodyRequired, total=False):
+    #: MAJOR.MINOR.PATCH; default: the next patch version.
+    version: str
+
+
+class _PostPcaActionRegistryPublisherKeysBodyRequired(TypedDict):
+    #: The key id (not a reserved id, and never one starting with `rv_`).
+    kid: str
+    #: The Ed25519 public key (32 bytes). A key already pinned under another role or id is refused with 409.
+    pk: str
+
+
+class PostPcaActionRegistryPublisherKeysBody(_PostPcaActionRegistryPublisherKeysBodyRequired, total=False):
+    display_name: str
+
+
+class PostPcaActionRegistryPublisherKeysResponse(TypedDict, total=False):
+    object: Literal['pca_action_publisher_key']
+    kid: str
+    pk: str
+    display_name: str | None
+
+
+class GetPcaActionRegistryReviewersResponseDataItemCredentialsItem(TypedDict, total=False):
+    id: str
+    name: str | None
+    transports: list[str]
+    status: str
+    created_at: str
+    last_used_at: str | None
+    revoked_at: str | None
+
+
+class GetPcaActionRegistryReviewersResponseDataItem(TypedDict, total=False):
+    object: Literal['pca_action_reviewer']
+    id: str
+    #: `rv_<id>` once enrolled.
+    kid: str | None
+    pk: str | None
+    display_name: str | None
+    email: str | None
+    user_id: str | None
+    status: Literal['pending', 'active', 'disabled']
+    created_at: str
+    credentials: list[GetPcaActionRegistryReviewersResponseDataItemCredentialsItem]
+
+
+class GetPcaActionRegistryReviewersResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[GetPcaActionRegistryReviewersResponseDataItem]
+
+
+class PostPcaActionRegistryReviewersEnrolmentsBody(TypedDict, total=False):
+    display_name: str
+    email: str
+    #: The dashboard user who reviews from the console (default from the console: the signed-in user).
+    user_id: str
+
+
+class PostPcaActionRegistryReviewersEnrolmentsResponse(TypedDict, total=False):
+    object: Literal['pca_action_reviewer_enrolment']
+    id: str
+    #: Single-use link (24 hours).
+    enrolment_url: str
+    expires_at: str
+    reviewer_id: str
+
+
+class GetPcaActionRegistrySourcesResponseDataItem(TypedDict, total=False):
+    object: Literal['pca_action_source']
+    id: str
+    ns: str
+    kind: Literal['openapi', 'mcp', 'graphql', 'grpc', 'asyncapi', 'jsonschema']
+    uri: str
+    verb: str | None
+    schedule: Literal['off', 'hourly', 'daily']
+    last_synced_at: str | None
+    next_run_at: str | None
+    last_status: Literal['ok', 'changes', 'error', None]
+    last_error: str | None
+    failures: int
+    operations: int
+    created_at: str
+
+
+class GetPcaActionRegistrySourcesResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[GetPcaActionRegistrySourcesResponseDataItem]
+
+
+PostPcaActionRegistrySourcesBody = TypedDict(
+    'PostPcaActionRegistrySourcesBody',
+    {
+    'ns': 'str',
+    'from': "Literal['openapi', 'mcp', 'graphql', 'grpc', 'asyncapi', 'jsonschema']",
+    'url': 'str',
+    'verb': 'str',
+    'schedule': "Literal['off', 'hourly', 'daily']",
+    },
+    total=False,
+)
+
+
+class DeletePcaActionRegistrySourcesByIdResponse(TypedDict, total=False):
+    object: Literal['pca_action_source']
+    id: str
+    deleted: Literal[True]
+
+
+class PatchPcaActionRegistrySourcesByIdBody(TypedDict, total=False):
+    url: str | None
+    verb: str | None
+    schedule: Literal['off', 'hourly', 'daily'] | None
+
+
+class PostPcaActionRegistrySourcesByIdSyncResponseEntriesItem(TypedDict, total=False):
+    verb: str
+    change: Literal['added', 'changed', 'unchanged', 'removed']
+    diff: GetPcaActionRegistryActionsByVerbResponseHistoryItemRules
+
+
+class PostPcaActionRegistrySourcesByIdSyncResponse(TypedDict, total=False):
+    object: Literal['pca_action_sync']
+    source_id: str
+    ns: str
+    entries: list[PostPcaActionRegistrySourcesByIdSyncResponseEntriesItem]
+    needs_review: bool
+    drafted: list[str]
+
+
+class GetPcaActionRegistryTemplatesResponseDataItem(TypedDict, total=False):
+    id: str
+    title: str
+    description: str
+    ns: str
+    actions: int
+    traits: list[str]
+
+
+class GetPcaActionRegistryTemplatesResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[GetPcaActionRegistryTemplatesResponseDataItem]
+
+
+class PostPcaActionRegistryTemplatesByIdApplyBody(TypedDict, total=False):
+    #: The action namespace.
+    ns: str
+
+
+class GetPcaApprovalsSettingsResponseChannels(TypedDict, total=False):
+    push: bool
+    email: bool
+    sms: bool
+    slack: bool
+    webhook: bool
+
+
+class GetPcaApprovalsSettingsResponseCiba1(TypedDict, total=False):
+    enabled: bool
+    #: notify: a CIBA deny denies; require: a member must also approve in their identity provider.
+    mode: Literal['notify', 'require']
+    backchannel_authentication_endpoint: str
+    token_endpoint: str
+    client_id: str
+    login_hint: Literal['email', 'subject_id']
+    client_secret_set: bool
+
+
+class GetPcaApprovalsSettingsResponse(TypedDict, total=False):
+    object: Literal['pca_approval_settings']
+    channels: GetPcaApprovalsSettingsResponseChannels
+    default_member_channels: list[str]
+    ciba: GetPcaApprovalsSettingsResponseCiba1 | None
+    slack_webhook_set: bool
+
+
+class PutPcaApprovalsSettingsBodyCiba1(TypedDict, total=False):
+    enabled: bool
+    #: notify: a CIBA deny denies; require: a member must also approve in their identity provider.
+    mode: Literal['notify', 'require']
+    backchannel_authentication_endpoint: str
+    token_endpoint: str
+    client_id: str
+    login_hint: Literal['email', 'subject_id']
+
+
+class PutPcaApprovalsSettingsBody(TypedDict, total=False):
+    channels: GetPcaApprovalsSettingsResponseChannels
+    default_member_channels: list[Literal['push', 'email', 'sms', 'ciba']]
+    ciba: PutPcaApprovalsSettingsBodyCiba1 | None
+    #: A hooks.slack.com incoming-webhook URL; stored encrypted, never returned. null clears.
+    slack_webhook_url: str | None
+    #: Stored encrypted, never returned. null clears.
+    ciba_client_secret: str | None
+
+
+class GetPcaApproversResponseDataItemMembersItem(TypedDict, total=False):
+    id: str
+    display_name: str | None
+    user_id: str | None
+    email: str | None
+    phone: str | None
+    channels: list[Literal['push', 'email', 'sms', 'ciba']]
+    status: str
+    created_at: str
+
+
+class GetPcaApproversResponseDataItemCredentialsItem(TypedDict, total=False):
+    id: str
+    member_id: str
+    name: str | None
+    transports: list[str]
+    aaguid: str | None
+    status: Literal['active', 'revoked']
+    created_at: str
+    last_used_at: str | None
+    revoked_at: str | None
+
+
+class GetPcaApproversResponseDataItem(TypedDict, total=False):
+    object: Literal['pca_approver']
+    id: str
+    principal_pub: str
+    subject_type: Literal['user', 'org', 'machine']
+    subject_id: str
+    display_name: str | None
+    quorum: int
+    status: Literal['active', 'disabled']
+    created_at: str
+    members: list[GetPcaApproversResponseDataItemMembersItem]
+    credentials: list[GetPcaApproversResponseDataItemCredentialsItem]
+
+
+class GetPcaApproversResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[GetPcaApproversResponseDataItem]
+
+
+class PostPcaApproversEnrolmentsBody(TypedDict, total=False):
+    #: New approver: the subject the principal key is bound to.
+    subject_type: Literal['user', 'org', 'machine']
+    subject_id: str
+    #: Add a delegate (or, with member_id, another passkey) to an existing approver.
+    approver_id: str
+    member_id: str
+    display_name: str
+    email: str
+    #: E.164.
+    phone: str
+    #: Instance user of the member (push notifications go to their devices).
+    user_id: str
+    channels: list[Literal['push', 'email', 'sms', 'ciba']]
+
+
+class PostPcaApproversEnrolmentsResponse(TypedDict, total=False):
+    object: Literal['pca_approver_enrolment']
+    id: str
+    #: Single-use link to the hosted enrolment page (valid 24 hours).
+    enrolment_url: str
+    expires_at: str
+    approver_id: str | None
+    member_id: str | None
+
+
+class PatchPcaApproversByIdBody(TypedDict, total=False):
+    quorum: int | None
+    display_name: str | None
+    status: Literal['active', 'disabled'] | None
+
+
+class PatchPcaApproversByIdMembersByMemberIdBody(TypedDict, total=False):
+    channels: list[Literal['push', 'email', 'sms', 'ciba']] | None
+    email: str | None
+    phone: str | None
+    display_name: str | None
+    status: Literal['active', 'disabled'] | None
+
+
+class PostPcaBeaconsBody(TypedDict, total=False):
+    #: A signed v2 liveness beacon {v:2, instance, scope, epoch, seq, issued_at, not_after, issuer, sig} (principal path).
+    beacon: dict[str, Any]
+    #: Operator path: '*' (default) or a grant_ref.
+    scope: str
+    #: Operator path: validity in ms (default 300000, max 3600000).
+    validity_ms: int
+
+
+class PostPcaBeaconsResponse(TypedDict, total=False):
+    object: Literal['pca_beacon']
+    beacon: dict[str, Any]
+    #: Bind this into the PCActn as freshness.beacon_ref.
+    beacon_ref: str
+    issuer_kind: Literal['principal', 'operator']
+
+
+class GetPcaBondAccountsResponse(TypedDict, total=False):
+    object: Literal['pca_bond_account']
+    account: str
+    balance: float
+
+
+class PostPcaBondAccountsBody(TypedDict):
+    #: The depositor: a principal base64url Ed25519 public key.
+    account: str
+    #: Positive amount to credit.
+    amount: float
+
+
+class PostPcaConstitutionsBody(TypedDict):
+    grant_ref: str
+    #: A `SignedConstitution`: { version, principal, invariants[], issued_at?, id, sig } (Ed25519 by the grant principal over the domain-separated content id
+    constitution: dict[str, Any]
+
+
+class PostPcaConstitutionsResponse(TypedDict, total=False):
+    object: Literal['pca_constitution']
+    grant_ref: str
+    constitution: dict[str, Any]
+    constitution_id: str
+    registered_at: str
+    #: Live monitor head: { seq, state_digest, updated_at } (null until the first admitted action).
+    monitor: dict[str, Any]
+    #: Proof-of-progress counters when the grant commits a goal: { goal_commitment, seq, spent, remaining, exploration_budget, state_digest, head }.
+    progress: dict[str, Any]
+
+
+class GetPcaGrantsResponseDataItem(TypedDict, total=False):
+    object: Literal['pca_grant']
+    grant_ref: str
+    status: str
+    principal: str
+    agent: str
+    chain_digest: str
+
+
+class GetPcaGrantsResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[GetPcaGrantsResponseDataItem]
+    next_cursor: str
+
+
+class DeletePcaGrantsByGrantRefBody(TypedDict, total=False):
+    #: Ed25519 by the grant principal over the domain-separated {grant_ref, grant_ref} revocation message.
+    principal_sig: str
+
+
+class DeletePcaGrantsByGrantRefResponse(TypedDict, total=False):
+    object: Literal['pca_grant_revocation']
+    revoked: list[str]
+    revocation_epoch: dict[str, Any]
+
+
+class GetPcaGrantsByGrantRefResponse(TypedDict, total=False):
+    object: Literal['pca_grant']
+    grant_ref: str
+    status: str
+    grant: dict[str, Any]
+    remaining_budget: dict[str, Any]
+    revoked_capabilities: int
+    revocation_epoch: dict[str, Any]
+
+
+class _PostPcaGrantsByGrantRefAmendBodyAuthorityRequired(TypedDict):
+    verbs: list[str]
+    resources: list[str]
+
+
+class PostPcaGrantsByGrantRefAmendBodyAuthority(_PostPcaGrantsByGrantRefAmendBodyAuthorityRequired, total=False):
+    """The comparable shape of a grant's authority: explicit verbs, resource patterns (exact, or a
+    trailing * prefix), named numeric ceilings and an expiry. Admission enforces verbs,
+    resources and expires_at; limits are recorded and compared.
+    """
+    #: Named non-negative ceilings, e.g. money.usd.
+    limits: dict[str, Any]
+    #: Epoch milliseconds.
+    expires_at: int
+
+
+class _PostPcaGrantsByGrantRefAmendBodyRequired(TypedDict):
+    action: Literal['narrow', 'merge', 'replace']
+    #: The comparable shape of a grant's authority: explicit verbs, resource patterns (exact, or a trailing * prefix), named numeric ceilings and an expiry. 
+    authority: PostPcaGrantsByGrantRefAmendBodyAuthority
+
+
+class PostPcaGrantsByGrantRefAmendBody(_PostPcaGrantsByGrantRefAmendBodyRequired, total=False):
+    #: Ed25519 over the grant-amend domain and {grant, rev, action, authority digest}.
+    sig: str
+    signed_by: Literal['holder', 'principal']
+    step_up_ref: str
+    new_grant_ref: str
+
+
+class PostPcaGrantsByGrantRefAmendResponse(TypedDict, total=False):
+    object: Literal['pca_grant_authority']
+    grant_ref: str
+    rev: int
+    created: bool
+    supersedes: str
+    authority: dict[str, Any]
+
+
+class PutPcaGrantsByGrantRefAuthorityBody(TypedDict):
+    #: The comparable shape of a grant's authority: explicit verbs, resource patterns (exact, or a trailing * prefix), named numeric ceilings and an expiry. 
+    authority: PostPcaGrantsByGrantRefAmendBodyAuthority
+    sig: str
+
+
+class PutPcaGrantsByGrantRefAuthorityResponse(TypedDict, total=False):
+    object: Literal['pca_grant_authority']
+    grant_ref: str
+    rev: int
+    status: str
+    authority: dict[str, Any]
+    authority_digest: str
+
+
+class GetPcaGrantsByGrantRefNeedsResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[dict[str, Any]]
+
+
+class _PostPcaGrantsByGrantRefNeedsBodyNeedsItemRequired(TypedDict):
+    verb: str
+    resource: str
+
+
+class PostPcaGrantsByGrantRefNeedsBodyNeedsItem(_PostPcaGrantsByGrantRefNeedsBodyNeedsItemRequired, total=False):
+    limits: dict[str, Any]
+    adjustable: bool
+
+
+class _PostPcaGrantsByGrantRefNeedsBodyRequired(TypedDict):
+    needs: list[PostPcaGrantsByGrantRefNeedsBodyNeedsItem]
+
+
+class PostPcaGrantsByGrantRefNeedsBody(_PostPcaGrantsByGrantRefNeedsBodyRequired, total=False):
+    sig: str
+
+
+class PostPcaGrantsByGrantRefNeedsResponse(TypedDict, total=False):
+    object: Literal['pca_grant_need']
+    id: str
+    grant_ref: str
+    status: str
+
+
+class PostPcaGrantsByGrantRefStepUpResponse(TypedDict, total=False):
+    object: Literal['pca_grant_step_up']
+    step_up_ref: str
+    nonce: str
+    expires_at: str
+
+
+class PostPcaGrantsByGrantRefStepUpByChallengeIdApproveBody(TypedDict):
+    sig: str
+
+
+class PostPcaGrantsByGrantRefStepUpByChallengeIdApproveResponse(TypedDict, total=False):
+    object: Literal['pca_grant_step_up']
+    step_up_ref: str
+    approved: bool
+
+
+class PostPcaGuardianRotateResponsePrevious(TypedDict, total=False):
+    epoch: int
+    public_key: str
+
+
+class PostPcaGuardianRotateResponse(TypedDict, total=False):
+    object: Literal['pca_guardian']
+    epoch: int
+    public_key: str
+    previous: PostPcaGuardianRotateResponsePrevious
+    keys: list[dict[str, Any]]
+
+
+class GetPcaIntentMapsByDigestObservationsResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[dict[str, Any]]
+    next_cursor: str | None
+
+
+class PostPcaIntentSchemasBody(TypedDict):
+    #: The signed schema { v: 1, kind: "pca-action-schema", site, aud, version, units?, state?, verbs, sig: { alg, kid, value, pq_value? } }.
+    schema: dict[str, Any]
+    #: The site schema keys [{ kid, alg, pk, pq_pk? }] from its discovery document.
+    keys: list[dict[str, Any]]
+
+
+class PostPcaIntentSchemasResponse(TypedDict, total=False):
+    object: Literal['pca_intent_schema']
+    digest: str
+    aud: str
+    version: str
+    schema: dict[str, Any]
+    anchor: dict[str, Any]
+
+
+class _PostPcaNeedsByNeedIdApproveBodyRequired(TypedDict):
+    approved: list[dict[str, Any]]
+    sig: str
+
+
+class PostPcaNeedsByNeedIdApproveBody(_PostPcaNeedsByNeedIdApproveBodyRequired, total=False):
+    step_up_ref: str
+    new_grant_ref: str
+
+
+class PostPcaNeedsByNeedIdApproveResponse(TypedDict, total=False):
+    object: Literal['pca_grant_authority']
+    grant_ref: str
+    supersedes: str
+    authority: dict[str, Any]
+
+
+class PostPcaNeedsByNeedIdDenyBody(TypedDict, total=False):
+    sig: str
+
+
+class PostPcaNeedsByNeedIdDenyResponse(TypedDict, total=False):
+    object: Literal['pca_grant_need']
+    id: str
+    status: str
+
+
+class DeletePcaPqPinsByIdentityResponse(TypedDict, total=False):
+    object: Literal['pca_pq_pin']
+    identity: str
+    deleted: bool
+
+
+class GetPcaPrincipalsResponseDataItem(TypedDict, total=False):
+    object: Literal['pca_principal']
+
+
+class GetPcaPrincipalsResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[GetPcaPrincipalsResponseDataItem]
+
+
+class PostPcaPrincipalsBody(TypedDict):
+    #: The principal base64url Ed25519 public key to enrol.
+    principal_pub: str
+    subject_type: Literal['user', 'org', 'machine']
+    #: The id of the user/org/machine, which must exist in this instance.
+    subject_id: str
+
+
+class PostPcaPrincipalsResponse(TypedDict, total=False):
+    object: Literal['pca_principal']
+    principal_pub: str
+    subject_type: str
+    subject_id: str
+    status: str
+
+
+class DeletePcaPrincipalsByPrincipalPubResponse(TypedDict, total=False):
+    object: Literal['pca_principal']
+    principal_pub: str
+    status: str
+
+
+class PostPcaUndoRecordsBody(TypedDict):
+    #: The full undo record as the resource server holds it, receipts included.
+    record: dict[str, Any]
+
+
+class PostPcaUndoRecordsResponsePendingVeto(TypedDict, total=False):
+    """A veto received by the instance and not yet applied by the resource server, or null."""
+    at: int
+    via: str
+    by: str
+    evidence: str
+
+
+class PostPcaUndoRecordsResponse(TypedDict, total=False):
+    object: Literal['pca_undo_record']
+    #: The stored undo record without its encoded PCActn.
+    record: dict[str, Any]
+    #: A veto received by the instance and not yet applied by the resource server, or null.
+    pending_veto: PostPcaUndoRecordsResponsePendingVeto | None
+
+
+class GetPcaUndoVetoesResponseDataItemVeto(TypedDict, total=False):
+    """A veto: when (ms), how (`token` for a hosted veto), by whom (the principal) and the evidence
+    digest (the token digest).
+    """
+    at: int
+    via: str
+    by: str
+    evidence: str
+    #: The principal's encoded undo token: re-verify it as of `at` before applying the veto.
+    token: str
+
+
+class GetPcaUndoVetoesResponseDataItem(TypedDict, total=False):
+    object: Literal['pca_undo_veto']
+    record_id: str
+    grant_ref: str
+    state: str
+    ver: int
+    window_end: int
+    #: A veto: when (ms), how (`token` for a hosted veto), by whom (the principal) and the evidence digest (the token digest).
+    veto: GetPcaUndoVetoesResponseDataItemVeto
+
+
+class GetPcaUndoVetoesResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[GetPcaUndoVetoesResponseDataItem]
+
+
+class _PostPcaWorkflowReceiptsBodyRequired(TypedDict):
+    grant_ref: str
+    #: The signed workflow commitment {body, sig}; must verify against the grant principal key.
+    workflow: dict[str, Any]
+    #: The step id; must be a step of the workflow.
+    step: str
+    outcome: Literal['ok', 'failed']
+    #: Digest of the params the step ran with.
+    params_digest: str
+    #: field -> {digest, num, unit, labels} as produced by wfOutput.
+    outputs: dict[str, Any]
+
+
+class PostPcaWorkflowReceiptsBody(_PostPcaWorkflowReceiptsBodyRequired, total=False):
+    #: The receipts issued so far for this workflow (the caller keeps the chain).
+    receipts: list[dict[str, Any]]
+
+
+class PostPcaWorkflowReceiptsResponse(TypedDict, total=False):
+    object: Literal['pca_workflow_receipt']
+    grant_ref: str
+    receipt: dict[str, Any]
+    receipts: list[dict[str, Any]]
+
+
+class GetPermissionAliasesResponseDataItem(TypedDict):
+    object: Literal['permission_alias']
+    alias: str
+    permission_key: str
+    created_at: int
+
+
+class _GetPermissionAliasesResponseRequired(TypedDict):
+    object: Literal['list']
+    data: list[GetPermissionAliasesResponseDataItem]
+
+
+class GetPermissionAliasesResponse(_GetPermissionAliasesResponseRequired, total=False):
+    has_more: bool
+
+
+class PostPermissionAliasesBody(TypedDict):
+    alias: str
+    permission_key: str
+
+
+class DeletePermissionAliasesByAliasResponse(TypedDict):
+    object: Literal['permission_alias']
+    alias: str
+    deleted: Literal[True]
+
+
+class PutPermissionAliasesByAliasBody(TypedDict):
+    #: The canonical permission key the alias stands for.
+    permission_key: str
+
+
+class PostPermissionsByIdRenameBody(TypedDict):
+    #: The new key, e.g. org:store:orders:refund (2 to 5 parts after org:, each 2 to 64 characters, at most 160 in all).
+    key: str
+
+
+class PostPermissionsByIdRenameResponse(TypedDict):
+    object: Literal['permission']
+    id: str
+    key: str
+    previous_key: str
+    alias: str
+
+
 class GetPoliciesByIdAudienceResponse(TypedDict, total=False):
     object: Literal['policy_audience']
     policy: str
@@ -34225,6 +36783,59 @@ class GetResourceServersByIdRevokedTokensResponse(TypedDict):
     retention_seconds: int
 
 
+class GetRevocationsResponseDataItemActor(TypedDict):
+    """Who ended it."""
+    #: api_key, user, scim, sso or system.
+    type: str
+    id: str | None
+
+
+class _GetRevocationsResponseDataItemRequired(TypedDict):
+    object: Literal['revocation']
+    #: The event id.
+    id: str
+    #: Commit-ordered position in the stream. Pass it as `after` (or `Last-Event-ID`) to resume right after this event.
+    seq: int
+    #: The event type: session.revoked, user.sessions_revoked, oauth_tokens.revoked, grant.revoked, api_key.revoked, machine.revoked, machine_grant.revoked, 
+    type: str
+    kind: Literal['session', 'user_sessions', 'token_family', 'grant', 'api_key', 'machine', 'machine_grant', 'user']
+    #: When it happened (epoch ms).
+    at: int
+    #: The ids of what ended: session_id, api_key_id, machine_id, machine_grant_id (with machine_id, resource_server_id and audience), family_id, grant_id, c
+    ids: dict[str, str | None]
+    #: Who ended it.
+    actor: GetRevocationsResponseDataItemActor
+
+
+class GetRevocationsResponseDataItem(_GetRevocationsResponseDataItemRequired, total=False):
+    #: The user the ended thing belonged to, when it has one.
+    user_id: str | None
+    #: Why it ended, e.g. signed_out, signed_out_everywhere, token_reuse, revoked_by_api, revoked_by_admin, owner_signed_out, membership_ended, banned.
+    reason: str | None
+    #: `user_sessions`: how many sessions ended.
+    sessions_revoked: int
+    #: `user_sessions`: the session that stayed signed in (sign out of the other devices).
+    kept_session_id: str | None
+    #: When it ended (epoch ms). For `user_sessions` the cutoff: every token issued at or before it is dead (except the kept session).
+    revoked_at: int | None
+
+
+class GetRevocationsResponseRetention(TypedDict, total=False):
+    """How long events are kept."""
+    days: int
+
+
+class GetRevocationsResponse(TypedDict, total=False):
+    object: Literal['list']
+    data: list[GetRevocationsResponseDataItem]
+    #: True when a full page was returned: ask again at once.
+    has_more: bool
+    #: Pass as `after` on the next call.
+    next_cursor: str
+    #: How long events are kept.
+    retention: GetRevocationsResponseRetention
+
+
 class PostRiskBasedMfaReplayBody(TypedDict, total=False):
     #: Default 7.
     days: int
@@ -34647,6 +37258,11 @@ class GetSessionsRevokedResponse(TypedDict):
     window_start: int
 
 
+class PutSessionsByIdActiveOrganizationBody(TypedDict):
+    #: The organization to make active, or null for none.
+    organization_id: str | None
+
+
 class _DeleteSessionsByIdBindingResponseRequired(TypedDict):
     object: Literal['session_binding']
     deleted: Literal[True]
@@ -34713,11 +37329,88 @@ class GetSessionsByIdRiskResponse(_GetSessionsByIdRiskResponseRequired, total=Fa
     computed_at: int | None
 
 
+class _PostSsfAddSubjectBodyRequired(TypedDict):
+    stream_id: str
+    subject: dict[str, Any]
+
+
+class PostSsfAddSubjectBody(_PostSsfAddSubjectBodyRequired, total=False):
+    verified: bool
+
+
+class _PatchSsfConfigurationBodyRequired(TypedDict):
+    stream_id: str
+
+
+class PatchSsfConfigurationBody(_PatchSsfConfigurationBodyRequired, total=False):
+    iss: str | None
+    aud: str | None
+    events_supported: list[str] | None
+    events_delivered: list[str] | None
+    min_verification_interval: int | None
+    events_requested: list[str] | None
+    delivery: dict[str, Any] | None
+    description: str | None
+
+
+class PostSsfConfigurationBodyDelivery(TypedDict, total=False):
+    method: str
+    endpoint_url: str
+
+
+class PostSsfConfigurationBody(TypedDict, total=False):
+    iss: str
+    aud: str
+    events_supported: list[str]
+    events_delivered: list[str]
+    min_verification_interval: int
+    events_requested: list[str]
+    delivery: PostSsfConfigurationBodyDelivery
+    description: str
+
+
+class PostSsfConfigurationResponse(TypedDict, total=False):
+    stream_id: str
+    iss: str
+    aud: str
+    events_supported: list[str]
+    events_delivered: list[str]
+    delivery: dict[str, Any]
+
+
+class _PutSsfConfigurationBodyRequired(TypedDict):
+    stream_id: str
+
+
+class PutSsfConfigurationBody(_PutSsfConfigurationBodyRequired, total=False):
+    iss: str
+    aud: str
+    events_supported: list[str]
+    events_delivered: list[str]
+    min_verification_interval: int
+    events_requested: list[str]
+    delivery: dict[str, Any]
+    description: str
+
+
 class PostSsfEventsBody(TypedDict, total=False):
     user_id: str
     event: str
     subject: dict[str, str]
     data: dict[str, Any]
+
+
+class GetSsfMetadataResponse(TypedDict, total=False):
+    issuer: str
+    delivery_methods_supported: list[str]
+    configuration_endpoint: str
+    status_endpoint: str
+    verification_endpoint: str
+
+
+class PostSsfRemoveSubjectBody(TypedDict):
+    stream_id: str
+    subject: dict[str, Any]
 
 
 class GetSsfStatusResponse(TypedDict):
@@ -34745,6 +37438,18 @@ class GetSsfStreamsByIdSubjectsResponse(TypedDict, total=False):
     default_subjects: str
 
 
+class PostSsfStreamsByStreamIdPollBody(TypedDict, total=False):
+    ack: list[str]
+    setErrs: dict[str, Any]
+    maxEvents: int
+    returnImmediately: bool
+
+
+class PostSsfStreamsByStreamIdPollResponse(TypedDict, total=False):
+    sets: dict[str, Any]
+    moreAvailable: bool
+
+
 class PostSsfSubjectsAddBody(TypedDict, total=False):
     stream_id: str
     subject: dict[str, str]
@@ -34754,6 +37459,14 @@ class PostSsfSubjectsAddBody(TypedDict, total=False):
 class PostSsfSubjectsRemoveBody(TypedDict, total=False):
     stream_id: str
     subject: dict[str, str]
+
+
+class _PostSsfVerificationBodyRequired(TypedDict):
+    stream_id: str
+
+
+class PostSsfVerificationBody(_PostSsfVerificationBodyRequired, total=False):
+    state: str
 
 
 class PostSsfVerifyBody(TypedDict, total=False):
@@ -34871,6 +37584,13 @@ class PostStepUpAssertResponse(_PostStepUpAssertResponseRequired, total=False):
     step_up: dict[str, Any]
 
 
+class GetStepUpPoliciesResponseDataItemAcceptedFactorInfoItem(TypedDict, total=False):
+    factor: str
+    label: str
+    needs_input: bool
+    input_kind: Literal['password', 'otp', 'none', 'redirect', 'push', 'webauthn']
+
+
 class GetStepUpPoliciesResponseDataItem(TypedDict, total=False):
     object: Literal['step_up_policy']
     id: str
@@ -34893,6 +37613,8 @@ class GetStepUpPoliciesResponseDataItem(TypedDict, total=False):
     allowed_methods: list[Literal['password', 'passkey', 'totp', 'backup_code', 'email_code', 'phone_code', 'push', 'duo', 'yubikey']]
     #: The step-up strategies that can satisfy it, after phishing resistance narrows allowed_methods.
     accepted_factors: list[Literal['password', 'passkey', 'totp', 'backup_code', 'email_code', 'phone_code', 'push', 'duo', 'yubikey']]
+    #: Render info for each accepted factor: label, whether the person types something, and the kind of input. A factor added later still comes with a label.
+    accepted_factor_info: list[GetStepUpPoliciesResponseDataItemAcceptedFactorInfoItem]
     #: How long a signed receipt for an allowed assertion lives (10 to 300).
     receipt_ttl_seconds: int
     #: Created (epoch ms).
@@ -35136,6 +37858,47 @@ class PostUsersBulkActionsBody(_PostUsersBulkActionsBodyRequired, total=False):
     expected_count: int
 
 
+class PutUsersByExternalIdByExternalIdBody(TypedDict, total=False):
+    #: Required when the call creates the user. Ignored on update.
+    email_address: str
+    #: On create only: make the user a test user (no message of any kind is sent to it, it is not billed). Ignored, never applied, when the call updates or a
+    sandbox: bool
+    #: On create only: whether a password or password hash in the body is usable at once (active) or held until an address on the account is proven (until_em
+    password_policy: Literal['active', 'until_email_verified']
+    #: Adopt an existing user that has this address (verified in Atlas) and no external_id yet. Default false: that case is a 409.
+    link_by_verified_email: bool
+    password: str
+    password_hash: str | None
+    first_name: str
+    last_name: str
+    image_url: str | None
+    #: Create only.
+    email_verified: bool
+    #: Readable by the frontend (FAPI). Governed by trait rules.
+    public_metadata: dict[str, Any]
+    #: Backend-only; never exposed to the browser.
+    private_metadata: dict[str, Any]
+    #: Writable by the end user from the frontend.
+    unsafe_metadata: dict[str, Any]
+    referral_code: str | None
+
+
+class GetUsersDeletedResponseDataItem(TypedDict):
+    object: Literal['deleted_user']
+    id: str
+    #: Your own id for the user, when one was set.
+    external_id: str | None
+    #: Deleted, Unix ms.
+    deleted_at: int
+
+
+class GetUsersDeletedResponse(TypedDict):
+    object: Literal['list']
+    data: list[GetUsersDeletedResponseDataItem]
+    has_more: bool
+    next_cursor: str | None
+
+
 class PostUsersDeletedAddressesBody(TypedDict):
     addresses: list[str]
 
@@ -35293,6 +38056,19 @@ class DeleteUsersByIdApprovalDevicesByDeviceIdResponse(TypedDict, total=False):
     revoked_at: int
 
 
+class GetUsersByIdApprovalRequestsResponseDataItem(TypedDict, total=False):
+    object: str
+    kind: Literal['approval_request', 'sign_in_approval']
+    id: str
+    status: str
+
+
+class GetUsersByIdApprovalRequestsResponse(TypedDict):
+    object: Literal['list']
+    data: list[GetUsersByIdApprovalRequestsResponseDataItem]
+    has_more: bool
+
+
 class _PostUsersByIdContainResponseRequired(TypedDict):
     object: Literal['user_containment']
     id: str
@@ -35311,6 +38087,59 @@ class _PostUsersByIdContainResponseRequired(TypedDict):
 
 class PostUsersByIdContainResponse(_PostUsersByIdContainResponseRequired, total=False):
     already_contained: bool
+
+
+class _PostUsersByIdDelegationTokensBodyActorRequired(TypedDict):
+    #: Who is acting: a service name or a staff user id.
+    sub: str
+
+
+class PostUsersByIdDelegationTokensBodyActor(_PostUsersByIdDelegationTokensBodyActorRequired, total=False):
+    #: What kind of actor `sub` is, for example `service` or `staff`.
+    type: str
+
+
+class _PostUsersByIdDelegationTokensBodyRequired(TypedDict):
+    #: The service the token is for. Must be listed in `delegationTokens.audiences`.
+    audience: str
+    #: What the token may do; each must be listed for the audience.
+    scopes: list[str]
+    actor: PostUsersByIdDelegationTokensBodyActor
+
+
+class PostUsersByIdDelegationTokensBody(_PostUsersByIdDelegationTokensBodyRequired, total=False):
+    #: Lifetime in seconds, up to `delegationTokens.maxTtlSeconds` (300 at most). Default `delegationTokens.defaultTtlSeconds` (120).
+    ttl_seconds: int
+    #: Speak for the user inside this organization (they must be a member). Adds `org_id` to the token.
+    org_id: str
+    #: Why, up to 500 characters, kept in the audit row.
+    reason: str
+
+
+class PostUsersByIdDelegationTokensResponseActor(TypedDict, total=False):
+    sub: str
+    type: str
+
+
+class PostUsersByIdDelegationTokensResponse(TypedDict):
+    object: Literal['delegation_token']
+    #: The signed JWT. Shown once; verify it with the instance JWKS.
+    token: str
+    token_type: Literal['Bearer']
+    user_id: str
+    audience: str
+    scopes: list[str]
+    actor: PostUsersByIdDelegationTokensResponseActor
+    jti: str
+    #: ISO time.
+    expires_at: str
+    #: Seconds.
+    expires_in: int
+
+
+class PatchUsersByIdDeletionBody(TypedDict, total=False):
+    effective_at: str | None
+    grace_seconds: float | None
 
 
 class PostUsersByIdExternalAccountsBody(TypedDict, total=False):
@@ -35351,9 +38180,14 @@ class _GetUsersByIdIdentityVerificationsByAttemptIdResponseRequired(TypedDict):
     id: str
     user_id: str
     provider: Literal['persona', 'onfido', 'veriff', 'stripe_identity']
-    status: Literal['pending', 'approved', 'declined', 'needs_review']
+    #: `pending` (not finished, or a failed attempt the person can retry), `processing` (submitted, being checked), then a verdict: `approved`, `declined` or
+    status: Literal['pending', 'processing', 'approved', 'declined', 'needs_review']
     #: The service's short reason for a decline or review.
     reason: str | None
+    #: The latest failed attempt the person can retry: the check stays `pending` and `url` stays usable. Null when no attempt has failed.
+    last_error: GetIdentityVerificationsResponseDataItemLastError | None
+    #: How many failed attempts the service reported for this check.
+    attempts: int
     #: True when the check was recorded from an existing session through the import route.
     imported: bool
     #: When the verification service verified the person (epoch ms); an imported check keeps the service's own time.
@@ -35410,6 +38244,7 @@ class PostUsersByIdLegalHoldReleaseBody(TypedDict, total=False):
 class PostUsersByIdMergeBody(TypedDict, total=False):
     source_user_id: str
     dry_run: bool
+    external_id: str
 
 
 class GetUsersByIdOwnedOrganizationsResponseDataItem(TypedDict):
@@ -35443,6 +38278,89 @@ class PostUsersByIdReferralResyncResponse(_PostUsersByIdReferralResyncResponseRe
     error: str | None
     #: The user's referral record after the answer (as GET /v1/users/{id}/referral).
     referral: dict[str, Any] | None
+
+
+class DeleteUsersByIdRiskSignalsResponse(TypedDict, total=False):
+    object: Literal['risk_signals_cleared']
+    user_id: str
+    cleared: int
+
+
+class _PostUsersByIdRiskSignalsBodyRequired(TypedDict):
+    #: Your own type, e.g. `credential_stuffing`. Lowercase letters, digits and `_ . : -`.
+    signal_type: str
+    severity: Literal['low', 'medium', 'high', 'critical']
+
+
+class PostUsersByIdRiskSignalsBody(_PostUsersByIdRiskSignalsBodyRequired, total=False):
+    ttl_seconds: int
+    #: Up to 2 KB. Kept private: never sent in webhooks.
+    metadata: dict[str, Any]
+    #: Which of your systems reported it. Default `api`.
+    source: str
+
+
+class GetUsersByIdSecuritySummaryResponseLinkedProvidersItem(TypedDict, total=False):
+    id: str
+    provider: str
+    provider_user_id: str
+    email_address: str | None
+    email_verified: bool
+
+
+class GetUsersByIdSecuritySummaryResponseMfaFactorsItem(TypedDict, total=False):
+    id: str
+    type: str
+    verified: bool
+    created_at: int
+
+
+class GetUsersByIdSecuritySummaryResponsePasskeysItem(TypedDict, total=False):
+    id: str
+    name: str | None
+    created_at: int
+    last_used_at: int | None
+
+
+class GetUsersByIdSecuritySummaryResponseTrustedDevicesItem(TypedDict, total=False):
+    kind: Literal['remembered_browser', 'device_key']
+    id: str
+    label: str | None
+    created_at: int
+    last_used_at: int | None
+    expires_at: int | None
+
+
+class GetUsersByIdSecuritySummaryResponseActiveSessionsLatest(TypedDict, total=False):
+    id: str
+    last_active_at: int
+    #: The end-user variant only: whether the newest session is the caller's own.
+    current: bool
+    ip_address: str | None
+    country: str | None
+
+
+class GetUsersByIdSecuritySummaryResponseActiveSessions(TypedDict, total=False):
+    count: int
+    latest: GetUsersByIdSecuritySummaryResponseActiveSessionsLatest | None
+
+
+class GetUsersByIdSecuritySummaryResponse(TypedDict):
+    object: Literal['security_summary']
+    user_id: str
+    password_enabled: bool
+    #: Epoch milliseconds.
+    password_changed_at: int | None
+    mfa_enabled: bool
+    has_passkey: bool
+    #: What the user can sign in with right now: password, passkey, email_code, email_link, phone_code, oauth_<provider>.
+    sign_in_methods: list[str]
+    linked_providers: list[GetUsersByIdSecuritySummaryResponseLinkedProvidersItem]
+    mfa_factors: list[GetUsersByIdSecuritySummaryResponseMfaFactorsItem]
+    backup_codes_remaining: int | None
+    passkeys: list[GetUsersByIdSecuritySummaryResponsePasskeysItem]
+    trusted_devices: list[GetUsersByIdSecuritySummaryResponseTrustedDevicesItem]
+    active_sessions: GetUsersByIdSecuritySummaryResponseActiveSessions
 
 
 class GetUsersByIdTemporaryAccessResponseDataItem(TypedDict):
@@ -35571,6 +38489,22 @@ class DeleteWebBotAuthDirectoriesByIdResponse(TypedDict, total=False):
     object: Literal['web_bot_directory']
     id: str
     deleted: bool
+
+
+class GetWebhookDlqResponseDataItem(TypedDict):
+    endpoint_id: str
+
+
+class _GetWebhookDlqResponseRequired(TypedDict):
+    object: Literal['list']
+    data: list[GetWebhookDlqResponseDataItem]
+    has_more: bool
+
+
+class GetWebhookDlqResponse(_GetWebhookDlqResponseRequired, total=False):
+    next_cursor: str | None
+    max_attempts: int
+    retention: dict[str, Any]
 
 
 class _GetWebhookEndpointsByIdDlqResponseRequired(TypedDict):
@@ -35904,6 +38838,12 @@ class PostPlatformAppsByIdInstancesByInstanceIdClonesResponse(_PostPlatformAppsB
     note: str
 
 
+class PostPlatformAppsByIdInstancesByInstanceIdClonesByCloneIdRefreshBody(TypedDict, total=False):
+    include: list[Literal['config', 'roles', 'organizations', 'users', 'memberships']]
+    synthetic_users: PostInstanceStagingCopiesByIdRefreshBodySyntheticUsers
+    ttl_hours: int
+
+
 class PostPlatformAppsByIdNarrowSecretKeysBody(TypedDict, total=False):
     preset: Literal['app-runtime']
     #: Scope names. Not with preset.
@@ -35927,6 +38867,25 @@ class PostPlatformAppsByIdNarrowSecretKeysResponse(TypedDict, total=False):
     narrowed: list[PostPlatformAppsByIdNarrowSecretKeysResponseNarrowedItem]
     unchanged: int
     note: str
+
+
+class PostPlatformAppsByIdProvisioningKeyRenewBody(TypedDict, total=False):
+    #: Renew on this instance of the app instead of the primary one.
+    instance_id: str
+
+
+class PostPlatformAppsByIdProvisioningKeyRenewResponseRenewedItem(TypedDict, total=False):
+    key_id: str
+    prefix: str
+
+
+class PostPlatformAppsByIdProvisioningKeyRenewResponse(TypedDict, total=False):
+    object: Literal['app_provisioning_key_renewed']
+    app_id: str
+    instance_id: str
+    renewed: list[PostPlatformAppsByIdProvisioningKeyRenewResponseRenewedItem]
+    #: Epoch ms.
+    expires_at: int
 
 
 class GetPlatformAtlasIdAppsByIdAdoptionCodesResponseDataItem(TypedDict, total=False):
