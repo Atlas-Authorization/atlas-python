@@ -1214,7 +1214,7 @@ class Roles:
         )
 
 
-class Permissions:
+class Permissions(c.Permissions):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -1890,7 +1890,7 @@ class ScimTokens(c.ScimTokens):
         return self._t.request(method="PATCH", path=f"/v1/scim_tokens/{token_id}", body=body)
 
 
-class Domains:
+class Domains(c.Domains):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -6284,7 +6284,7 @@ class OrganizationSettingsSchema:
         )
 
 
-class Pca:
+class Pca(c.Pca):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
@@ -10729,7 +10729,7 @@ class _MfaFactorsSmartCardMappings:
             query=_q(dry_run=dry_run),
         )
 
-class Analytics:
+class Analytics(c.Analytics):
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
         self.reports = _AnalyticsReports(transport)

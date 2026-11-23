@@ -197,12 +197,15 @@ class Models:
                 return f"dict[str, {self.ty(ap, hint + 'Value')}]"
             return "dict[str, Any]"
         key = json.dumps(s, sort_keys=True)
-        if key in self.by_key:
+        # a name already published (pinned) is emitted even when a new op reached this shape first
+        pinned = pascal(hint) in TYPE_PINS and pascal(hint) not in self.names
+        if key in self.by_key and not pinned:
             return self.by_key[key]
         py = self.fresh(pascal(hint), key)
-        self.by_key[key] = f"\x00{py}\x00"
+        if pinned or key not in self.by_key:  # later ops with this shape follow the published name
+            self.by_key[key] = f"\x00{py}\x00"
         self.emit(py, s)
-        return self.by_key[key]
+        return f"\x00{py}\x00"
 
     def emit(self, py: str, s: dict) -> None:
         if "allOf" in s:
@@ -259,6 +262,7 @@ def qual(t: str) -> str:
     return re.sub(r"\x00(\w+)\x00", r"cm.\1", t)
 
 
+TYPE_PINS = set(PINS.get("types", []))
 MODELS = Models()
 
 
@@ -555,10 +559,12 @@ def build() -> dict[str, str]:
         taken = set(methods.get(hw_cls, set())) if hw_cls else set()
         seg_sing = singular(seg)
         body = ""
+        pinned = {op.key: PINS["names"][op.key] for op in ops if op.key in PINS.get("names", {})}
+        taken |= set(pinned.values())  # a published name is reserved before any new op can take it
         for op in sorted(ops, key=lambda o: (o.path, o.method)):
             n = base = names.get(op.key) or ident(op.base_name())
             i = 2
-            while n in taken:  # a clash with a hand-written / earlier method never overrides it
+            while n in taken and op.key not in pinned:  # a clash with a hand-written / earlier method never overrides it
                 n, i = f"{base}_{i}", i + 1
             names.setdefault(op.key, n)
             taken.add(n)
@@ -601,6 +607,7 @@ def build() -> dict[str, str]:
         + "".join(MODELS.out)
     )
     PINS["names"] = dict(sorted(names.items()))
+    PINS["types"] = sorted(TYPE_PINS | set(MODELS.names))
     return {
         "_catalog.py": catalog,
         "catalog_models.py": models,

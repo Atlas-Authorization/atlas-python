@@ -911,6 +911,104 @@ class AsyncAllowlistIdentifiers:
         )
 
 
+class AsyncAnalytics:
+    _t: _AsyncTransport
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list_captcha(
+        self,
+        *,
+        from_: int | str | None = None,
+        to: int | str | None = None,
+        days: int | None = None,
+        granularity: Literal['day', 'week', 'month'] | None = None,
+        organization_id: str | None = None,
+        format: Literal['json', 'csv', 'parquet'] | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetAnalyticsCaptchaResponse:
+        """Captcha challenges per provider and flow: issued, passed, failed, refused, and the solve
+        rate (passed over passed plus failed). No organization slice. A provider that records no
+        issue event shows 0 issued.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/analytics/captcha",
+            query=_qd({'from': from_, 'to': to, 'days': days, 'granularity': granularity, 'organization_id': organization_id, 'format': format, 'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_captcha(
+        self,
+        *,
+        from_: int | str | None = None,
+        to: int | str | None = None,
+        days: int | None = None,
+        granularity: Literal['day', 'week', 'month'] | None = None,
+        organization_id: str | None = None,
+        format: Literal['json', 'csv', 'parquet'] | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetAnalyticsCaptchaResponseDataItem]:
+        """Every item of :meth:`list_captcha`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_captcha(from_=from_, to=to, days=days, granularity=granularity, organization_id=organization_id, format=format, limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def list_sms(
+        self,
+        *,
+        rate_per_message: float | None = None,
+        currency: str | None = None,
+        from_: int | str | None = None,
+        to: int | str | None = None,
+        days: int | None = None,
+        granularity: Literal['day', 'week', 'month'] | None = None,
+        organization_id: str | None = None,
+        format: Literal['json', 'csv', 'parquet'] | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetAnalyticsSmsResponse:
+        """SMS messages by destination country: sent, delivered, failed. Atlas sends through your
+        own provider, which bills you; pass `rate_per_message` (and optionally `currency`) to
+        add `estimated_cost` (messages times that rate, not a billed amount). No organization
+        slice.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/analytics/sms",
+            query=_qd({'rate_per_message': rate_per_message, 'currency': currency, 'from': from_, 'to': to, 'days': days, 'granularity': granularity, 'organization_id': organization_id, 'format': format, 'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_sms(
+        self,
+        *,
+        rate_per_message: float | None = None,
+        currency: str | None = None,
+        from_: int | str | None = None,
+        to: int | str | None = None,
+        days: int | None = None,
+        granularity: Literal['day', 'week', 'month'] | None = None,
+        organization_id: str | None = None,
+        format: Literal['json', 'csv', 'parquet'] | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetAnalyticsSmsResponseDataItem]:
+        """Every item of :meth:`list_sms`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_sms(rate_per_message=rate_per_message, currency=currency, from_=from_, to=to, days=days, granularity=granularity, organization_id=organization_id, format=format, limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+
 class AsyncApiKeys:
     _t: _AsyncTransport
 
@@ -3290,12 +3388,14 @@ class AsyncConnectionProviderTopics:
         dry_run: bool = False,
         idempotency_key: str | None = None,
     ) -> cm.GetConnectionProviderTopicsResponse:
-        """Replace the instance's business topics: { topics: { shopify: [...], ebay: [...] } }, up
-        to 50 per provider, spelled as the provider spells them (Shopify orders/create; eBay
-        Trading events such as ItemSold, or Commerce Notification topic ids in
-        UPPER_SNAKE_CASE). Connections made afterwards subscribe automatically; call POST
-        /v1/connections/{id}/provider_subscriptions/sync for existing ones. A topic not listed
-        here is acknowledged and ignored on delivery.
+        """Replace the instance's business topics: { topics: { shopify: [...], ebay: [...],
+        bigcommerce: [...], square: [...], etsy: [...], tiktok_shop: [...] } }, up to 50 per
+        provider (or ["*"] to pass every topic the provider sends through as
+        connection.provider_event with the raw payload), spelled as the provider spells them
+        (Shopify orders/create; eBay Trading events such as ItemSold, or Commerce Notification
+        topic ids in UPPER_SNAKE_CASE). Connections made afterwards subscribe automatically;
+        call POST /v1/connections/{id}/provider_subscriptions/sync for existing ones. A topic
+        not listed here is acknowledged and ignored on delivery.
         """
         return await self._t.request(
             method="PUT",
@@ -3311,6 +3411,37 @@ class AsyncConnectionProviders:
 
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
+
+    async def list_policies(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetConnectionProvidersPoliciesResponse:
+        """List every provider that has a stored instance policy, in the shape of the single-
+        provider read (unique_external_id, whether a webhook secret or dev id is stored,
+        events_url). Secrets are never returned.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/connection_providers/policies",
+            query=_qd({'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_policies(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetConnectionProvidersPoliciesResponseDataItem]:
+        """Every item of :meth:`list_policies`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_policies(limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
 
     async def delete_policy(
         self,
@@ -3405,6 +3536,45 @@ class AsyncConnectionReconnectSettings:
         )
 
 
+class AsyncConnectionTemplates:
+    _t: _AsyncTransport
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetConnectionTemplatesResponse:
+        """The marketplace connection templates (Discogs, Trade Me, BrickLink, Cardmarket,
+        WooCommerce, Bonanza, Poizon, browser-session cookie jars, RSA-signed OAuth 1.0a): for
+        each, the connection kind, whether the owner authorizes or you enter the secrets, which
+        secret fields, the hosts to allow and the config to send. Read-only.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/connection_templates",
+            query=_qd({'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetConnectionTemplatesResponseDataItem]:
+        """Every item of :meth:`list`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list(limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+
 class AsyncConnections:
     _t: _AsyncTransport
 
@@ -3456,6 +3626,31 @@ class AsyncConnections:
         return await self._t.request(
             method="POST",
             path="/v1/connections/oauth_clients/register",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def rehome(
+        self,
+        body: cm.PostConnectionsRehomeBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostConnectionsRehomeResponse:
+        """Move OAuth connections from one owner client to another (a retired owner client you can
+        now delete, two clients merged). Both clients must be the same provider and environment.
+        When both are the same provider app (same client_id) every token stays valid and the
+        rows simply move. Otherwise (verify, the default and the only allowed mode) one real
+        refresh is made per connection with the TARGET client's credentials and only connections
+        the provider accepts move; the others stay on the old client untouched and are reported
+        failed with a reason (a failed probe changes no status). Token-family siblings move
+        together. Dry run reports what would move without calling the provider. Never returns
+        tokens. Idempotent on Idempotency-Key; audited as connection.rehomed (ids and counts).
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/connections/rehome",
             query=_qd({'dry_run': True if dry_run else None}),
             body=body,
             idempotency_key=idempotency_key,
@@ -4826,6 +5021,47 @@ class AsyncDiagnostics:
         )
 
 
+class AsyncDomains:
+    _t: _AsyncTransport
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(
+        self,
+        domain_id: str,
+    ) -> cm.CustomDomain:
+        """Read one custom domain: the same object as a list item, including a path mount's
+        verification file and what the last failed check observed.
+        """
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/domains/{_enc(domain_id)}",
+        )
+
+    async def rotate_verification(
+        self,
+        domain_id: str,
+        body: dict[str, Any],
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.CustomDomain:
+        """Issue a new random verification token for a path-mounted domain and return the domain
+        with the new `verification.token` and `url`. The previous token keeps verifying for 24
+        hours (`verification.previous_url`, `previous_valid_until`). Use it when a CDN cache has
+        stored a wrong answer for the old URL: the new URL has never been requested, so nothing
+        is cached for it. A CNAME domain has no token (400).
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/domains/{_enc(domain_id)}/verification/rotate",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+
 class AsyncDsrConsole:
     _t: _AsyncTransport
 
@@ -5840,6 +6076,46 @@ class AsyncGrants:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
+    async def list(
+        self,
+        *,
+        user_id: str | None = None,
+        client_id: str | None = None,
+        type: Literal['consent', 'managed', 'all'] | None = None,
+        status: Literal['active', 'revoked', 'all'] | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetGrantsResponse:
+        """List every grant in one cursor-paged list: users' consent grants and OpenID Grant
+        Management grants, told apart by `type`. Filter by `user_id`, `client_id` (the public
+        client id), `type` (consent, managed, all) and `status` (active by default; revoking a
+        consent removes it, so revoked grants are managed ones).
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/grants",
+            query=_qd({'user_id': user_id, 'client_id': client_id, 'type': type, 'status': status, 'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list(
+        self,
+        *,
+        user_id: str | None = None,
+        client_id: str | None = None,
+        type: Literal['consent', 'managed', 'all'] | None = None,
+        status: Literal['active', 'revoked', 'all'] | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetGrantsResponseDataItem]:
+        """Every item of :meth:`list`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list(user_id=user_id, client_id=client_id, type=type, status=status, limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
     async def consume(
         self,
         grant_type: str,
@@ -5908,6 +6184,36 @@ class AsyncGrants:
         return await self._t.request(
             method="GET",
             path=f"/v1/grants/{_enc(grant_type)}/{_enc(grant_id)}/usage",
+        )
+
+    async def get(
+        self,
+        grant_id: str,
+    ) -> cm.GetGrantsResponseDataItem:
+        """Read one grant of either kind, with its metadata."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/grants/{_enc(grant_id)}",
+        )
+
+    async def update(
+        self,
+        grant_id: str,
+        body: cm.PatchGrantsByIdBody | None = None,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetGrantsResponseDataItem:
+        """Change a grant's `metadata` (secret key only). The keys you send are merged into what is
+        stored: a key sent as null is removed. The result is at most 4 KB of JSON. Audited;
+        idempotent.
+        """
+        return await self._t.request(
+            method="PATCH",
+            path=f"/v1/grants/{_enc(grant_id)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
         )
 
 
@@ -6603,6 +6909,26 @@ class AsyncInstance:
             idempotency_key=idempotency_key,
         )
 
+    async def update_cookie_consent(
+        self,
+        body: cm.PatchInstanceCookieConsentBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PutInstanceCookieConsentResponse:
+        """Change part of the cookie-consent setting: the fields sent are merged over the stored
+        setting and the rest is kept (PUT replaces the whole setting). `null` clears a field;
+        sending site_id drops a stored site reference and the other way round. With no stored
+        setting, script_url is required. The answer and warnings are those of PUT.
+        """
+        return await self._t.request(
+            method="PATCH",
+            path="/v1/instance/cookie_consent",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
     async def delete_data_key_provider(
         self,
         body: cm.DeleteInstanceDataKeyProviderBody,
@@ -6931,6 +7257,74 @@ class AsyncInstance:
             idempotency_key=idempotency_key,
         )
 
+    async def delete_hooks_before_first_session(
+        self,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.DeleteInstanceHooksBeforeFirstSessionResponse:
+        """Turn the hook off and clear its url and signing secret, the same as PATCH with
+        {enabled:false, url:null, signing_secret:null}. Audited. Idempotent.
+        """
+        return await self._t.request(
+            method="DELETE",
+            path="/v1/instance/hooks/before_first_session",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_hooks_before_first_session(
+        self,
+    ) -> cm.DeleteInstanceHooksBeforeFirstSessionResponse:
+        """Read the before_first_session hook: the endpoint Atlas calls once per user, after their
+        email is verified and before their first session token, so your app can link the account
+        and stamp its own external_id on that very token. The signing secret is reported as
+        signing_secret_set only.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/instance/hooks/before_first_session",
+        )
+
+    async def update_hooks_before_first_session(
+        self,
+        body: cm.PatchInstanceHooksBeforeFirstSessionBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.DeleteInstanceHooksBeforeFirstSessionResponse:
+        """Update the before_first_session hook. Only the fields you send change; null clears.
+        Atlas POSTs {"type":"before_first_session","data":{user_id,email,email_verified,provider
+        ,provider_user_id,name,external_id}} signed like a webhook (atlas-id, atlas-timestamp,
+        atlas-signature). Answer 200 {"external_id":"…"} to set it: it is stored only when the
+        user has none and no other user holds it (never overwritten). A timeout or failure never
+        blocks the sign-in (it is audited and counted in failed_calls). Not called for
+        impersonation or anonymous guests.
+        """
+        return await self._t.request(
+            method="PATCH",
+            path="/v1/instance/hooks/before_first_session",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def test_before_first_session_hooks(
+        self,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostInstanceHooksBeforeFirstSessionTestResponse:
+        """Send a signed sample call (a user that does not exist) to the hook and report its
+        answer. Nothing is stored on any user.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/instance/hooks/before_first_session/test",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
     async def get_impersonation_policy(
         self,
     ) -> cm.GetInstanceImpersonationPolicyResponse:
@@ -7024,6 +7418,83 @@ class AsyncInstance:
             path=f"/v1/instance/imports/{_enc(import_id)}",
         )
 
+    async def delete_integrations_forwarding(
+        self,
+        destination: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> Any:
+        """Stop forwarding sign-ups to a destination (removes its managed endpoint)."""
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/instance/integrations/forwarding/{_enc(destination)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_integrations_forwarding(
+        self,
+        destination: str,
+    ) -> cm.GetInstanceIntegrationsForwardingByDestinationResponse:
+        """Read the stored sign-up forwarding for a destination: its managed endpoint, active flag
+        and non-secret settings. The destination key is never returned. 404 when sign-ups are
+        not forwarded there.
+        """
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/instance/integrations/forwarding/{_enc(destination)}",
+        )
+
+    async def set_integrations_forwarding(
+        self,
+        destination: str,
+        body: cm.PutInstanceIntegrationsForwardingByDestinationBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PutInstanceIntegrationsForwardingByDestinationResponse:
+        """Forward every sign-up (`user.created`) to Lucida, Hermetica or Seolyticize with your own
+        server key, or to any HTTPS webhook.
+        """
+        return await self._t.request(
+            method="PUT",
+            path=f"/v1/instance/integrations/forwarding/{_enc(destination)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_integrations_health(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetInstanceIntegrationsHealthResponse:
+        """Every connected integration and receiver with its last delivery status and time, in one
+        list.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/instance/integrations/health",
+            query=_qd({'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_integrations_health(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetInstanceIntegrationsHealthResponseDataItem]:
+        """Every item of :meth:`list_integrations_health`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_integrations_health(limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
     async def list_integrations_mints(
         self,
         product: str,
@@ -7080,6 +7551,17 @@ class AsyncInstance:
             path=f"/v1/instance/integrations/{_enc(product)}/test",
             query=_qd({'wait': wait, 'dry_run': True if dry_run else None}),
             idempotency_key=idempotency_key,
+        )
+
+    async def get_issuers(
+        self,
+    ) -> cm.GetInstanceIssuersResponse:
+        """The token issuers a verifier should accept: the active one, the planned one while a
+        domain claim is pending, and earlier ones still in their overlap window.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/instance/issuers",
         )
 
     async def list_op_keys(
@@ -7350,6 +7832,8 @@ class AsyncInstance:
         self,
         body: cm.PutInstanceScopesBody,
         *,
+        mode: str | None = None,
+        too_long: str | None = None,
         dry_run: bool = False,
         idempotency_key: str | None = None,
     ) -> Any:
@@ -7360,12 +7844,23 @@ class AsyncInstance:
         /oauth2/authorize with `invalid_scope` unless the app's status is `approved` or that
         scope is in the client's `approved_scopes` (per-scope review). The owner and testers of
         a client still in development may request it too. A client still needs the scope in its
-        allowed scopes to request it.
+        allowed scopes to request it. `requires_client_level` (`any`, `verified` or `certified`)
+        sets the level a client needs (`requires_verified_client: true` means `verified`; the
+        stricter wins); a `certified` client is an approved one the instance has certified
+        (PATCH /v1/oauth_clients/{id} `certified`). `owner_exempt: true` lets the developer who
+        owns a client request the scope with it on their own account whatever the client's
+        level. A name ending `:*` (`listings:*`) is a wildcard entry: it covers every
+        `listings:<anything>` for gating, consent text and released claims, and a client or
+        grant that holds `listings:*` holds each of them. By default the whole list is checked
+        and nothing is written if any entry is bad (422, one problem per field). `?mode=partial`
+        applies the valid entries and answers 200 with `rejected: [{ index, name, errors }]` (a
+        rejected entry leaves the scope of that name as it was). `?too_long=truncate` cuts over-
+        long labels and descriptions instead of refusing them and lists each cut in `warnings`.
         """
         return await self._t.request(
             method="PUT",
             path="/v1/instance/scopes",
-            query=_qd({'dry_run': True if dry_run else None}),
+            query=_qd({'mode': mode, 'too_long': too_long, 'dry_run': True if dry_run else None}),
             body=body,
             idempotency_key=idempotency_key,
         )
@@ -7411,18 +7906,22 @@ class AsyncInstance:
         """Alias of POST /v1/secret_keys. Create a scoped secret key: `name`, `scopes[]` (refused
         when unknown, or when the calling key does not hold them; presets `read_only`,
         `privacy:execute`, `privacy:grants:revoke`; or `preset: "app-runtime"` for an app server
-        runtime key), `expires_at` (at most a year; default one year; "never" is refused),
-        `allowed_ips` (CIDRs), `allowed_origins` (browser origins; a request with another Origin
-        gets 403 ORIGIN_NOT_ALLOWED), `owner` (default: the creating person or key),
-        `external_ref` (idempotent create: a repeat returns the existing key, 200,
-        idempotent_replay, no secret), `metadata` (tags; filter the list with
-        ?metadata[key]=value) and `key_format` (`atlas`, the default `atlas_<env>_sk_…`, or
-        `legacy` `sk_<env>_…`). The secret is returned once. Minting with an operator token
-        needs multi-factor sign-in within 5 minutes (403 STEP_UP_REQUIRED). Send `X-Secret-
-        Recipient: x25519:<public key>` to receive the secret sealed (libsodium sealed box) as
-        `sealed_secret` instead of in plaintext. Example: a data-rights tool's key, { "name":
-        "DSAR executor", "scopes": ["privacy:execute", "privacy:grants:revoke"], "expires_at":
-        "2027-04-01" }.
+        runtime key, or `preset: "integrations"` for the key a connected platform (consent
+        manager, referral or support platform) connects with, or `preset: "provisioning"` for a
+        deploy-script key that configures the instance: instance settings, domains, messaging
+        providers, integrations, webhooks, OAuth clients and providers, redirect URLs, branding
+        and keys, with no user, session or organization-member access), `expires_at` (at most a
+        year; default one year; "never" is refused), `allowed_ips` (CIDRs), `allowed_origins`
+        (browser origins; a request with another Origin gets 403 ORIGIN_NOT_ALLOWED), `owner`
+        (default: the creating person or key), `external_ref` (idempotent create: a repeat
+        returns the existing key, 200, idempotent_replay, no secret), `metadata` (tags; filter
+        the list with ?metadata[key]=value) and `key_format` (`atlas`, the default
+        `atlas_<env>_sk_…`, or `legacy` `sk_<env>_…`). The secret is returned once. Minting with
+        an operator token needs multi-factor sign-in within 5 minutes (403 STEP_UP_REQUIRED).
+        Send `X-Secret-Recipient: x25519:<public key>` to receive the secret sealed (libsodium
+        sealed box) as `sealed_secret` instead of in plaintext. Example: a data-rights tool's
+        key, { "name": "DSAR executor", "scopes": ["privacy:execute", "privacy:grants:revoke"],
+        "expires_at": "2027-04-01" }.
         """
         return await self._t.request(
             method="POST",
@@ -7473,6 +7972,114 @@ class AsyncInstance:
         return await self._t.request(
             method="PUT",
             path="/v1/instance/signing_key_schedule",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_staging_copies(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+        kind: Literal['clone', 'preview'] | None = None,
+    ) -> cm.GetInstanceStagingCopiesResponse:
+        """The staging copies and previews of this instance, newest first (deleted ones are left
+        out).
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/instance/staging_copies",
+            query=_qd({'limit': limit, 'starting_after': starting_after, 'kind': kind}),
+        )
+
+    async def iter_list_staging_copies(
+        self,
+        *,
+        limit: int | None = None,
+        kind: Literal['clone', 'preview'] | None = None,
+    ) -> AsyncIterator[cm.GetInstanceStagingCopiesResponseDataItem]:
+        """Every item of :meth:`list_staging_copies`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_staging_copies(limit=limit, kind=kind, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def create_staging_copy(
+        self,
+        body: cm.PostInstanceStagingCopiesBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostInstanceStagingCopiesResponse:
+        """Make a staging copy of this instance with its own secret key: a new development-mode
+        instance of the same app, with or without data (same body and rules as the platform
+        clone route, without secret_key_preset: the key it answers with holds the app-runtime
+        preset). For an instance that is not provisioned under a platform app. The copy never
+        carries secrets (configuration secrets are removed; API keys and provider connections
+        are not copied), private metadata of users and organizations, webhook endpoints, signing
+        keys, passwords or second factors. The new instance is in development mode: no email or
+        SMS is sent until it has its own provider keys. Needs instance:write (and users:read
+        when include has users). Honours Idempotency-Key; a repeat for a live ref returns it
+        (200, no secret). Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/instance/staging_copies",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def delete_staging_copy(
+        self,
+        staging_copy_id: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetInstanceStagingCopiesResponseDataItem:
+        """Delete a staging copy together with its instance and everything in it. Only an instance
+        a copy created can be removed this way. Audited.
+        """
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/instance/staging_copies/{_enc(staging_copy_id)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_staging_copy(
+        self,
+        staging_copy_id: str,
+    ) -> cm.GetInstanceStagingCopiesResponseDataItem:
+        """One staging copy: status, what was copied, what could not be placed."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/instance/staging_copies/{_enc(staging_copy_id)}",
+        )
+
+    async def refresh_staging_copy(
+        self,
+        staging_copy_id: str,
+        body: cm.PostInstanceStagingCopiesByIdRefreshBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetInstanceStagingCopiesResponseDataItem:
+        """Bring a completed staging copy up to date in place: the same instance, keys and host,
+        with this instance's configuration merged in again (and the data sections asked for, at
+        most the ones it was made with, up to 2000 rows each). synthetic_users { count (1-500),
+        seed } adds seeded test users (example.com addresses, the same seed gives the same
+        users, so repeating it adds none twice). ttl_hours extends a preview. Emails stay masked
+        consistently, so a refresh does not duplicate users. Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/instance/staging_copies/{_enc(staging_copy_id)}/refresh",
             query=_qd({'dry_run': True if dry_run else None}),
             body=body,
             idempotency_key=idempotency_key,
@@ -7821,6 +8428,43 @@ class AsyncMachines:
 
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
+
+    async def list_revoked(
+        self,
+        *,
+        starting_after: str | None = None,
+        since: str | None = None,
+        limit: str | None = None,
+    ) -> cm.GetMachinesRevokedResponse:
+        """The machine deny feed: machines revoked and machine grants ended since a cursor
+        (since=<iso|cursor>), oldest first, so a service that verifies machine tokens offline
+        can deny a revoked machine within one poll. A `machine` entry denies every token with
+        that `sub` issued before `revoked_at`; a `machine_grant` entry denies tokens with that
+        `sub` and `aud` (the `audience`) issued before it. Readable with an sk_ bearer or a
+        publishable key; a publishable key sees ids, audiences and times only. The revocation
+        stream carries the same events as pushes.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/machines/revoked",
+            query=_qd({'starting_after': starting_after, 'since': since, 'limit': limit}),
+        )
+
+    async def iter_list_revoked(
+        self,
+        *,
+        since: str | None = None,
+        limit: str | None = None,
+    ) -> AsyncIterator[cm.GetMachinesRevokedResponseDataItem]:
+        """Every item of :meth:`list_revoked`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_revoked(since=since, limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
 
     async def update_grant(
         self,
@@ -8248,6 +8892,34 @@ class AsyncMcpRegistry:
         )
 
 
+class AsyncMessageLinks:
+    _t: _AsyncTransport
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def create(
+        self,
+        body: cm.PostMessageLinksBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostMessageLinksResponse:
+        """Mint a link to the hosted unsubscribe (type `unsubscribe`, needs `category`) or the
+        hosted email-preference page (type `preferences`) for one address, for your own pages
+        and mail. Atlas fills the same links in for you when you send with `unsubscribe: true`
+        or put {{unsubscribe_url}} / {{preferences_url}} in a message. The link works for that
+        address and category only and does not expire. Audited. → 201.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/message_links",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+
 class AsyncMessageReceivers:
     _t: _AsyncTransport
 
@@ -8338,6 +9010,7 @@ class AsyncMessages:
         channel: Literal['email', 'sms', 'whatsapp', 'voice', 'push'] | None = None,
         status: Literal['queued', 'sent', 'delivered', 'bounced', 'complained', 'failed', 'suppressed', 'blocked'] | None = None,
         template: str | None = None,
+        category: str | None = None,
         provider: str | None = None,
         recipient: str | None = None,
         since: str | None = None,
@@ -8355,7 +9028,7 @@ class AsyncMessages:
         return await self._t.request(
             method="GET",
             path="/v1/messages",
-            query=_qd({'channel': channel, 'status': status, 'template': template, 'provider': provider, 'recipient': recipient, 'since': since, 'until': until, 'limit': limit, 'starting_after': starting_after}),
+            query=_qd({'channel': channel, 'status': status, 'template': template, 'category': category, 'provider': provider, 'recipient': recipient, 'since': since, 'until': until, 'limit': limit, 'starting_after': starting_after}),
         )
 
     async def iter_list(
@@ -8364,6 +9037,7 @@ class AsyncMessages:
         channel: Literal['email', 'sms', 'whatsapp', 'voice', 'push'] | None = None,
         status: Literal['queued', 'sent', 'delivered', 'bounced', 'complained', 'failed', 'suppressed', 'blocked'] | None = None,
         template: str | None = None,
+        category: str | None = None,
         provider: str | None = None,
         recipient: str | None = None,
         since: str | None = None,
@@ -8373,12 +9047,39 @@ class AsyncMessages:
         """Every item of :meth:`list`, following the cursor page by page."""
         cursor: str | None = None
         while True:
-            page = await self.list(channel=channel, status=status, template=template, provider=provider, recipient=recipient, since=since, until=until, limit=limit, starting_after=cursor)
+            page = await self.list(channel=channel, status=status, template=template, category=category, provider=provider, recipient=recipient, since=since, until=until, limit=limit, starting_after=cursor)
             for item in page.get("data", []):
                 yield item
             cursor = page.get("next_cursor")
             if not page.get("has_more") or not cursor:
                 return
+
+    async def create(
+        self,
+        body: cm.PostMessagesBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetMessagesResponseDataItem | cm.GetMessagesResponse:
+        """Send a transactional email from your app through your own email provider and its
+        failover. Give `to` (one address, or up to 10, each sent separately) and either
+        `template` (the name or id of a template from POST /v1/notification_templates, with
+        `data` variables) or `subject` with `html` and/or `text`, sent exactly as you wrote
+        them. The message is recorded in the ledger (GET /v1/messages) with category
+        `transactional`, your `category` and `tags`, and your provider's delivery callbacks fill
+        in its timeline; bounces and complaints suppress the address like sign-in mail. An
+        address on the suppression list is not sent to: the message is recorded with status
+        `suppressed` and returned. Returns 422 when the instance has no email provider of its
+        own (Atlas never sends your mail from its own sender). Accepts an Idempotency-Key. One
+        address returns the message; several return a list.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/messages",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
 
     async def get_summary(
         self,
@@ -8929,6 +9630,32 @@ class AsyncMigrationsSource:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
+    async def create_session(
+        self,
+        source: str,
+        body: cm.PostMigrationsBySourceSessionsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostMigrationsBySourceSessionsResponse:
+        """Bulk-import live legacy sessions (up to 1000 a call) so the bridge can answer from Atlas
+        alone (`mode: session_table`) and close early: the old system no longer has to be
+        reachable for a person to cross over. Each row names the legacy session (`token`, or its
+        SHA-256 hex as `token_hash`), the person (an Atlas `user_id` or your `external_id`) and
+        `expires_at`; `mfa_verified` carries a completed second factor. Rows that cannot be
+        linked to a person or have expired are reported in `errors` (`user_not_found`,
+        `session_expired`, `invalid_row`, `unknown_field`, `already_exchanged`), never guessed.
+        Re-sending a row only refreshes it, so a retry is safe. `dry_run: true` validates and
+        counts without writing.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/migrations/{_enc(source)}/sessions",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
     async def verify(
         self,
         source: str,
@@ -8962,19 +9689,159 @@ class AsyncMigrationsStatus:
         self,
         *,
         quiet_days: int | None = None,
+        accept_unmigrated: bool | None = None,
     ) -> cm.GetMigrationsStatusResponse:
         """Where the move stands: imported users by credential type (bcrypt, argon2, scrypt,
         pbkdf2, other, social, none; imported = has an external_id), bridged sessions, imported
         legacy sessions still live, failed bridge attempts by reason, daily use per source, and
         `safe_to_delete_old_auth` with the blockers that keep it false (recent use, live
-        sessions, an open dual-run window, an enabled bridge, or `no_enabled_source` when no
-        bridge or verifier was ever enabled or used, so nothing has been proven quiet).
-        `quiet_days` (default 14, max 90) sets how long the old auth must be unused.
+        sessions, an open dual-run window, an enabled bridge, `unmigrated_users` (imported users
+        who never signed in on Atlas and hold no session; counted in `unmigrated_users` with a
+        `unmigrated_user_sample` of ids), or `no_enabled_source` when no bridge or verifier was
+        ever enabled or used, so nothing has been proven quiet). `quiet_days` (default 14, max
+        90) sets how long the old auth must be unused.
         """
         return await self._t.request(
             method="GET",
             path="/v1/migrations/status",
-            query=_qd({'quiet_days': quiet_days}),
+            query=_qd({'quiet_days': quiet_days, 'accept_unmigrated': accept_unmigrated}),
+        )
+
+
+class AsyncNativeApps:
+    _t: _AsyncTransport
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetNativeAppsResponse:
+        """List the registered native apps with their callback URLs."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/native_apps",
+            query=_qd({'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetNativeAppsResponseDataItem]:
+        """Every item of :meth:`list`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list(limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def create(
+        self,
+        body: cm.PostNativeAppsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetNativeAppsResponseDataItem:
+        """Register a native app. A development app (platform development, no store identity) needs
+        allowed_users (1 to 100) and expires_at (at most 90 days ahead) and may use exp://
+        callbacks on production. An ios app needs bundle_id and team_id; an android app needs
+        package_name and sha256_cert_fingerprints; every app needs 1 to 10 callback_urls. The
+        app is added to the Apple App Site Association and Android Digital Asset Links files
+        served on the Frontend API host (https callbacks on that host become Universal / App
+        Links) and to the passkey app origins. 409 when the same app is already registered.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/native_apps",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_publishable_key(
+        self,
+    ) -> cm.GetNativeAppsPublishableKeyResponse:
+        """Read which registered native apps may use the instance publishable key (an empty list =
+        any).
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/native_apps/publishable_key",
+        )
+
+    async def set_publishable_key(
+        self,
+        body: cm.PutNativeAppsPublishableKeyBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetNativeAppsPublishableKeyResponse:
+        """Restrict the publishable key to the listed native apps (an empty list removes the
+        restriction). With a restriction, a native Frontend API request must send `X-Atlas-App-
+        Id` with one of these ids (403 APP_NOT_ALLOWED otherwise); web requests, which carry an
+        Origin header and no app id, are not affected. 400 NATIVE_APP_NOT_REGISTERED for an id
+        that is not registered.
+        """
+        return await self._t.request(
+            method="PUT",
+            path="/v1/native_apps/publishable_key",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def delete(
+        self,
+        native_app_id: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.DeleteNativeAppsByIdResponse:
+        """Unregister a native app. Its callbacks stop working at once, and it is removed from the
+        publishable key restriction.
+        """
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/native_apps/{_enc(native_app_id)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def get(
+        self,
+        native_app_id: str,
+    ) -> cm.GetNativeAppsResponseDataItem:
+        """Fetch one registered native app."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/native_apps/{_enc(native_app_id)}",
+        )
+
+    async def update(
+        self,
+        native_app_id: str,
+        body: cm.PatchNativeAppsByIdBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetNativeAppsResponseDataItem:
+        """Change a native app: only the fields you send change; callback_urls is replaced as a
+        whole. The platform cannot be changed. A development app may have expires_at extended
+        (at most 90 days from now) and allowed_users changed.
+        """
+        return await self._t.request(
+            method="PATCH",
+            path=f"/v1/native_apps/{_enc(native_app_id)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
         )
 
 
@@ -9020,6 +9887,64 @@ class AsyncOauthClients:
 
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
+
+    async def list_consents(
+        self,
+        oauth_client_id: str,
+        *,
+        status: Literal['active', 'revoked', 'all'] | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetOauthClientsByIdConsentsResponse:
+        """The users who authorized one OAuth client, one cursor page at a time: user id, granted
+        scopes, when they first authorized it and when it was last used. status is active
+        (default), revoked or all. The path takes the oac_ id or the public client_id. The
+        developer can read the same list at GET /oauth2/register/{client_id}/consents with the
+        client's registration_access_token.
+        """
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/oauth_clients/{_enc(oauth_client_id)}/consents",
+            query=_qd({'status': status, 'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_consents(
+        self,
+        oauth_client_id: str,
+        *,
+        status: Literal['active', 'revoked', 'all'] | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetOauthClientsByIdConsentsResponseDataItem]:
+        """Every item of :meth:`list_consents`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_consents(oauth_client_id, status=status, limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def revoke_consent(
+        self,
+        oauth_client_id: str,
+        body: cm.PostOauthClientsByIdConsentsRevokeBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostOauthClientsByIdConsentsRevokeResponse:
+        """Revoke the consents users gave one OAuth client, and their refresh and access tokens,
+        the same way revoking a single grant does: every active consent, or only the users in
+        user_ids. The app receives grant.revoked per user and the instance gets the usual token
+        revocation events. Audited. Idempotent.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/oauth_clients/{_enc(oauth_client_id)}/consents/revoke",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
 
     async def set_organization_access(
         self,
@@ -9171,8 +10096,9 @@ class AsyncOauthClients:
     ) -> cm.GetOauthClientsByIdUsageResponse:
         """Per-day usage of one OAuth client for the last `days` days (1 to 90, default 30): token
         endpoint calls, access tokens issued, distinct active users, errors and rate-limited
-        calls, with totals. The path takes the oac_ id or the public client_id. The developer
-        can read the same report at GET /oauth2/register/{client_id}/usage with the client's
+        calls, with totals, a per-day errors_by_code breakdown and the latest error (code,
+        endpoint, time). The path takes the oac_ id or the public client_id. The developer can
+        read the same report at GET /oauth2/register/{client_id}/usage with the client's
         registration_access_token.
         """
         return await self._t.request(
@@ -9244,6 +10170,89 @@ class AsyncOauthClients:
             path=f"/v1/oauth_clients/{_enc(oauth_client_id)}/webhook",
             query=_qd({'dry_run': True if dry_run else None}),
             body=body,
+            idempotency_key=idempotency_key,
+        )
+
+
+class AsyncOauthConsentRequests:
+    _t: _AsyncTransport
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def set_switch_account(
+        self,
+        *,
+        consent_challenge: str,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PutOauthConsentRequestsAcceptResponse:
+        """The signed-in user is not the person who should grant this application access. Returns
+        redirect_to: the application's original authorization request restarted with
+        prompt=login, so the visitor signs in again (as another account) and a fresh consent
+        challenge follows. Needs request_url on the challenge. Audited.
+        """
+        return await self._t.request(
+            method="PUT",
+            path="/v1/oauth_consent_requests/switch_account",
+            query=_qd({'consent_challenge': consent_challenge, 'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+
+class AsyncOauthDeviceRequests:
+    _t: _AsyncTransport
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get(
+        self,
+        *,
+        device_challenge: str,
+    ) -> cm.GetOauthDeviceRequestsResponse:
+        """Read a device challenge: the signed-in user, the code they typed, and the application
+        and scopes the device asks for. Your device_url page receives the challenge after the
+        person enters their code.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/oauth_device_requests",
+            query=_qd({'device_challenge': device_challenge}),
+        )
+
+    async def set_accept(
+        self,
+        *,
+        device_challenge: str,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PutOauthDeviceRequestsAcceptResponse:
+        """Approve a device challenge. Following redirect_to (in the same browser) binds the
+        signed-in user to the device code, records the consent and signs the device in. The link
+        is single-use and valid for five minutes. Audited.
+        """
+        return await self._t.request(
+            method="PUT",
+            path="/v1/oauth_device_requests/accept",
+            query=_qd({'device_challenge': device_challenge, 'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def set_reject(
+        self,
+        *,
+        device_challenge: str,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PutOauthDeviceRequestsAcceptResponse:
+        """Deny a device challenge. Following redirect_to marks the code denied, so the device's
+        next poll gets access_denied. Audited.
+        """
+        return await self._t.request(
+            method="PUT",
+            path="/v1/oauth_device_requests/reject",
+            query=_qd({'device_challenge': device_challenge, 'dry_run': True if dry_run else None}),
             idempotency_key=idempotency_key,
         )
 
@@ -9865,6 +10874,51 @@ class AsyncOrganizationConnections:
             body=body,
             idempotency_key=idempotency_key,
         )
+
+
+class AsyncOrganizationInvitations:
+    _t: _AsyncTransport
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(
+        self,
+        *,
+        email: str | None = None,
+        status: Literal['pending', 'accepted', 'revoked', 'expired', 'declined'] | None = None,
+        organization_id: str | None = None,
+        limit: str | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetOrganizationInvitationsResponse:
+        """Search organization invitations across every organization of the instance, newest first:
+        by invited `email` (exact, case-insensitive), `status` or `organization_id`. Each row
+        carries the organization name and slug. Secret key only (it is a lookup by address).
+        Pages with `limit` and `starting_after`.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/organization_invitations",
+            query=_qd({'email': email, 'status': status, 'organization_id': organization_id, 'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list(
+        self,
+        *,
+        email: str | None = None,
+        status: Literal['pending', 'accepted', 'revoked', 'expired', 'declined'] | None = None,
+        organization_id: str | None = None,
+        limit: str | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every item of :meth:`list`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list(email=email, status=status, organization_id=organization_id, limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
 
 
 class AsyncOrganizations:
@@ -10588,6 +11642,1423 @@ class AsyncPasskeyCampaigns:
         return await self._t.request(
             method="GET",
             path=f"/v1/passkey_campaigns/{_enc(passkey_campaign_id)}",
+        )
+
+
+class AsyncPca:
+    _t: _AsyncTransport
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def get_action_registry(
+        self,
+    ) -> cm.GetPcaActionRegistryResponse:
+        """The action registry of the instance: namespaces with their active version and counts,
+        publisher and reviewer keys.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/pca/action-registry",
+        )
+
+    async def list_action_registry_actions(
+        self,
+        *,
+        q: str | None = None,
+        state: Literal['confirmed', 'unconfirmed', 'stale', 'deprecated'] | None = None,
+        ns: str | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetPcaActionRegistryActionsResponse:
+        """Search the active actions by text, state and namespace."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/pca/action-registry/actions",
+            query=_qd({'q': q, 'state': state, 'ns': ns, 'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_action_registry_actions(
+        self,
+        *,
+        q: str | None = None,
+        state: Literal['confirmed', 'unconfirmed', 'stale', 'deprecated'] | None = None,
+        ns: str | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetPcaActionRegistryActionsResponseDataItem]:
+        """Every item of :meth:`list_action_registry_actions`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_action_registry_actions(q=q, state=state, ns=ns, limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def get_action_registry_action(
+        self,
+        verb: str,
+    ) -> cm.GetPcaActionRegistryActionsByVerbResponse:
+        """One action: policy card, effective profile, business rules and history."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/pca/action-registry/actions/{_enc(verb)}",
+        )
+
+    async def review_action_action_registry(
+        self,
+        verb: str,
+        body: dict[str, Any],
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaActionRegistryActionsByVerbReviewResponse:
+        """Open a published action for review: its active definition and business rules become a
+        draft (409 when one already exists), so an action published unconfirmed can be
+        confirmed. Takes no body. Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/pca/action-registry/actions/{_enc(verb)}/review",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_action_registry_drafts(
+        self,
+        *,
+        ns: str | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetPcaActionRegistryDraftsResponse:
+        """The review queue: drafts with their review view, policy card, lint, business rules in
+        plain sentences and the diff against the active version, the riskiest first.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/pca/action-registry/drafts",
+            query=_qd({'ns': ns, 'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_action_registry_drafts(
+        self,
+        *,
+        ns: str | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.PostPcaActionRegistryActionsByVerbReviewResponse]:
+        """Every item of :meth:`list_action_registry_drafts`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_action_registry_drafts(ns=ns, limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def delete_action_registry_draft(
+        self,
+        verb: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.DeletePcaActionRegistryDraftsByVerbResponse:
+        """Remove a draft from the review queue. Audited."""
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/pca/action-registry/drafts/{_enc(verb)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_action_registry_draft(
+        self,
+        verb: str,
+    ) -> cm.PostPcaActionRegistryActionsByVerbReviewResponse:
+        """One draft with its review view."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/pca/action-registry/drafts/{_enc(verb)}",
+        )
+
+    async def update_action_registry_draft(
+        self,
+        verb: str,
+        body: cm.PatchPcaActionRegistryDraftsByVerbBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaActionRegistryActionsByVerbReviewResponse:
+        """Edit a draft (title, description, effects, params, reversibility, compensates, traits,
+        business rules). Re-validated; any edit drops a confirmation and a rules review.
+        Audited.
+        """
+        return await self._t.request(
+            method="PATCH",
+            path=f"/v1/pca/action-registry/drafts/{_enc(verb)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def confirm_draft_action_registry(
+        self,
+        verb: str,
+        body: cm.PostPcaActionRegistryDraftsByVerbConfirmBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaActionRegistryActionsByVerbReviewResponse:
+        """Confirm a draft: the reviewer's signed attestation (and, for widened rules, a signed
+        rules review), with a passkey assertion over a challenge committing to exactly those
+        signatures. The passkey must be an active credential of an active reviewer whose pinned
+        reviewer key signed; a publisher key never confirms. Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/pca/action-registry/drafts/{_enc(verb)}/confirm",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def create_action_registry_import(
+        self,
+        body: cm.PostPcaActionRegistryImportsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaActionRegistryImportsResponse:
+        """Import actions from a source: a URL the server fetches (https, public addresses only, at
+        most 8 MiB; MCP servers are read with initialize + tools/list) or pasted text. Every
+        result is unreviewed or suggested and lands as a draft; with track, the URL is kept as a
+        source. Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/action-registry/imports",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_action_registry_namespaces_diff(
+        self,
+        ns: str,
+        *,
+        from_: str,
+        to: str,
+    ) -> cm.GetPcaActionRegistryNamespacesByNsDiffResponse:
+        """The semantic diff between two stored versions, and whether the move needs a reviewer."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/pca/action-registry/namespaces/{_enc(ns)}/diff",
+            query=_qd({'from': from_, 'to': to}),
+        )
+
+    async def delete_action_registry_namespaces_pin(
+        self,
+        ns: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.DeletePcaActionRegistryNamespacesByNsPinResponse:
+        """Unpin a namespace (later publishes activate again). Audited."""
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/pca/action-registry/namespaces/{_enc(ns)}/pin",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def set_action_registry_namespaces_pin(
+        self,
+        ns: str,
+        body: cm.PutPcaActionRegistryNamespacesByNsPinBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.DeletePcaActionRegistryNamespacesByNsPinResponse:
+        """Activate and pin a stored version (later publishes are staged). Audited."""
+        return await self._t.request(
+            method="PUT",
+            path=f"/v1/pca/action-registry/namespaces/{_enc(ns)}/pin",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_action_registry_namespaces_versions(
+        self,
+        ns: str,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetPcaActionRegistryNamespacesByNsVersionsResponse:
+        """The version history of a namespace."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/pca/action-registry/namespaces/{_enc(ns)}/versions",
+            query=_qd({'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_action_registry_namespaces_versions(
+        self,
+        ns: str,
+        *,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetPcaActionRegistryNamespacesByNsVersionsResponseDataItem]:
+        """Every item of :meth:`list_action_registry_namespaces_versions`, following the cursor
+        page by page.
+        """
+        cursor: str | None = None
+        while True:
+            page = await self.list_action_registry_namespaces_versions(ns, limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def get_action_registry_namespaces_version(
+        self,
+        ns: str,
+        version: str,
+    ) -> cm.GetPcaActionRegistryNamespacesByNsVersionsByVersionResponse:
+        """One stored version: pack, rules, traits, deprecated actions and changes."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/pca/action-registry/namespaces/{_enc(ns)}/versions/{_enc(version)}",
+        )
+
+    async def create_action_registry_pack(
+        self,
+        body: cm.PostPcaActionRegistryPacksBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaActionRegistryPacksResponse:
+        """Publish a signed pack (with business rules and custom traits) as the next version of its
+        namespace. 409 when it widens without a reviewer. Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/action-registry/packs",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def publish_action_registry(
+        self,
+        body: cm.PostPcaActionRegistryPublishBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaActionRegistryPacksResponse:
+        """Publish the drafts of a namespace as its next version: the active actions overlaid with
+        the drafts (removal drafts deprecate their action), the business rules and rules
+        reviews, signed with the instance's publisher key. 409 (reason_code widen_unreviewed)
+        when an action or its rules widen without a reviewer's signature. Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/action-registry/publish",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def create_action_registry_publisher_key(
+        self,
+        body: cm.PostPcaActionRegistryPublisherKeysBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaActionRegistryPublisherKeysResponse:
+        """Pin a publisher key (kid, Ed25519 public key). Audited."""
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/action-registry/publisher-keys",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def delete_action_registry_publisher_key(
+        self,
+        kid: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Revoke a publisher key. Audited."""
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/pca/action-registry/publisher-keys/{_enc(kid)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_action_registry_reviewers(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetPcaActionRegistryReviewersResponse:
+        """The reviewers who may confirm action definitions, with their keys and passkeys."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/pca/action-registry/reviewers",
+            query=_qd({'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_action_registry_reviewers(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetPcaActionRegistryReviewersResponseDataItem]:
+        """Every item of :meth:`list_action_registry_reviewers`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_action_registry_reviewers(limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def create_action_registry_reviewers_enrolment(
+        self,
+        body: cm.PostPcaActionRegistryReviewersEnrolmentsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaActionRegistryReviewersEnrolmentsResponse:
+        """Create a single-use reviewer enrolment link (24 hours). The reviewer creates a passkey
+        and a reviewer key on the hosted page; the key is pinned with the reviewer role.
+        Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/action-registry/reviewers/enrolments",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def delete_action_registry_reviewer(
+        self,
+        reviewer_id: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetPcaActionRegistryReviewersResponseDataItem:
+        """Remove a reviewer: the reviewer key is unpinned (its confirmations stop counting) and
+        every passkey revoked. Audited.
+        """
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/pca/action-registry/reviewers/{_enc(reviewer_id)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_action_registry_sources(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetPcaActionRegistrySourcesResponse:
+        """The tracked import sources, with their schedule and last sync."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/pca/action-registry/sources",
+            query=_qd({'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_action_registry_sources(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetPcaActionRegistrySourcesResponseDataItem]:
+        """Every item of :meth:`list_action_registry_sources`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_action_registry_sources(limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def create_action_registry_source(
+        self,
+        body: cm.PostPcaActionRegistrySourcesBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetPcaActionRegistrySourcesResponseDataItem:
+        """Track a source for manual or scheduled (hourly / daily) sync. Audited."""
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/action-registry/sources",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def delete_action_registry_source(
+        self,
+        source_id: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.DeletePcaActionRegistrySourcesByIdResponse:
+        """Stop tracking a source (its drafts stay in the queue). Audited."""
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/pca/action-registry/sources/{_enc(source_id)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def update_action_registry_source(
+        self,
+        source_id: str,
+        body: cm.PatchPcaActionRegistrySourcesByIdBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetPcaActionRegistrySourcesResponseDataItem:
+        """Change a source: URL, verb (jsonschema) or schedule. Audited."""
+        return await self._t.request(
+            method="PATCH",
+            path=f"/v1/pca/action-registry/sources/{_enc(source_id)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def sync_source_action_registry(
+        self,
+        source_id: str,
+        body: dict[str, Any],
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaActionRegistrySourcesByIdSyncResponse:
+        """Sync a source now: added and changed operations become unreviewed drafts, removed ones
+        removal drafts; unchanged ones are left as they are. Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/pca/action-registry/sources/{_enc(source_id)}/sync",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_action_registry_templates(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetPcaActionRegistryTemplatesResponse:
+        """The starter packs (e-commerce, fintech, healthcare, SaaS admin, developer tools)."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/pca/action-registry/templates",
+            query=_qd({'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_action_registry_templates(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetPcaActionRegistryTemplatesResponseDataItem]:
+        """Every item of :meth:`list_action_registry_templates`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_action_registry_templates(limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def apply_template_action_registry(
+        self,
+        template_id: str,
+        body: cm.PostPcaActionRegistryTemplatesByIdApplyBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetPcaActionRegistryDraftsResponse:
+        """Add a starter pack's actions (with their business rules and examples) to a namespace as
+        drafts. Never confirmed. Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/pca/action-registry/templates/{_enc(template_id)}/apply",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_approvals_settings(
+        self,
+    ) -> cm.GetPcaApprovalsSettingsResponse:
+        """Approval channel settings of this instance (secrets are reported as set / not set, never
+        returned).
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/pca/approvals/settings",
+        )
+
+    async def set_approvals_settings(
+        self,
+        body: cm.PutPcaApprovalsSettingsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetPcaApprovalsSettingsResponse:
+        """Update the approval channels (push, email, sms, slack, webhook), default member
+        channels, the Slack webhook and the CIBA identity provider. Omitted fields are kept;
+        null clears. Audited.
+        """
+        return await self._t.request(
+            method="PUT",
+            path="/v1/pca/approvals/settings",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_approvers(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetPcaApproversResponse:
+        """List passkey approvers with their members, devices and quorum."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/pca/approvers",
+            query=_qd({'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_approvers(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetPcaApproversResponseDataItem]:
+        """Every item of :meth:`list_approvers`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_approvers(limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def create_approvers_enrolment(
+        self,
+        body: cm.PostPcaApproversEnrolmentsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaApproversEnrolmentsResponse:
+        """Create a single-use passkey enrolment link (24 hours): a new approver bound to a user /
+        org / machine, a delegate of an existing approver, or another device of a member. Adding
+        to an existing approver needs one of its passkeys on the enrolment page. Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/approvers/enrolments",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_approver(
+        self,
+        approver_id: str,
+    ) -> cm.GetPcaApproversResponseDataItem:
+        """One passkey approver with its members, devices and quorum."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/pca/approvers/{_enc(approver_id)}",
+        )
+
+    async def update_approver(
+        self,
+        approver_id: str,
+        body: cm.PatchPcaApproversByIdBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetPcaApproversResponseDataItem:
+        """Change an approver: quorum, display name, or disable it (a disabled approver cannot
+        approve). Audited.
+        """
+        return await self._t.request(
+            method="PATCH",
+            path=f"/v1/pca/approvers/{_enc(approver_id)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def delete_approvers_credential(
+        self,
+        approver_id: str,
+        credential_id: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetPcaApproversResponseDataItem:
+        """Revoke a passkey: its wrapped principal key copy is deleted and it can no longer
+        approve. Audited.
+        """
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/pca/approvers/{_enc(approver_id)}/credentials/{_enc(credential_id)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def update_approvers_member(
+        self,
+        approver_id: str,
+        member_id: str,
+        body: cm.PatchPcaApproversByIdMembersByMemberIdBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetPcaApproversResponseDataItem:
+        """Change a member's notification channels, contact details or status. Audited."""
+        return await self._t.request(
+            method="PATCH",
+            path=f"/v1/pca/approvers/{_enc(approver_id)}/members/{_enc(member_id)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def create_beacon(
+        self,
+        body: cm.PostPcaBeaconsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaBeaconsResponse:
+        """Issue a dead-man liveness beacon. PRINCIPAL path (no Authorization header): submit
+        `beacon`, a v2 beacon signed with the grant principal's own key (scope = a grant_ref
+        they issued, or '*'): the principal halts their agents just by withholding, without
+        trusting the operator. OPERATOR path (`sk_` + `pca:write`): the server signs with the
+        guardian key (`scope`, `validity_ms`). `seq` must strictly increase per (scope, issuer)
+        (409 on replay); validity is hard-capped at one hour. A pure-PQ or hybrid principal
+        beacon is accepted only under the PQ key pinned for the issuer (POST /v1/pca/pq-pins),
+        and only after the issuer check is it charged to the per-source
+        pqVerifyUnitsPerSourcePerMin budget (429 when exhausted) and verified, Ed25519 half
+        first. Beacons gate adjudication only when `auth_config.pca.beacons` is enabled.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/beacons",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_bond_accounts(
+        self,
+        *,
+        account: str,
+    ) -> cm.GetPcaBondAccountsResponse:
+        """A bond account's balance (?account=<principal_pub>; also `escrow` and `atlas-treasury`)."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/pca/bond-accounts",
+            query=_qd({'account': account}),
+        )
+
+    async def create_bond_account(
+        self,
+        body: cm.PostPcaBondAccountsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetPcaBondAccountsResponse:
+        """Credit a depositor's bond escrow balance (funds the optimistic fast path). The depositor
+        account is the grant's principal_pub; bonds are sized from server policy exposure and
+        debited atomically at claim open. Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/bond-accounts",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def create_constitution(
+        self,
+        body: cm.PostPcaConstitutionsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaConstitutionsResponse:
+        """Register the grant's CONSTITUTION: a principal-signed set of invariants (never /
+        never_unless / cap / rate / never_after / require_prior / require_approval_over) the
+        agent must never violate whatever its permissions say. Verified against the grant
+        principal's key, immutable once set (a different constitution is 409), and enforced on
+        every action inside the admission transaction with a hash-chained, server-persisted
+        monitor state. Public (the signature is the authority) or `sk_` + pca:write (still
+        principal-signed).
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/constitutions",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_grants(
+        self,
+        *,
+        principal: str | None = None,
+        agent: str | None = None,
+        status: Literal['active', 'revoked'] | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetPcaGrantsResponse:
+        """List registered grants (grant management): filter by principal, agent (holder) and
+        status; keyset pagination.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/pca/grants",
+            query=_qd({'principal': principal, 'agent': agent, 'status': status, 'limit': limit, 'cursor': cursor, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_grants(
+        self,
+        *,
+        principal: str | None = None,
+        agent: str | None = None,
+        status: Literal['active', 'revoked'] | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> AsyncIterator[cm.GetPcaGrantsResponseDataItem]:
+        """Every item of :meth:`list_grants`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_grants(principal=principal, agent=agent, status=status, limit=limit, cursor=cursor, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def delete_grant(
+        self,
+        grant_ref: str,
+        body: cm.DeletePcaGrantsByGrantRefBody,
+        *,
+        scope: Literal['grant', 'agent'] | None = None,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.DeletePcaGrantsByGrantRefResponse:
+        """Revoke a grant (scope=grant) or every active grant of its principal and agent
+        (scope=agent, operator only). Operator `sk_` + pca:write, or with no Authorization
+        header the principal's signature (principal_sig) over the root revocation message. The
+        signed revocation epoch is bumped in the same transaction.
+        """
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/pca/grants/{_enc(grant_ref)}",
+            query=_qd({'scope': scope, 'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_grant(
+        self,
+        grant_ref: str,
+    ) -> cm.GetPcaGrantsByGrantRefResponse:
+        """Inspect a grant: the signed chain, its content digest, remaining trust budget, revoked-
+        capability count and the current signed revocation epoch.
+        """
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/pca/grants/{_enc(grant_ref)}",
+        )
+
+    async def amend_grant(
+        self,
+        grant_ref: str,
+        body: cm.PostPcaGrantsByGrantRefAmendBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaGrantsByGrantRefAmendResponse:
+        """Amend a grant's authority statement. `narrow`, or any change that is provably not wider,
+        is signed by the holder or the principal and revises the grant in place (revision + 1; a
+        signature names the revision, so it cannot be replayed). A change that widens or is
+        incomparable needs the PRINCIPAL's signature, a spent step-up and `new_grant_ref` (a
+        registered active grant of the same principal and agent); it creates that successor's
+        statement (`supersedes`) and kills the old grant. Public (the signature is the
+        authority) or `sk_` + pca:write (still signed).
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/pca/grants/{_enc(grant_ref)}/amend",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def set_grants_authority(
+        self,
+        grant_ref: str,
+        body: cm.PutPcaGrantsByGrantRefAuthorityBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PutPcaGrantsByGrantRefAuthorityResponse:
+        """Enrol a grant into management: the principal signs its initial authority statement at
+        revision 0 (the signature covers {grant, rev: 0, action: 'replace', authority digest}
+        under the grant-amend domain). Once; afterwards use amend. Admission then enforces the
+        statement as an extra tighten-only ceiling. Public (the signature is the authority) or
+        `sk_` + pca:write (still principal-signed).
+        """
+        return await self._t.request(
+            method="PUT",
+            path=f"/v1/pca/grants/{_enc(grant_ref)}/authority",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_grants_needs(
+        self,
+        grant_ref: str,
+        *,
+        status: Literal['pending', 'approved', 'denied'] | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetPcaGrantsByGrantRefNeedsResponse:
+        """A grant's need requests, optionally filtered by status."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/pca/grants/{_enc(grant_ref)}/needs",
+            query=_qd({'status': status, 'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_grants_needs(
+        self,
+        grant_ref: str,
+        *,
+        status: Literal['pending', 'approved', 'denied'] | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every item of :meth:`list_grants_needs`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_grants_needs(grant_ref, status=status, limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def create_grants_need(
+        self,
+        grant_ref: str,
+        body: cm.PostPcaGrantsByGrantRefNeedsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaGrantsByGrantRefNeedsResponse:
+        """File typed needs (incremental authorization). The grant holder signs them at the current
+        revision (need-request domain), or the operator files them. Nothing changes until the
+        principal approves.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/pca/grants/{_enc(grant_ref)}/needs",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def step_up_grant(
+        self,
+        grant_ref: str,
+        body: dict[str, Any],
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaGrantsByGrantRefStepUpResponse:
+        """Issue a single-use step-up challenge for a grant (valid 5 minutes). The principal signs
+        its nonce on its own device; a widening spends one.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/pca/grants/{_enc(grant_ref)}/step-up",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def approve_step_up_grants(
+        self,
+        grant_ref: str,
+        challenge_id: str,
+        body: cm.PostPcaGrantsByGrantRefStepUpByChallengeIdApproveBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaGrantsByGrantRefStepUpByChallengeIdApproveResponse:
+        """Approve a step-up challenge with the grant principal's signature over {grant, challenge,
+        nonce} (grant-step-up domain). Once.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/pca/grants/{_enc(grant_ref)}/step-up/{_enc(challenge_id)}/approve",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def rotate_guardian(
+        self,
+        body: dict[str, Any],
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaGuardianRotateResponse:
+        """Rotate the guardian signing key: a new keypair and epoch + 1; the previous public key is
+        retained so STHs, revocation epochs and receipts signed under it still verify. New
+        signatures use the new epoch. Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/guardian/rotate",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_intent_maps_observations(
+        self,
+        digest: str,
+        *,
+        limit: int | None = None,
+        after: str | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetPcaIntentMapsByDigestObservationsResponse:
+        """List the runtime observations recorded against a map, oldest first. Paginate with
+        `after` = the previous page `next_cursor`.
+        """
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/pca/intent/maps/{_enc(digest)}/observations",
+            query=_qd({'limit': limit, 'after': after, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_intent_maps_observations(
+        self,
+        digest: str,
+        *,
+        limit: int | None = None,
+        after: str | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every item of :meth:`list_intent_maps_observations`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_intent_maps_observations(digest, limit=limit, after=after, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def create_intent_schema(
+        self,
+        body: cm.PostPcaIntentSchemasBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaIntentSchemasResponse:
+        """Anchor a site's signed action schema (Intent Layer v2, `pca-action-schema` v1 served at
+        /.well-known/pca-actions.json). The schema is verified against the site's discovery keys
+        (`keys`, the `intent.schema_keys` of its /.well-known/pca-configuration; the suite comes
+        from the key entry), content-addressed (`actionSchemaDigest`) and appended to the
+        instance's intent transparency log (kind `schema`), so a site cannot show different
+        schemas to different users without detection. Audited. 201 anchored, 200 already
+        anchored.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/intent/schemas",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def approve_need(
+        self,
+        need_id: str,
+        body: cm.PostPcaNeedsByNeedIdApproveBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaNeedsByNeedIdApproveResponse:
+        """Approve a need request. The principal signs the approved needs at the current revision
+        (need-approve domain); the approved list must name the same verbs and resources in
+        order, and an amount may only be lowered, and only on a need marked adjustable. Needs a
+        spent step-up and `new_grant_ref` (the registered successor); the result is a successor
+        grant with the merged authority.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/pca/needs/{_enc(need_id)}/approve",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def deny_need(
+        self,
+        need_id: str,
+        body: cm.PostPcaNeedsByNeedIdDenyBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaNeedsByNeedIdDenyResponse:
+        """Deny a need request: the principal's signature over the empty approval of this need at
+        the current revision, or the operator key.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/pca/needs/{_enc(need_id)}/deny",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def delete_pq_pin(
+        self,
+        identity: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.DeletePcaPqPinsByIdentityResponse:
+        """Remove an identity PQ key pin (the rotation step: delete, then the identity registers a
+        new binding at a HIGHER epoch; the delete leaves a tombstone holding the last epoch, so
+        the removed binding and every older one is refused). Pure-PQ and hybrid artifacts from
+        that identity are refused until it is re-pinned. Audited.
+        """
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/pca/pq-pins/{_enc(identity)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_principals(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetPcaPrincipalsResponse:
+        """The instance's enrolled principals (public key, bound subject, status)."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/pca/principals",
+            query=_qd({'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_principals(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetPcaPrincipalsResponseDataItem]:
+        """Every item of :meth:`list_principals`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_principals(limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def create_principal(
+        self,
+        body: cm.PostPcaPrincipalsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaPrincipalsResponse:
+        """Enrol a principal public key, binding it to an Atlas identity (user, org, or machine) in
+        this instance. A grant whose issuer is an enrolled active principal registers as the
+        `verified` tier; an unenrolled issuer is accepted only as `unverified`. Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/principals",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def delete_principal(
+        self,
+        principal_pub: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.DeletePcaPrincipalsByPrincipalPubResponse:
+        """Disable an enrolled principal. Its existing verified grants are denied at adjudication
+        and no new verified grant can be registered under it. Audited.
+        """
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/pca/principals/{_enc(principal_pub)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def create_undo_record(
+        self,
+        body: cm.PostPcaUndoRecordsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaUndoRecordsResponse:
+        """Register an undo record with the hosted undo ledger. The record's receipt chain must
+        verify against the instance's undo signer (auth_config.pca.undoSigner); 409 when none is
+        configured. Idempotent on the record id: the same record again returns the stored one,
+        different content under the same id is a 409. Audited.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/undo/records",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_undo_record(
+        self,
+        record_id: str,
+    ) -> cm.PostPcaUndoRecordsResponse:
+        """A stored undo record (without its encoded PCActn) and the veto waiting on it, if any."""
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/pca/undo/records/{_enc(record_id)}",
+        )
+
+    async def set_undo_record(
+        self,
+        record_id: str,
+        body: cm.PostPcaUndoRecordsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaUndoRecordsResponse:
+        """Replace an undo record after a transition. Accepted only when the new receipt chain
+        verifies, the stored receipts are a prefix of it, the record identity (id, audience,
+        grant, holder, principal, compensation, window, PCActn) is unchanged and `ver`
+        increases. Moving to vetoed, compensated or compensation_failed settles a pending veto;
+        finalizing while a veto is pending is a 409. Audited.
+        """
+        return await self._t.request(
+            method="PUT",
+            path=f"/v1/pca/undo/records/{_enc(record_id)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_undo_vetoes(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetPcaUndoVetoesResponse:
+        """Vetoes received by the instance that the resource server has not applied yet, oldest
+        first (?limit 1..200, default 100), each with the principal's token. The resource server
+        re-verifies the token as of the veto time, applies the veto and PUTs the signed record.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/pca/undo/vetoes",
+            query=_qd({'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_undo_vetoes(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetPcaUndoVetoesResponseDataItem]:
+        """Every item of :meth:`list_undo_vetoes`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_undo_vetoes(limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def create_workflow_receipt(
+        self,
+        body: cm.PostPcaWorkflowReceiptsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPcaWorkflowReceiptsResponse:
+        """Issue a guardian-signed step receipt for a step of a workflow the grant principal
+        committed (K5). The operator reports the outcome and outputs of an executed step; the
+        receipt chains to the earlier receipts and lets a later step be admitted.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/pca/workflow-receipts",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+
+class AsyncPermissionAliases:
+    _t: _AsyncTransport
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetPermissionAliasesResponse:
+        """List permission aliases: legacy keys that stand for a canonical permission key."""
+        return await self._t.request(
+            method="GET",
+            path="/v1/permission_aliases",
+            query=_qd({'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetPermissionAliasesResponseDataItem]:
+        """Every item of :meth:`list`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list(limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def create(
+        self,
+        body: cm.PostPermissionAliasesBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetPermissionAliasesResponseDataItem:
+        """Create or repoint a permission alias from a body ({ alias, permission_key }); the same
+        write as PUT /v1/permission_aliases/{alias}.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/permission_aliases",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def delete(
+        self,
+        alias: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.DeletePermissionAliasesByAliasResponse:
+        """Remove an alias. Writes that still send it are then refused or dropped as an unknown
+        key.
+        """
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/permission_aliases/{_enc(alias)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def set(
+        self,
+        alias: str,
+        body: cm.PutPermissionAliasesByAliasBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetPermissionAliasesResponseDataItem:
+        """Create or repoint an alias. Writes that take permission keys (role grants, seat
+        permissions, invitations, implies) accept the alias and store the canonical key; tokens
+        always carry the canonical key. The alias must not be a permission key, and the target
+        must be an existing permission.
+        """
+        return await self._t.request(
+            method="PUT",
+            path=f"/v1/permission_aliases/{_enc(alias)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+
+class AsyncPermissions:
+    _t: _AsyncTransport
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def rename(
+        self,
+        permission_id: str,
+        body: cm.PostPermissionsByIdRenameBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPermissionsByIdRenameResponse:
+        """Rename a custom permission. The key moves in one transaction everywhere Atlas stores it
+        (the permission, seats, invitations, implies, aliases; role grants follow by id) and the
+        old key becomes an alias, so code and imports that still send it keep working. Sessions
+        minted before the rename carry the old key until they refresh. System permissions cannot
+        be renamed. permission.updated is sent with previous_key.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/permissions/{_enc(permission_id)}/rename",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
         )
 
 
@@ -11317,6 +13788,82 @@ class AsyncResourceServers:
             cursor = page.get("next_cursor")
             if not page.get("has_more") or not cursor:
                 return
+
+
+class AsyncRevocations:
+    _t: _AsyncTransport
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(
+        self,
+        *,
+        after: str | None = None,
+        since: str | None = None,
+        kinds: str | None = None,
+        limit: str | None = None,
+        wait: str | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetRevocationsResponse:
+        """Long-poll the revocation stream: one ordered list of everything that ended a session, a
+        refresh-token family, an API key, a machine, a machine grant or a person's access, each
+        with ids, reason and actor. Resume by cursor: pass the `next_cursor` of the previous
+        answer as `after`. With neither `after` nor `since` it answers empty with a
+        `next_cursor` that points at "now", so a new consumer starts from this moment. `wait`
+        (seconds, up to 30) holds the request open until an event arrives. Order is commit
+        order: the cursor is a sequence number assigned to what has committed, so a consumer
+        that follows it never skips an event, however late it committed. Retention is the event
+        log's (90 days), and webhook endpoints subscribed to the same event types are its second
+        channel. Delivery is at-least-once and in order; keep your handler idempotent.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/revocations",
+            query=_qd({'after': after, 'since': since, 'kinds': kinds, 'limit': limit, 'wait': wait, 'starting_after': starting_after}),
+        )
+
+    async def iter_list(
+        self,
+        *,
+        after: str | None = None,
+        since: str | None = None,
+        kinds: str | None = None,
+        limit: str | None = None,
+        wait: str | None = None,
+    ) -> AsyncIterator[cm.GetRevocationsResponseDataItem]:
+        """Every item of :meth:`list`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list(after=after, since=since, kinds=kinds, limit=limit, wait=wait, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def get_stream(
+        self,
+        *,
+        after: str | None = None,
+        since: str | None = None,
+        kinds: str | None = None,
+    ) -> str:
+        """Server-Sent Events stream of the revocation stream (the same events as `GET
+        /v1/revocations`). Each `revocation` event carries the frame as JSON and its `seq` as
+        the SSE `id`; resume with `Last-Event-ID` or `after`. A `ready` event carries the cursor
+        the stream started from, a `: keep-alive` comment arrives every 15 seconds, and a
+        `reconnect` event ends a connection after an hour: reconnect with the last id. At most
+        20 streams may be open per instance (429 beyond). Same `kinds` and `since` filters.
+        `@atlasauth/backend` `revocationStream` and `createRevocationMirror` consume it with
+        reconnect, backoff and resume.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/revocations/stream",
+            query=_qd({'after': after, 'since': since, 'kinds': kinds}),
+            raw=True,
+        )
 
 
 class AsyncRiskBasedMfa:
@@ -12067,6 +14614,30 @@ class AsyncSessions:
             if not page.get("has_more") or not cursor:
                 return
 
+    async def set_active_organization(
+        self,
+        session_id: str,
+        body: cm.PutSessionsByIdActiveOrganizationBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.Session:
+        """Set (or clear, with organization_id null) the active organization of a session from your
+        backend. The user must hold a seat in it (or in an ancestor with role inheritance on)
+        and meet its second-factor policy, as for their own switch: an organization they are not
+        in is 404, a policy that needs a second factor is 403 STEP_UP_REQUIRED. The next token
+        minted for the session (refresh or getToken) carries that organization claims. An ended
+        session is 409; an unknown id, or one of another instance, is 404. Returns the session
+        with last_active_organization_id.
+        """
+        return await self._t.request(
+            method="PUT",
+            path=f"/v1/sessions/{_enc(session_id)}/active_organization",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
     async def delete_binding(
         self,
         session_id: str,
@@ -12155,6 +14726,107 @@ class AsyncSsf:
     def __init__(self, transport: _AsyncTransport) -> None:
         self._t = transport
 
+    async def add_subject(
+        self,
+        body: cm.PostSsfAddSubjectBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Add a subject to a stream (8.1.3.2). 200, empty body."""
+        return await self._t.request(
+            method="POST",
+            path="/v1/ssf/add_subject",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def delete_configuration(
+        self,
+        body: dict[str, Any],
+        *,
+        stream_id: str,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Delete a stream (?stream_id, 8.1.1.5): 204."""
+        return await self._t.request(
+            method="DELETE",
+            path="/v1/ssf/configuration",
+            query=_qd({'stream_id': stream_id, 'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_configuration(
+        self,
+        *,
+        stream_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Read one stream (?stream_id) or all of the receiver's streams (8.1.1.2). Another
+        receiver's stream is 404.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/ssf/configuration",
+            query=_qd({'stream_id': stream_id}),
+        )
+
+    async def update_configuration(
+        self,
+        body: cm.PatchSsfConfigurationBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Update a stream (8.1.1.3): only the members present change; transmitter-supplied members
+        must match; the delivery method cannot change.
+        """
+        return await self._t.request(
+            method="PATCH",
+            path="/v1/ssf/configuration",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def configuration(
+        self,
+        body: cm.PostSsfConfigurationBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostSsfConfigurationResponse:
+        """Create an event stream (OpenID SSF 1.0 8.1.1.1). Receiver-supplied members:
+        events_requested, delivery, description. Poll delivery by default (the transmitter
+        assigns the endpoint); push needs an https endpoint_url. One stream per receiver (a
+        second is 409). The stream belongs to the creating API key.
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/ssf/configuration",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def set_configuration(
+        self,
+        body: cm.PutSsfConfigurationBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Replace a stream (8.1.1.4): a missing receiver-supplied member is deleted."""
+        return await self._t.request(
+            method="PUT",
+            path="/v1/ssf/configuration",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
     async def create_event(
         self,
         body: cm.PostSsfEventsBody | None = None,
@@ -12170,6 +14842,33 @@ class AsyncSsf:
         return await self._t.request(
             method="POST",
             path="/v1/ssf/events",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_metadata(
+        self,
+    ) -> cm.GetSsfMetadataResponse:
+        """SSF transmitter configuration metadata (issuer, delivery methods, the five management
+        endpoints).
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/ssf/metadata",
+        )
+
+    async def remove_subject(
+        self,
+        body: cm.PostSsfRemoveSubjectBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Remove a subject from a stream (8.1.3.3). 204; an unknown subject is ignored."""
+        return await self._t.request(
+            method="POST",
+            path="/v1/ssf/remove_subject",
             query=_qd({'dry_run': True if dry_run else None}),
             body=body,
             idempotency_key=idempotency_key,
@@ -12237,6 +14936,25 @@ class AsyncSsf:
             if not page.get("has_more") or not cursor:
                 return
 
+    async def poll_stream(
+        self,
+        stream_id: str,
+        body: cm.PostSsfStreamsByStreamIdPollBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostSsfStreamsByStreamIdPollResponse:
+        """Poll a stream (RFC 8936): acknowledge with ack, report invalid SETs with setErrs,
+        receive up to maxEvents unacknowledged SETs.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/ssf/streams/{_enc(stream_id)}/poll",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
     async def add_subject(
         self,
         body: cm.PostSsfSubjectsAddBody | None = None,
@@ -12269,6 +14987,24 @@ class AsyncSsf:
         return await self._t.request(
             method="POST",
             path="/v1/ssf/subjects/remove",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def verification(
+        self,
+        body: cm.PostSsfVerificationBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Request a verification event (8.1.4.2): 204, and a signed SET carrying the optional
+        state is delivered on the stream (pushed, or retained for polling).
+        """
+        return await self._t.request(
+            method="POST",
+            path="/v1/ssf/verification",
             query=_qd({'dry_run': True if dry_run else None}),
             body=body,
             idempotency_key=idempotency_key,
@@ -12778,6 +15514,70 @@ class AsyncUsers:
             idempotency_key=idempotency_key,
         )
 
+    async def set_by_external_id(
+        self,
+        external_id: str,
+        body: cm.PutUsersByExternalIdByExternalIdBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.User:
+        """Create-or-update the user keyed by your own id (external_id, the path segment, URL-
+        encoded): 201 with the new user when none holds it (the body is that of POST /v1/users,
+        email_address required, external_id from the path), else 200 with the existing user
+        updated (only first_name, last_name, image_url, public_metadata, private_metadata,
+        unsafe_metadata, password and referral_code apply; email fields and the other create-
+        only fields are ignored). Two calls racing for a new external_id create exactly one
+        user. When nobody holds the id but a user already has the address, the answer is 409
+        IDENTIFIER_EXISTS with meta.user_id; send link_by_verified_email: true to adopt that
+        user instead (200), which works only when the address is verified in Atlas and the user
+        has no external_id yet (a different id is never overwritten). Emits user.created or
+        user.updated.
+        """
+        return await self._t.request(
+            method="PUT",
+            path=f"/v1/users/by_external_id/{_enc(external_id)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_deleted(
+        self,
+        *,
+        since: str,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetUsersDeletedResponse:
+        """Reconcile missed `user.deleted` webhooks: every user deleted at or after `since`, oldest
+        first, as `id`, `external_id` and `deleted_at`. Nothing else about the person is
+        returned. Page with `starting_after` = the previous `next_cursor`. Rows exist until the
+        personal-data scrub (`compliance.retention.deletedUserGraceDays`, default 30 days), so
+        reconcile at least that often; failed deliveries themselves are listed by `GET
+        /v1/webhook_dlq?event_type=user.deleted`.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/users/deleted",
+            query=_qd({'since': since, 'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_deleted(
+        self,
+        *,
+        since: str,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetUsersDeletedResponseDataItem]:
+        """Every item of :meth:`list_deleted`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_deleted(since=since, limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
     async def create_deleted_address(
         self,
         body: cm.PostUsersDeletedAddressesBody,
@@ -13017,6 +15817,44 @@ class AsyncUsers:
             idempotency_key=idempotency_key,
         )
 
+    async def list_approval_requests(
+        self,
+        user_id: str,
+        *,
+        status: str | None = None,
+        limit: int | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetUsersByIdApprovalRequestsResponse:
+        """Everything one user has open, in one list: approval requests about them (filter with
+        `status`; `limit` 1 to 100, default 25) and, while `status` is pending or absent, their
+        sign-in "approve in your app" requests (`kind: "sign_in_approval"`, with `purpose`, the
+        shuffled `choices` and `requested_from`; the right number is never included). Replaces
+        keeping your own pointer to the latest request. Needs `approvals:read` (a key with
+        `users:read` keeps working).
+        """
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/users/{_enc(user_id)}/approval_requests",
+            query=_qd({'status': status, 'limit': limit, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_approval_requests(
+        self,
+        user_id: str,
+        *,
+        status: str | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[cm.GetUsersByIdApprovalRequestsResponseDataItem]:
+        """Every item of :meth:`list_approval_requests`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_approval_requests(user_id, status=status, limit=limit, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
     async def cancel_approval_request(
         self,
         user_id: str,
@@ -13072,6 +15910,56 @@ class AsyncUsers:
             method="DELETE",
             path=f"/v1/users/{_enc(user_id)}/cookie_consents",
             query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def create_delegation_token(
+        self,
+        user_id: str,
+        body: cm.PostUsersByIdDelegationTokensBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostUsersByIdDelegationTokensResponse:
+        """Mint a short-lived delegation token so your server can act as this user for one purpose.
+        The token is limited to a named `audience` and a list of `scopes` (both must be on the
+        instance's `delegationTokens` settings), lives at most 300 seconds (default 120), and
+        carries an `act` claim naming `actor.sub`, so a service can see it is not the user
+        themselves. Refused for banned, deleted and impersonation-protected users, and for an
+        `org_id` the user does not belong to. Every mint is audited on the user's trail as
+        `user.delegation_token_issued` (the token itself is never stored). Rate limited per key
+        and per user. Send an Idempotency-Key to make a retry return the same token.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/users/{_enc(user_id)}/delegation_tokens",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def update_deletion(
+        self,
+        user_id: str,
+        body: cm.PatchUsersByIdDeletionBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.User:
+        """Move a scheduled deletion to a new date. Send exactly one of `effective_at` (ISO 8601,
+        not in the past) or `grace_seconds` (from now). The user's deletion date, the in-flight
+        erasure request's scheduled date and the reminder plan all move together; the person is
+        mailed the new date and `user.deletion_rescheduled` is emitted. The `pre_user_deletion`
+        Actions are asked again for the new date (a refusal is 403 ACTION_BLOCKED) and a legal
+        hold refuses the move. 409 when the user has no scheduled deletion, the deletion is
+        paused (resume it with POST /v1/users/{id}/deletion/reconfirm first) or the user is
+        already erased. Returns the user.
+        """
+        return await self._t.request(
+            method="PATCH",
+            path=f"/v1/users/{_enc(user_id)}/deletion",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
             idempotency_key=idempotency_key,
         )
 
@@ -13375,6 +16263,99 @@ class AsyncUsers:
             idempotency_key=idempotency_key,
         )
 
+    async def delete_risk_signals(
+        self,
+        user_id: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.DeleteUsersByIdRiskSignalsResponse:
+        """End every live risk signal on one user now. Their points leave the next evaluation; the
+        rows stay readable with status `revoked`. Recorded once in the audit log. Safe to
+        repeat: with nothing live, it clears nothing.
+        """
+        return await self._t.request(
+            method="DELETE",
+            path=f"/v1/users/{_enc(user_id)}/risk_signals",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    async def list_risk_signals(
+        self,
+        user_id: str,
+        *,
+        status: Literal['active', 'all'] | None = None,
+        limit: int | None = None,
+        before: str | None = None,
+        starting_after: str | None = None,
+    ) -> cm.GetRiskSignalsResponse:
+        """The risk signals reported for one user, newest first; `status=active` keeps only live
+        ones. Page with `before`.
+        """
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/users/{_enc(user_id)}/risk_signals",
+            query=_qd({'status': status, 'limit': limit, 'before': before, 'starting_after': starting_after}),
+        )
+
+    async def iter_list_risk_signals(
+        self,
+        user_id: str,
+        *,
+        status: Literal['active', 'all'] | None = None,
+        limit: int | None = None,
+        before: str | None = None,
+    ) -> AsyncIterator[cm.GetRiskSignalsResponseDataItem]:
+        """Every item of :meth:`list_risk_signals`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list_risk_signals(user_id, status=status, limit=limit, before=before, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+    async def create_risk_signal(
+        self,
+        user_id: str,
+        body: cm.PostUsersByIdRiskSignalsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetRiskSignalsResponseDataItem:
+        """Raise one user's sign-in risk for a window. The same signal as POST /v1/risk_signals
+        with the user named by the path. While it is live and risk-based MFA is on, it adds
+        points to every sign-in evaluation of that user (low 10, medium 25, high 50, critical
+        100; the total is capped at 100), which can turn into a second factor, an enrolment or a
+        block under the instance's risk policy. It never lowers friction. ttl_seconds 60 to
+        2592000, default 3600; it expires by itself. Honours Idempotency-Key. Emits
+        risk_signal.created.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/users/{_enc(user_id)}/risk_signals",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def get_security_summary(
+        self,
+        user_id: str,
+    ) -> cm.GetUsersByIdSecuritySummaryResponse:
+        """One read of how the account is protected: password and when it last changed, sign-in
+        methods the user can use right now, linked providers, verified second factors, recovery
+        codes left, passkeys, remembered browsers and device keys, and the open sessions (count
+        and the newest). Ids and labels only: never a password hash, second-factor secret,
+        recovery code, credential id or key material.
+        """
+        return await self._t.request(
+            method="GET",
+            path=f"/v1/users/{_enc(user_id)}/security_summary",
+        )
+
     async def list_temporary_access(
         self,
         user_id: str,
@@ -13622,6 +16603,49 @@ class AsyncWebBotAuth:
         )
 
 
+class AsyncWebhookDlq:
+    _t: _AsyncTransport
+
+    def __init__(self, transport: _AsyncTransport) -> None:
+        self._t = transport
+
+    async def list(
+        self,
+        *,
+        limit: int | None = None,
+        starting_after: str | None = None,
+        event_type: str | None = None,
+    ) -> cm.GetWebhookDlqResponse:
+        """The dead-letter queue of the whole instance: deliveries that used every attempt on any
+        endpoint, newest first, each with `endpoint_id`, the payload that was sent, the last
+        response and the error. Narrow it with `event_type` (for example `user.deleted`) to find
+        every failed delivery of one event; acknowledge or requeue per endpoint with the
+        endpoint dlq routes. Cursor: `starting_after` with the `next_cursor` of the previous
+        page.
+        """
+        return await self._t.request(
+            method="GET",
+            path="/v1/webhook_dlq",
+            query=_qd({'limit': limit, 'starting_after': starting_after, 'event_type': event_type}),
+        )
+
+    async def iter_list(
+        self,
+        *,
+        limit: int | None = None,
+        event_type: str | None = None,
+    ) -> AsyncIterator[cm.GetWebhookDlqResponseDataItem]:
+        """Every item of :meth:`list`, following the cursor page by page."""
+        cursor: str | None = None
+        while True:
+            page = await self.list(limit=limit, event_type=event_type, starting_after=cursor)
+            for item in page.get("data", []):
+                yield item
+            cursor = page.get("next_cursor")
+            if not page.get("has_more") or not cursor:
+                return
+
+
 class AsyncWebhookEndpoints:
     _t: _AsyncTransport
 
@@ -13634,6 +16658,7 @@ class AsyncWebhookEndpoints:
         *,
         limit: int | None = None,
         starting_after: str | None = None,
+        event_type: str | None = None,
     ) -> cm.GetWebhookEndpointsByIdDlqResponse:
         """The dead-letter queue of an endpoint: deliveries that used every attempt, newest first,
         each with the payload that was sent, the last response and the error. `depth` counts
@@ -13644,7 +16669,7 @@ class AsyncWebhookEndpoints:
         return await self._t.request(
             method="GET",
             path=f"/v1/webhook_endpoints/{_enc(webhook_endpoint_id)}/dlq",
-            query=_qd({'limit': limit, 'starting_after': starting_after}),
+            query=_qd({'limit': limit, 'starting_after': starting_after, 'event_type': event_type}),
         )
 
     async def iter_list_dlq(
@@ -13652,11 +16677,12 @@ class AsyncWebhookEndpoints:
         webhook_endpoint_id: str,
         *,
         limit: int | None = None,
+        event_type: str | None = None,
     ) -> AsyncIterator[cm.WebhookDelivery]:
         """Every item of :meth:`list_dlq`, following the cursor page by page."""
         cursor: str | None = None
         while True:
-            page = await self.list_dlq(webhook_endpoint_id, limit=limit, starting_after=cursor)
+            page = await self.list_dlq(webhook_endpoint_id, limit=limit, event_type=event_type, starting_after=cursor)
             for item in page.get("data", []):
                 yield item
             cursor = page.get("next_cursor")
@@ -14218,6 +17244,28 @@ class AsyncPlatformApps:
             path=f"/v1/platform/apps/{_enc(app_id)}/instances/{_enc(instance_id)}/clones/{_enc(clone_id)}",
         )
 
+    async def refresh_clone_instances(
+        self,
+        app_id: str,
+        instance_id: str,
+        clone_id: str,
+        body: cm.PostPlatformAppsByIdInstancesByInstanceIdClonesByCloneIdRefreshBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.GetPlatformAppsByIdInstancesByInstanceIdClonesResponseDataItem:
+        """Bring a completed clone or preview up to date in place (same instance, keys and host);
+        same body and rules as POST /v1/instance/staging_copies/{id}/refresh. Needs
+        platform:apps:write.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/platform/apps/{_enc(app_id)}/instances/{_enc(instance_id)}/clones/{_enc(clone_id)}/refresh",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
     async def create_narrow_secret_key(
         self,
         app_id: str,
@@ -14232,6 +17280,25 @@ class AsyncPlatformApps:
         return await self._t.request(
             method="POST",
             path=f"/v1/platform/apps/{_enc(app_id)}/narrow_secret_keys",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def renew_provisioning_key(
+        self,
+        app_id: str,
+        body: cm.PostPlatformAppsByIdProvisioningKeyRenewBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostPlatformAppsByIdProvisioningKeyRenewResponse:
+        """Extend the `provisioning` key of an app created with `secret_key_profile: "web_app"` by
+        another 24 hours.
+        """
+        return await self._t.request(
+            method="POST",
+            path=f"/v1/platform/apps/{_enc(app_id)}/provisioning_key/renew",
             query=_qd({'dry_run': True if dry_run else None}),
             body=body,
             idempotency_key=idempotency_key,
@@ -14337,6 +17404,7 @@ class AsyncCatalogClient:
     connection_provider_topics: AsyncConnectionProviderTopics
     connection_providers: AsyncConnectionProviders
     connection_reconnect_settings: AsyncConnectionReconnectSettings
+    connection_templates: AsyncConnectionTemplates
     containments: AsyncContainments
     cookie_consents: AsyncCookieConsents
     dev: AsyncDev
@@ -14353,6 +17421,7 @@ class AsyncCatalogClient:
     legal_holds: AsyncLegalHolds
     machine_trust_policies: AsyncMachineTrustPolicies
     mcp_registry: AsyncMcpRegistry
+    message_links: AsyncMessageLinks
     message_receivers: AsyncMessageReceivers
     messages: AsyncMessages
     messaging: AsyncMessaging
@@ -14360,14 +17429,19 @@ class AsyncCatalogClient:
     mfa_factor_quarantines: AsyncMfaFactorQuarantines
     migrations__source: AsyncMigrationsSource
     migrations_status: AsyncMigrationsStatus
+    native_apps: AsyncNativeApps
     oauth_application_types: AsyncOauthApplicationTypes
+    oauth_consent_requests: AsyncOauthConsentRequests
+    oauth_device_requests: AsyncOauthDeviceRequests
     oauth_grants: AsyncOauthGrants
     oauth_publishers: AsyncOauthPublishers
     opa: AsyncOpa
     org_role_sets: AsyncOrgRoleSets
     org_templates: AsyncOrgTemplates
     organization_connections: AsyncOrganizationConnections
+    organization_invitations: AsyncOrganizationInvitations
     passkey_campaigns: AsyncPasskeyCampaigns
+    permission_aliases: AsyncPermissionAliases
     provisioning: AsyncProvisioning
     provisioning_connectors: AsyncProvisioningConnectors
     rate_limit_overrides: AsyncRateLimitOverrides
@@ -14377,6 +17451,7 @@ class AsyncCatalogClient:
     refresh_tokens: AsyncRefreshTokens
     region: AsyncRegion
     resource_role_assignments: AsyncResourceRoleAssignments
+    revocations: AsyncRevocations
     risk_signals: AsyncRiskSignals
     risky_users: AsyncRiskyUsers
     saml_idp: AsyncSamlIdp
@@ -14385,6 +17460,7 @@ class AsyncCatalogClient:
     suppressions: AsyncSuppressions
     telemetry_export: AsyncTelemetryExport
     web_bot_auth: AsyncWebBotAuth
+    webhook_dlq: AsyncWebhookDlq
     webhook_endpoints: AsyncWebhookEndpoints
     workflow_approvals: AsyncWorkflowApprovals
     workflow_templates: AsyncWorkflowTemplates
@@ -14417,6 +17493,7 @@ class AsyncCatalogClient:
         self.connection_provider_topics = AsyncConnectionProviderTopics(transport)
         self.connection_providers = AsyncConnectionProviders(transport)
         self.connection_reconnect_settings = AsyncConnectionReconnectSettings(transport)
+        self.connection_templates = AsyncConnectionTemplates(transport)
         self.containments = AsyncContainments(transport)
         self.cookie_consents = AsyncCookieConsents(transport)
         self.dev = AsyncDev(transport)
@@ -14433,6 +17510,7 @@ class AsyncCatalogClient:
         self.legal_holds = AsyncLegalHolds(transport)
         self.machine_trust_policies = AsyncMachineTrustPolicies(transport)
         self.mcp_registry = AsyncMcpRegistry(transport)
+        self.message_links = AsyncMessageLinks(transport)
         self.message_receivers = AsyncMessageReceivers(transport)
         self.messages = AsyncMessages(transport)
         self.messaging = AsyncMessaging(transport)
@@ -14440,14 +17518,19 @@ class AsyncCatalogClient:
         self.mfa_factor_quarantines = AsyncMfaFactorQuarantines(transport)
         self.migrations__source = AsyncMigrationsSource(transport)
         self.migrations_status = AsyncMigrationsStatus(transport)
+        self.native_apps = AsyncNativeApps(transport)
         self.oauth_application_types = AsyncOauthApplicationTypes(transport)
+        self.oauth_consent_requests = AsyncOauthConsentRequests(transport)
+        self.oauth_device_requests = AsyncOauthDeviceRequests(transport)
         self.oauth_grants = AsyncOauthGrants(transport)
         self.oauth_publishers = AsyncOauthPublishers(transport)
         self.opa = AsyncOpa(transport)
         self.org_role_sets = AsyncOrgRoleSets(transport)
         self.org_templates = AsyncOrgTemplates(transport)
         self.organization_connections = AsyncOrganizationConnections(transport)
+        self.organization_invitations = AsyncOrganizationInvitations(transport)
         self.passkey_campaigns = AsyncPasskeyCampaigns(transport)
+        self.permission_aliases = AsyncPermissionAliases(transport)
         self.provisioning = AsyncProvisioning(transport)
         self.provisioning_connectors = AsyncProvisioningConnectors(transport)
         self.rate_limit_overrides = AsyncRateLimitOverrides(transport)
@@ -14457,6 +17540,7 @@ class AsyncCatalogClient:
         self.refresh_tokens = AsyncRefreshTokens(transport)
         self.region = AsyncRegion(transport)
         self.resource_role_assignments = AsyncResourceRoleAssignments(transport)
+        self.revocations = AsyncRevocations(transport)
         self.risk_signals = AsyncRiskSignals(transport)
         self.risky_users = AsyncRiskyUsers(transport)
         self.saml_idp = AsyncSamlIdp(transport)
@@ -14465,6 +17549,7 @@ class AsyncCatalogClient:
         self.suppressions = AsyncSuppressions(transport)
         self.telemetry_export = AsyncTelemetryExport(transport)
         self.web_bot_auth = AsyncWebBotAuth(transport)
+        self.webhook_dlq = AsyncWebhookDlq(transport)
         self.webhook_endpoints = AsyncWebhookEndpoints(transport)
         self.workflow_approvals = AsyncWorkflowApprovals(transport)
         self.workflow_templates = AsyncWorkflowTemplates(transport)
