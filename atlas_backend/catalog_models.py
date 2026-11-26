@@ -1680,6 +1680,7 @@ class PostUsersBody(TypedDict, total=False):
     password_hash_algorithm: str | None
     password_hash_params: dict[str, Any]
     password_salt: str | None
+    password_normalize: str | None
     password_hasher: str | None
     first_name: str
     last_name: str
@@ -2466,6 +2467,8 @@ class PostUserImportsBodyPasswordHashConfig(TypedDict, total=False):
 class PostUserImportsBody(TypedDict, total=False):
     users: list[dict[str, Any]]
     upsert: bool
+    #: The Unicode form the old system normalised passwords to before hashing. Applied to the typed password before the imported hash is checked, and dropped
+    password_normalize: Literal['nfkc', 'nfc', 'none']
     create_organizations: bool
     #: until_email_verified holds a row's password until an email on the account is proven: a correct password is refused with password_not_yet_usable until 
     password_policy: Literal['active', 'until_email_verified']
@@ -2479,6 +2482,12 @@ class JobResultsItemWarningsItem(TypedDict):
     message: str
 
 
+class JobResultsItemFactorsItem(TypedDict):
+    kind: Literal['password', 'totp', 'hotp', 'backup_codes']
+    will_verify: bool
+    detail: str
+
+
 class _JobResultsItemRequired(TypedDict):
     email_address: str | None
     user_id: str | None
@@ -2488,6 +2497,8 @@ class _JobResultsItemRequired(TypedDict):
 class JobResultsItem(_JobResultsItemRequired, total=False):
     #: About a row that succeeded: password_policy_not_applied, unverified_without_hold or account_claim_not_applied. Absent when there are none.
     warnings: list[JobResultsItemWarningsItem]
+    #: Per credential the row carries (password, totp, hotp, backup_codes): whether it will verify at the next sign-in. A dry run reports what a real run sto
+    factors: list[JobResultsItemFactorsItem]
 
 
 class JobWarningsItem(TypedDict):
@@ -3434,6 +3445,10 @@ class GetUsersByIdGrantsResponseDataItem(_GetUsersByIdGrantsResponseDataItemRequ
     type: Literal['consent']
     client_id: str | None
     client_name: str | None
+    #: The organization the consent is for; null when it was given outside one.
+    organization_id: str | None
+    #: false: the user declined to be remembered; the grant exists only so its tokens can be revoked.
+    remembered: bool
     metadata: dict[str, Any]
 
 
@@ -3925,7 +3940,7 @@ class PostWebhookEndpointsBody(TypedDict, total=False):
     #: A third-party receiver (not on your own origins): preflight does not flag its host.
     external: bool
     #: Mark an endpoint you created for a connected platform as that platform's, so config export, plan and preflight treat it like one the platform set up i
-    managed_by: Literal['cookiemunch', 'chatly', 'forumulate', 'referalli', None]
+    managed_by: Literal['cookiemunch', 'chatly', 'forumulate', 'referalli', 'seolyticize', None]
     #: Signature entries in atlas-signature: v1 (id.timestamp.body, default) and/or v2 (id.timestamp.url.body).
     signature_versions: list[Literal['v1', 'v2']]
     #: Who is emailed when the endpoint fails (up to 20). null = the owners of the account.
@@ -4030,7 +4045,7 @@ class PutWebhookEndpointsByUrlBody(_PutWebhookEndpointsByUrlBodyRequired, total=
     #: A third-party receiver (not on your own origins): preflight does not flag its host.
     external: bool
     #: Mark an endpoint you created for a connected platform as that platform's, so config export, plan and preflight treat it like one the platform set up i
-    managed_by: Literal['cookiemunch', 'chatly', 'forumulate', 'referalli', None]
+    managed_by: Literal['cookiemunch', 'chatly', 'forumulate', 'referalli', 'seolyticize', None]
     #: Signature entries in atlas-signature: v1 (id.timestamp.body, default) and/or v2 (id.timestamp.url.body).
     signature_versions: list[Literal['v1', 'v2']]
     #: Who is emailed when the endpoint fails (up to 20). null = the owners of the account.
@@ -4126,7 +4141,7 @@ class PatchWebhookEndpointsByIdBody(TypedDict, total=False):
     #: A third-party receiver (not on your own origins): preflight does not flag its host.
     external: bool
     #: Mark an endpoint you created for a connected platform as that platform's, so config export, plan and preflight treat it like one the platform set up i
-    managed_by: Literal['cookiemunch', 'chatly', 'forumulate', 'referalli', None]
+    managed_by: Literal['cookiemunch', 'chatly', 'forumulate', 'referalli', 'seolyticize', None]
     #: Signature entries in atlas-signature: v1 (id.timestamp.body, default) and/or v2 (id.timestamp.url.body).
     signature_versions: list[Literal['v1', 'v2']]
     #: Who is emailed when the endpoint fails (up to 20). null = the owners of the account.
@@ -7242,7 +7257,9 @@ class _AuthConfigExternalJwtIssuersItemRequired(TypedDict):
 
 
 class AuthConfigExternalJwtIssuersItem(_AuthConfigExternalJwtIssuersItemRequired, total=False):
+    accountLinking: Literal['email', 'none', 'same_org_only']
     emailClaim: str
+    organizationId: str
 
 
 class AuthConfigExternalJwt(TypedDict):
@@ -7622,11 +7639,18 @@ class _AuthConfigOauthProviderCustomScopesItemRequired(TypedDict):
 class AuthConfigOauthProviderCustomScopesItem(_AuthConfigOauthProviderCustomScopesItemRequired, total=False):
     descriptions: dict[str, str]
     labels: dict[str, str]
+    optional: bool
     ownerExempt: bool
     parameters: list[str]
     requiresClientLevel: Literal['any', 'certified', 'verified']
     requiresVerifiedClient: bool
     sensitive: bool
+
+
+class AuthConfigOauthProviderDynamicRegistrationLimits(TypedDict):
+    maxClients: float
+    pruneUnusedAfterDays: float | None
+    registrationsPerHourPerIp: float
 
 
 class _AuthConfigOauthProviderTokenClaimsItemRequired(TypedDict):
@@ -7659,6 +7683,7 @@ class AuthConfigOauthProvider(TypedDict):
     deviceApprovalRequiresStepUp: bool
     dynamicClientSecretTtlSeconds: float
     dynamicRegistration: bool
+    dynamicRegistrationLimits: AuthConfigOauthProviderDynamicRegistrationLimits
     loginUrl: str | None
     requireInitialAccessToken: bool
     requirePkce: bool
@@ -7975,6 +8000,8 @@ class _AuthConfigSessionRequired(TypedDict):
     browserHandoff: bool
     #: Explicit Domain for the session cookies, for example ".example.com". Needed by a path-mounted instance, where cookies are otherwise host-only. It must
     cookieDomain: str | None
+    #: Give this instance's Frontend API cookies a short suffix derived from its publishable key (__session_<suffix>, __atlas_rt_<suffix>, ...), so two insta
+    cookieIsolation: bool
     crossSubdomainCookies: bool
     #: Set a readable __atlas_csrf cookie with each session token: a signed token tied to the session, replaced whenever the session token is. Verify it in y
     csrfCookie: bool
@@ -8809,6 +8836,12 @@ class AuthConfigPatchOauthProviderClientIdMetadataDocuments(TypedDict, total=Fal
     trustedHosts: list[str]
 
 
+class AuthConfigPatchOauthProviderDynamicRegistrationLimits(TypedDict, total=False):
+    maxClients: float
+    pruneUnusedAfterDays: float | None
+    registrationsPerHourPerIp: float
+
+
 class AuthConfigPatchOauthProvider(TypedDict, total=False):
     accessTokenFormat: Literal['jwt', 'opaque']
     advanced: AuthConfigPatchOauthProviderAdvanced
@@ -8819,6 +8852,7 @@ class AuthConfigPatchOauthProvider(TypedDict, total=False):
     deviceApprovalRequiresStepUp: bool
     dynamicClientSecretTtlSeconds: float
     dynamicRegistration: bool
+    dynamicRegistrationLimits: AuthConfigPatchOauthProviderDynamicRegistrationLimits
     loginUrl: str | None
     requireInitialAccessToken: bool
     requirePkce: bool
@@ -9007,6 +9041,8 @@ class AuthConfigPatchSession(TypedDict, total=False):
     browserHandoff: bool
     #: Explicit Domain for the session cookies, for example ".example.com". Needed by a path-mounted instance, where cookies are otherwise host-only. It must
     cookieDomain: str | None
+    #: Give this instance's Frontend API cookies a short suffix derived from its publishable key (__session_<suffix>, __atlas_rt_<suffix>, ...), so two insta
+    cookieIsolation: bool
     crossSubdomainCookies: bool
     #: Set a readable __atlas_csrf cookie with each session token: a signed token tied to the session, replaced whenever the session token is. Verify it in y
     csrfCookie: bool
@@ -10815,6 +10851,8 @@ class OauthProvider(_OauthProviderRequired, total=False):
     custom_redirect_uri: str | None
     #: For a provider whose authorize page can return an id_token (google, apple, microsoft, twitch): sign-in with only the client_id on every platform (nati
     hosted_id_token: OauthProviderHostedIdToken | None
+    #: Whether this development instance signs in with Atlas's shared development application (set with PUT { use_shared_dev_credentials }).
+    use_shared_dev_credentials: bool
     client_id: str | None
     has_secret: bool
     scopes: list[str]
@@ -10854,6 +10892,8 @@ class PutOauthProvidersByProviderBody(TypedDict, total=False):
     #: The extra audiences a native app id_token may carry (an iOS bundle or Android client id), as GET returns them: an array, or a comma-separated string. 
     native_client_ids: list[str] | str
     native: bool
+    #: Development instances only: sign in with Atlas's shared development application for google, github, discord or microsoft, with no OAuth application of
+    use_shared_dev_credentials: bool
     #: Force the sign-in mode; "" clears the override. Applied together with credentials in one call.
     mode: Literal['native', 'redirect', '']
     #: The brand shown on the button (e.g. 'Discord' for a broker keyed 'restorehub'); empty clears. Honoured on the hosted pages, embedded component, and /v
@@ -13442,6 +13482,10 @@ class GetSsoConnectionsResponseDataItem(TypedDict, total=False):
     #: The configured field mapping (only the set keys).
     attribute_mapping: dict[str, str]
     oidc_scopes: list[str]
+    #: The explicit linking mode; null = the default for the connection.
+    account_linking: Literal['email', 'same_org_only', 'none', None]
+    #: The linking mode in force: the explicit setting, else same_org_only for an organization-bound connection, else email.
+    account_linking_effective: Literal['email', 'same_org_only', 'none']
     #: Whether later sign-ins also re-role members with no recorded role source when claims map elsewhere.
     rerole_on_sign_in: bool
     #: Declarative profile mapping from the upstream userinfo / id_token claims to Atlas user fields and metadata. Unmapped fields keep the provider defaults
@@ -13564,6 +13608,8 @@ class PostSsoConnectionsBody(TypedDict, total=False):
     oidc_scopes: list[str] | None
     #: Opt-in (default off): on every later sign-in, also move the role of an existing member who has no recorded role source (joined by invitation, or befor
     rerole_on_sign_in: bool | None
+    #: Whether a sign-in through this connection may link to an EXISTING user by a shared verified email. same_org_only (the default for an organization-boun
+    account_linking: Literal['email', 'same_org_only', 'none', None]
     #: Map an IdP claim value to an org role (first match wins). Sets the role a member is seated with, and on later sign-ins moves the role of a member this
     claim_role_mappings: list[PostSsoConnectionsBodyClaimRoleMappingsItem]
     default_role_id: str | None
@@ -13706,6 +13752,8 @@ class GetOrgLdapConnectionsResponseDataItem(TypedDict, total=False):
     user_filter: str
     start_tls: bool
     require_consent_screen: bool
+    account_linking: Literal['email', 'same_org_only', 'none', None]
+    account_linking_effective: Literal['email', 'same_org_only', 'none']
     #: Directory attribute → Atlas field mapping. `email` is required.
     attributes: GetOrgLdapConnectionsResponseDataItemAttributes
     #: Directory group → organization role. A newly seated member gets the role of the first mapping whose group DN is in their groups attribute (compared ca
@@ -13741,6 +13789,8 @@ class PostOrgLdapConnectionsBody(TypedDict, total=False):
     #: Search filter with a {{username}} placeholder.
     user_filter: str
     start_tls: bool
+    #: Whether a directory sign-in may link to an existing user by shared email. same_org_only (the default) links only to members or end users of the connec
+    account_linking: Literal['email', 'same_org_only', 'none', None]
     #: Show the person a confirmation ("sign in as ...") before an LDAP sign-in completes. The sign-in response carries consent_required and a consent_token 
     require_consent_screen: bool
     #: Directory attribute → Atlas field mapping. `email` is required.
@@ -14240,6 +14290,14 @@ class GetOauthClientsResponseDataItem(TypedDict, total=False):
     client_id: str
     name: str
     logo_url: str | None
+    #: The app's homepage (RFC 7591), shown on the consent page.
+    client_uri: str | None
+    #: Alias of client_uri.
+    homepage_url: str | None
+    #: The app's privacy policy (RFC 7591), linked from the consent page.
+    policy_uri: str | None
+    #: The app's terms of service (RFC 7591), linked from the consent page.
+    tos_uri: str | None
     redirect_uris: list[str]
     allowed_scopes: list[str]
     grant_types: list[str]
@@ -14280,8 +14338,12 @@ class GetOauthClientsResponseDataItem(TypedDict, total=False):
     refresh_touches_session: bool
     #: No authorization code is issued for a user whose primary email is not verified.
     require_verified_email: bool
+    #: The consent screen is shown, first-party clients included, until the user approves with remember (prompt=consent asks every time).
+    require_consent: bool
+    #: Consent is kept per organization (null = whenever the request names one; true = always; false = one consent for all).
+    consent_per_organization: bool | None
     owner: str | None
-    #: Review state. development: only the owner and testers can authorize; suspended: refused at /oauth2/authorize and the token endpoint.
+    #: Review state. development and in_review: only the owner and testers can authorize; suspended: refused at /oauth2/authorize and the token endpoint.
     status: Literal['development', 'in_review', 'approved', 'suspended']
     #: User ids besides the owner who may authorize a client in development.
     testers: list[str]
@@ -14334,6 +14396,11 @@ class GetOauthClientsQuery(TypedDict, total=False):
     starting_after: str
 
 
+class PostOauthClientsBodyJwks(TypedDict, total=False):
+    """Client public keys (JWK Set) for private_key_jwt and signed request objects."""
+    keys: list[dict[str, Any]]
+
+
 class PostOauthClientsBodyTokenLifetimes(TypedDict, total=False):
     """Token lifetime overrides for this client, in seconds. A field that is absent or null
     inherits (the API's for an access token issued for an API, else the instance's, else the
@@ -14363,11 +14430,108 @@ class _PostOauthClientsBodyRequired(TypedDict):
 
 
 class PostOauthClientsBody(_PostOauthClientsBodyRequired, total=False):
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    id_token_signed_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    userinfo_signed_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    authorization_signed_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    introspection_signed_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    id_token_encrypted_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    id_token_encrypted_response_enc: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    userinfo_encrypted_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    userinfo_encrypted_response_enc: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    authorization_encrypted_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    authorization_encrypted_response_enc: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    introspection_encrypted_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    introspection_encrypted_response_enc: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    request_object_signing_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    request_object_encryption_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    request_object_encryption_enc: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    initiate_login_uri: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    backchannel_token_delivery_mode: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    backchannel_client_notification_endpoint: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    backchannel_authentication_request_signing_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    wimse_workload_id: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    min_app_version: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    native_sso_group: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    org_selection: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    software_id: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    software_version: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    tls_client_auth_san_dns: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    tls_client_auth_san_uri: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    tls_client_auth_san_ip: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    tls_client_auth_san_email: str | None
+    #: OIDC / RFC 7591 client metadata.
+    require_signed_request_object: bool | None
+    #: OIDC / RFC 7591 client metadata.
+    require_auth_time: bool | None
+    #: OIDC / RFC 7591 client metadata.
+    tls_client_certificate_bound_access_tokens: bool | None
+    #: OIDC / RFC 7591 client metadata.
+    dpop_bound_access_tokens: bool | None
+    #: OIDC / RFC 7591 client metadata.
+    txn_token_unsigned_subject: bool | None
+    #: OIDC / RFC 7591 client metadata.
+    backchannel_user_code_parameter: bool | None
+    #: OIDC response types the client may use (default `code`).
+    response_types: list[str]
+    #: Pre-registered https request object URIs.
+    request_uris: list[str] | None
+    #: Default maximum authentication age in seconds.
+    default_max_age: int | None
+    default_acr_values: list[str] | None
+    #: Contact addresses of the app's developers.
+    contacts: list[str] | None
     allowed_scopes: list[str]
     grant_types: list[str]
     #: `none` makes it a public (PKCE) client.
     token_endpoint_auth_method: Literal['client_secret_basic', 'client_secret_post', 'none', 'private_key_jwt', 'workload_jwt']
     logo_url: str
+    #: RFC 7591 name for logo_url.
+    logo_uri: str
+    #: RFC 7591: the app's homepage (absolute https URL), shown on the consent page. null clears (update).
+    client_uri: str | None
+    #: Alias of client_uri.
+    homepage_url: str | None
+    #: RFC 7591: the app's privacy policy (absolute https URL), linked from the consent page. null clears (update).
+    policy_uri: str | None
+    #: RFC 7591: the app's terms of service (absolute https URL), linked from the consent page. null clears (update).
+    tos_uri: str | None
+    #: Provisioning tags (filter lists with ?metadata[key]=value). Update replaces them.
+    metadata: dict[str, str | float | bool]
+    #: Client public keys (JWK Set) for private_key_jwt and signed request objects.
+    jwks: PostOauthClientsBodyJwks | None
+    #: https URL of the client's JWK Set, instead of jwks.
+    jwks_uri: str | None
+    #: RFC 8705 expected certificate Subject DN for tls_client_auth.
+    tls_client_auth_subject_dn: str | None
     #: Skips the consent screen for a first-party app.
     first_party: bool
     post_logout_redirect_uris: list[str]
@@ -14385,9 +14549,13 @@ class PostOauthClientsBody(_PostOauthClientsBodyRequired, total=False):
     refresh_touches_session: bool
     #: When true, /oauth2/authorize issues no code to this client for a user whose primary email is not proven (a sign-up that skipped verification does not 
     require_verified_email: bool
+    #: When true, /oauth2/authorize shows the consent screen for this client, a first-party client included, until the user approves with remember; a remembe
+    require_consent: bool
+    #: Keep the user's consent per organization. null (default): per organization whenever the request names one (`organization`, an organization choice, or 
+    consent_per_organization: bool | None
     #: The developer (an Atlas user or organization id) who owns this client. null clears (update).
     owner: str | None
-    #: Review state; default approved. development: only the owner and testers can authorize. suspended: new authorizations and refreshes are refused at once
+    #: Review state; default approved. development and in_review: only the owner and testers can authorize (in_review is a development client awaiting review
     status: Literal['development', 'in_review', 'approved', 'suspended']
     #: User ids besides the owner who may authorize a client in development.
     testers: list[str]
@@ -14423,6 +14591,10 @@ class PostOauthClientsBody(_PostOauthClientsBodyRequired, total=False):
     access_token_format: Literal['jwt', 'opaque', None]
     #: Token lifetime overrides for this client, in seconds. A field that is absent or null inherits (the API's for an access token issued for an API, else t
     token_lifetimes: PostOauthClientsBodyTokenLifetimes | None
+    #: A preset for the fields not given (GET /v1/oauth_application_types).
+    application_type: Literal['web', 'spa', 'native', 'device', 'mcp']
+    #: Idempotent-create key: a second create with the same ref returns the existing client (200, idempotent_replay).
+    external_ref: str
     #: Import: keep the client_id your apps already use (letters, digits and . _ ~ : -; unique on the instance, 409 otherwise). Omit it and Atlas generates o
     client_id: str
     #: Import: the bcrypt (or base64url SHA-256) hash of the existing secret, instead of client_secret. The first successful authentication verifies it and s
@@ -14432,6 +14604,85 @@ class PostOauthClientsBody(_PostOauthClientsBodyRequired, total=False):
 
 
 class PatchOauthClientsByIdBody(TypedDict, total=False):
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    id_token_signed_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    userinfo_signed_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    authorization_signed_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    introspection_signed_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    id_token_encrypted_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    id_token_encrypted_response_enc: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    userinfo_encrypted_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    userinfo_encrypted_response_enc: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    authorization_encrypted_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    authorization_encrypted_response_enc: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    introspection_encrypted_response_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    introspection_encrypted_response_enc: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    request_object_signing_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    request_object_encryption_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    request_object_encryption_enc: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    initiate_login_uri: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    backchannel_token_delivery_mode: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    backchannel_client_notification_endpoint: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    backchannel_authentication_request_signing_alg: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    wimse_workload_id: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    min_app_version: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    native_sso_group: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    org_selection: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    software_id: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    software_version: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    tls_client_auth_san_dns: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    tls_client_auth_san_uri: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    tls_client_auth_san_ip: str | None
+    #: OIDC / RFC 7591 client metadata (see the OpenID Provider guide).
+    tls_client_auth_san_email: str | None
+    #: OIDC / RFC 7591 client metadata.
+    require_signed_request_object: bool | None
+    #: OIDC / RFC 7591 client metadata.
+    require_auth_time: bool | None
+    #: OIDC / RFC 7591 client metadata.
+    tls_client_certificate_bound_access_tokens: bool | None
+    #: OIDC / RFC 7591 client metadata.
+    dpop_bound_access_tokens: bool | None
+    #: OIDC / RFC 7591 client metadata.
+    txn_token_unsigned_subject: bool | None
+    #: OIDC / RFC 7591 client metadata.
+    backchannel_user_code_parameter: bool | None
+    #: OIDC response types the client may use (default `code`).
+    response_types: list[str]
+    #: Pre-registered https request object URIs.
+    request_uris: list[str] | None
+    #: Default maximum authentication age in seconds.
+    default_max_age: int | None
+    default_acr_values: list[str] | None
+    #: Contact addresses of the app's developers.
+    contacts: list[str] | None
     name: str
     redirect_uris: list[str]
     allowed_scopes: list[str]
@@ -14439,6 +14690,24 @@ class PatchOauthClientsByIdBody(TypedDict, total=False):
     #: `none` makes it a public (PKCE) client.
     token_endpoint_auth_method: Literal['client_secret_basic', 'client_secret_post', 'none', 'private_key_jwt', 'workload_jwt']
     logo_url: str
+    #: RFC 7591 name for logo_url.
+    logo_uri: str
+    #: RFC 7591: the app's homepage (absolute https URL), shown on the consent page. null clears (update).
+    client_uri: str | None
+    #: Alias of client_uri.
+    homepage_url: str | None
+    #: RFC 7591: the app's privacy policy (absolute https URL), linked from the consent page. null clears (update).
+    policy_uri: str | None
+    #: RFC 7591: the app's terms of service (absolute https URL), linked from the consent page. null clears (update).
+    tos_uri: str | None
+    #: Provisioning tags (filter lists with ?metadata[key]=value). Update replaces them.
+    metadata: dict[str, str | float | bool]
+    #: Client public keys (JWK Set) for private_key_jwt and signed request objects.
+    jwks: PostOauthClientsBodyJwks | None
+    #: https URL of the client's JWK Set, instead of jwks.
+    jwks_uri: str | None
+    #: RFC 8705 expected certificate Subject DN for tls_client_auth.
+    tls_client_auth_subject_dn: str | None
     #: Skips the consent screen for a first-party app.
     first_party: bool
     post_logout_redirect_uris: list[str]
@@ -14456,9 +14725,13 @@ class PatchOauthClientsByIdBody(TypedDict, total=False):
     refresh_touches_session: bool
     #: When true, /oauth2/authorize issues no code to this client for a user whose primary email is not proven (a sign-up that skipped verification does not 
     require_verified_email: bool
+    #: When true, /oauth2/authorize shows the consent screen for this client, a first-party client included, until the user approves with remember; a remembe
+    require_consent: bool
+    #: Keep the user's consent per organization. null (default): per organization whenever the request names one (`organization`, an organization choice, or 
+    consent_per_organization: bool | None
     #: The developer (an Atlas user or organization id) who owns this client. null clears (update).
     owner: str | None
-    #: Review state; default approved. development: only the owner and testers can authorize. suspended: new authorizations and refreshes are refused at once
+    #: Review state; default approved. development and in_review: only the owner and testers can authorize (in_review is a development client awaiting review
     status: Literal['development', 'in_review', 'approved', 'suspended']
     #: User ids besides the owner who may authorize a client in development.
     testers: list[str]
@@ -14532,6 +14805,14 @@ class PostOauthClientsByIdRotateSecretResponse(_PostOauthClientsByIdRotateSecret
     app_settings: GetOauthClientsResponseDataItemAppSettings
     name: str
     logo_url: str | None
+    #: The app's homepage (RFC 7591), shown on the consent page.
+    client_uri: str | None
+    #: Alias of client_uri.
+    homepage_url: str | None
+    #: The app's privacy policy (RFC 7591), linked from the consent page.
+    policy_uri: str | None
+    #: The app's terms of service (RFC 7591), linked from the consent page.
+    tos_uri: str | None
     redirect_uris: list[str]
     allowed_scopes: list[str]
     grant_types: list[str]
@@ -14570,8 +14851,12 @@ class PostOauthClientsByIdRotateSecretResponse(_PostOauthClientsByIdRotateSecret
     refresh_touches_session: bool
     #: No authorization code is issued for a user whose primary email is not verified.
     require_verified_email: bool
+    #: The consent screen is shown, first-party clients included, until the user approves with remember (prompt=consent asks every time).
+    require_consent: bool
+    #: Consent is kept per organization (null = whenever the request names one; true = always; false = one consent for all).
+    consent_per_organization: bool | None
     owner: str | None
-    #: Review state. development: only the owner and testers can authorize; suspended: refused at /oauth2/authorize and the token endpoint.
+    #: Review state. development and in_review: only the owner and testers can authorize; suspended: refused at /oauth2/authorize and the token endpoint.
     status: Literal['development', 'in_review', 'approved', 'suspended']
     #: User ids besides the owner who may authorize a client in development.
     testers: list[str]
@@ -15027,6 +15312,8 @@ class GetOauthConsentRequestsResponse(TypedDict, total=False):
     audience: str | None
     authorization_details: list[dict[str, Any]]
     organization_id: str | None
+    #: The requested scopes the scope catalogue marks optional: the user may leave them out.
+    optional_scopes: list[str]
     redirect_uri: str
     #: The application's original /oauth2/authorize request on this instance, every parameter included (use switch_account to restart it at login). Null when
     request_url: str | None
@@ -15043,9 +15330,13 @@ class GetOauthConsentRequestsQuery(TypedDict):
 
 
 class PutOauthConsentRequestsAcceptBody(TypedDict, total=False):
-    #: The scopes to grant: a subset of requested_scope that includes openid. Default: all requested.
+    #: The scopes to grant: a subset of requested_scope that includes openid and every scope that is not in optional_scopes. The token and the grant carry ex
+    granted_scopes: list[str]
+    #: Older name for granted_scopes that may drop any scope but openid. Send one of the two.
     grant_scope: list[str]
-    #: Record the consent so the user is not asked again. Default true.
+    #: The organization to authorize for, when your page lets the user pick one: a member organization the app is enabled for. Default: the one the request r
+    organization_id: str
+    #: Record the consent so the user is not asked again. Default true. With false the consent is still recorded so its tokens can be revoked, but the user i
     remember: bool
     #: Your own JSON (at most 4 KB) stored on the recorded consent and returned by the grant API and in grant.revoked. Atlas adds `granted_by`, the actor tha
     metadata: dict[str, Any]
@@ -20305,6 +20596,10 @@ class BillingPlan(_BillingPlanRequired, total=False):
     #: Numeric limits this plan grants, e.g. {"max_devices":5}. The structured `ent` session claim carries these.
     limits: dict[str, Any]
     trial_days: int | None
+    #: Days a past_due subscription keeps its entitlement (1 to 90); null for none.
+    grace_days: int | None
+    #: The same number as grace_days, under the name that says what it is. Either may be sent.
+    past_due_grace_days: int | None
     #: A display-only promotion shown on the plan card: { label, percent_off | amount_off (minor units), ends_at (epoch ms), code }. It never changes what th
     promotion: dict[str, Any] | None
     stripe_meter_id: str | None
@@ -20352,6 +20647,8 @@ class PostBillingPlansBody(_PostBillingPlansBodyRequired, total=False):
     active: bool
     pricing_model: Literal['flat', 'per_seat', 'metered']
     trial_days: int | None
+    #: Days a past_due subscription keeps its entitlement (1 to 90). Same as grace_days.
+    past_due_grace_days: int | None
 
 
 class PostBillingPlansResponse(TypedDict, total=False):
@@ -20382,6 +20679,7 @@ class PatchBillingPlansByIdBody(TypedDict, total=False):
     pricing_model: str
     trial_days: float | None
     grace_days: float | None
+    past_due_grace_days: float | None
     description: str | None
     badge: str | None
     sort_order: float
@@ -20524,6 +20822,8 @@ class GetBillingProvidersResponseDataItem(_GetBillingProvidersResponseDataItemRe
     #: Public settings only (e.g. publishable_key).
     config: dict[str, str]
     capabilities: dict[str, Any] | None
+    #: Stripe only: how subscription state reaches Atlas (mode webhook or no_webhook, the checkout return, the re-read cadence and the forwarded-events URL).
+    sync: dict[str, Any] | None
     last_verified_at: int | None
     last_webhook_at: int | None
     updated_at: int
@@ -20665,6 +20965,7 @@ GetEntitlementsResponse = TypedDict(
     'subject': 'GetEntitlementsResponseSubject',
     'plan': 'str | None',
     'planSource': "Literal['plan', 'override', 'internal', 'none']",
+    'version': 'int',
     'entitlements': 'list[GetEntitlementsResponseEntitlementsItem]',
     },
     total=False,
@@ -21420,7 +21721,7 @@ class GetWhoamiResponseKey(TypedDict, total=False):
     scopes: list[str]
     #: Presets (read_only, privacy:execute, …) expanded.
     effective_scopes: list[str]
-    #: The named key preset (app-runtime, provisioning, integrations) whose scopes are exactly this key's; null otherwise.
+    #: The named key preset (app-runtime, web-app, provisioning, operator, end-user-pools, oauth-apps, integrations) whose scopes are exactly this key's; nul
     preset: str | None
     #: What this key may hand out through POST /v1/secret_keys: nothing without secret_keys:write; otherwise only scopes it holds itself.
     can_mint: GetWhoamiResponseKeyCanMint
@@ -21502,6 +21803,10 @@ class GetSecretKeysResponseDataItem(_GetSecretKeysResponseDataItemRequired, tota
     #: Partner admin: the organizations this key is limited to (empty = unrestricted).
     organization_ids: list[str]
     rotated_from: str | None
+    #: The last call from the application itself (a call from a CLI, an HTTP tool or a browser does not count), so research reads do not hide a dead key. nul
+    last_app_used_at: int | None
+    #: The User-Agent of the last call (first 200 characters).
+    last_used_user_agent: str | None
     #: Provisioning tags.
     metadata: dict[str, Any]
     #: The idempotent-create key, if any.
@@ -21525,7 +21830,7 @@ class PostSecretKeysBody(TypedDict, total=False):
     name: str
     scopes: list[str]
     #: A named scope set instead of `scopes[]`. `app-runtime`: what an app server needs to run: read users, read and write sessions, organizations (membershi
-    preset: Literal['app-runtime', 'web-app', 'provisioning', 'integrations']
+    preset: Literal['app-runtime', 'web-app', 'provisioning', 'operator', 'end-user-pools', 'oauth-apps', 'integrations']
     #: Unix ms or ISO 8601; at most one year away. Default one year from now.
     expires_at: int | str
     allowed_ips: list[str]
@@ -21564,7 +21869,7 @@ class PostSecretKeysByIdRotateBody(TypedDict, total=False):
     overlap_seconds: int
     key_format: Literal['atlas', 'legacy']
     #: Give the replacement this named scope set instead of the old key's scopes. The calling key must hold them.
-    preset: Literal['app-runtime', 'web-app', 'provisioning', 'integrations']
+    preset: Literal['app-runtime', 'web-app', 'provisioning', 'operator', 'end-user-pools', 'oauth-apps', 'integrations']
 
 
 class _GetKeysResponseDataItemRequired(TypedDict):
@@ -26943,6 +27248,8 @@ class GetInstanceCookieConsentResponse(_GetInstanceCookieConsentResponseRequired
     declared_cookies: list[GetInstanceCookieConsentResponseDeclaredCookiesItem]
     #: How the Frontend API is served: default (the shared Atlas host), custom_domain (a CNAME), or path_mount (base_path on your own host, routed by Atlas's
     frontend_mode: GetInstanceCookieConsentResponseFrontendMode
+    #: With session.cookieIsolation on, the suffix every Frontend API cookie name carries (__session_<suffix>); null otherwise. Derived from the publishable 
+    cookie_suffix: str | None
     #: Where the effective setting comes from: manual (PUT, always wins), integration (an enabled integration with a cmp, else a consent manager's outbound p
     source: Literal['manual', 'integration', 'none']
     #: With source integration: the integration id, or `partner_link:<link id>` when a partner link provides it.
@@ -27033,6 +27340,8 @@ class PutInstanceCookieConsentResponse(_PutInstanceCookieConsentResponseRequired
     declared_cookies: list[GetInstanceCookieConsentResponseDeclaredCookiesItem]
     #: How the Frontend API is served: default (the shared Atlas host), custom_domain (a CNAME), or path_mount (base_path on your own host, routed by Atlas's
     frontend_mode: GetInstanceCookieConsentResponseFrontendMode
+    #: With session.cookieIsolation on, the suffix every Frontend API cookie name carries (__session_<suffix>); null otherwise. Derived from the publishable 
+    cookie_suffix: str | None
     #: Where the effective setting comes from: manual (PUT, always wins), integration (an enabled integration with a cmp, else a consent manager's outbound p
     source: Literal['manual', 'integration', 'none']
     #: With source integration: the integration id, or `partner_link:<link id>` when a partner link provides it.
@@ -29175,6 +29484,18 @@ class DeleteAuthzPdpsByIdResponse(TypedDict):
     deleted: bool
 
 
+class PostBillingCheckoutSyncBody(TypedDict):
+    #: A Stripe Checkout Session id (cs_…).
+    session_id: str
+
+
+class PostBillingCheckoutSyncResponse(TypedDict):
+    object: Literal['billing_checkout_sync']
+    status: Literal['synced', 'pending']
+    #: The subscription the session created or updated (a billing_subscription), null while pending.
+    subscription: dict[str, Any] | None
+
+
 class _GetBillingConnectAccountsResponseDataItemRequired(TypedDict):
     object: Literal['billing_connect_account']
     id: str
@@ -29498,6 +29819,18 @@ class PostBillingStoreLinksResponse(TypedDict):
     provider: Literal['appstore', 'googleplay']
     #: Epoch milliseconds.
     created_at: int
+
+
+class PostBillingStripeEventsBody(TypedDict):
+    #: A Stripe event id (evt_…).
+    id: str
+
+
+class PostBillingStripeEventsResponse(TypedDict):
+    object: Literal['billing_stripe_event']
+    id: str
+    type: str | None
+    outcome: Literal['processed', 'ignored']
 
 
 class _PostBillingSubscriptionsByIdExtendTrialBodyRequired(TypedDict):
@@ -32436,6 +32769,25 @@ class PostInstanceHooksBeforeFirstSessionTestResponse(_PostInstanceHooksBeforeFi
     error: PostInstanceHooksBeforeUserCreateTestResponseError
 
 
+class PostInstanceHostedMethodFiltersBody(TypedDict):
+    #: The sign-in methods to keep, e.g. ["password", "passkey", "oauth_google"].
+    methods: list[str]
+
+
+class PostInstanceHostedMethodFiltersResponse(TypedDict):
+    object: Literal['hosted_method_filter']
+    #: The list as stored in the signature: unique, sorted.
+    methods: list[str]
+    #: The list, comma-separated. Add as the `allowed_methods` query parameter.
+    allowed_methods: str
+    #: The signature. Add as the `allowed_methods_sig` query parameter.
+    allowed_methods_sig: str
+    #: The list and signature as one value, `<allowed_methods>.<allowed_methods_sig>`: pass it as `allowedMethods` to the React panels or as `methodFilter` t
+    token: str
+    #: Both parameters, URL-encoded, ready to append to the hosted page URL.
+    query: str
+
+
 class GetInstanceImpersonationPolicyResponse(TypedDict):
     object: Literal['impersonation_policy']
     require_reason: bool
@@ -32472,8 +32824,11 @@ class PostInstanceImportsBody(_PostInstanceImportsBodyRequired, total=False):
 
 class GetInstanceIntegrationsForwardingByDestinationResponse(TypedDict, total=False):
     object: Literal['integration_forwarding']
-    forwarding: Literal['lucida', 'hermetica', 'seolyticize', 'webhook']
-    event: Literal['user.created']
+    forwarding: Literal['lucida', 'hermetica', 'seolyticize', 'webhook', 'watchtower']
+    #: The first event delivered: user.created, or for watchtower user.locked.
+    event: str
+    #: Every event this destination receives: user.created, or for watchtower the security events.
+    events: list[str]
     #: The managed webhook endpoint.
     id: str
     active: bool
@@ -32494,18 +32849,39 @@ class PutInstanceIntegrationsForwardingByDestinationBody(TypedDict, total=False)
     include_pii: bool
     #: webhook: the https receiver.
     url: str
+    #: watchtower: your Watchtower ingest host (https). `server_key` is then an ingestion key with the ingest:logs scope.
+    endpoint: str
     active: bool
 
 
 class PutInstanceIntegrationsForwardingByDestinationResponse(TypedDict, total=False):
     object: Literal['integration_forwarding']
-    forwarding: Literal['lucida', 'hermetica', 'seolyticize', 'webhook']
-    event: Literal['user.created']
+    forwarding: Literal['lucida', 'hermetica', 'seolyticize', 'webhook', 'watchtower']
+    #: The first event delivered: user.created, or for watchtower user.locked.
+    event: str
+    #: Every event this destination receives: user.created, or for watchtower the security events.
+    events: list[str]
     created: bool
     #: The managed webhook endpoint.
     id: str
     #: webhook only, on create: the signing secret, shown once.
     secret: str
+
+
+class GetInstanceIntegrationsHealthResponseDuplicateDeliveryPathsItem(TypedDict, total=False):
+    kind: Literal['forwarding', 'integration']
+    destination: str
+    forwarding_endpoint_id: str
+    webhook_endpoint_ids: list[str]
+
+
+class GetInstanceIntegrationsHealthResponseDataItemDuplicateDeliveryPath(TypedDict, total=False):
+    """Present when this endpoint is one of two delivery paths to the same destination."""
+    code: Literal['duplicate_delivery_path']
+    kind: Literal['forwarding', 'integration']
+    destination: str
+    forwarding_endpoint_id: str
+    webhook_endpoint_ids: list[str]
 
 
 class GetInstanceIntegrationsHealthResponseDataItemLastFailure(TypedDict, total=False):
@@ -32527,6 +32903,8 @@ class GetInstanceIntegrationsHealthResponseDataItem(_GetInstanceIntegrationsHeal
     managed_by: str | None
     #: The receiver type: https, a destination such as lucida, events_receiver, tokens_only or case_api.
     destination: str
+    #: Present when this endpoint is one of two delivery paths to the same destination.
+    duplicate_delivery_path: GetInstanceIntegrationsHealthResponseDataItemDuplicateDeliveryPath
     last_success_at: int | None
     last_failure: GetInstanceIntegrationsHealthResponseDataItemLastFailure | None
     consecutive_failures: int
@@ -32541,6 +32919,7 @@ class _GetInstanceIntegrationsHealthResponseRequired(TypedDict):
 
 
 class GetInstanceIntegrationsHealthResponse(_GetInstanceIntegrationsHealthResponseRequired, total=False):
+    duplicate_delivery_paths: list[GetInstanceIntegrationsHealthResponseDuplicateDeliveryPathsItem]
     has_more: bool
     generated_at: int
 
@@ -32707,6 +33086,7 @@ class GetInstanceScopesResponseDataItem(_GetInstanceScopesResponseDataItemRequir
     requires_verified_client: bool
     requires_client_level: Literal['any', 'verified', 'certified']
     owner_exempt: bool
+    optional: bool
     wildcard: bool
 
 
@@ -32731,6 +33111,8 @@ class PutInstanceScopesBodyScopesItem(_PutInstanceScopesBodyScopesItemRequired, 
     requires_client_level: Literal['any', 'verified', 'certified']
     #: The developer who owns a client may request the scope with it on their own account whatever its level.
     owner_exempt: bool
+    #: The consent screen lets the user leave this scope out; an app that asked for it must work without it. Never for openid.
+    optional: bool
 
 
 class PutInstanceScopesBody(TypedDict):
@@ -34294,6 +34676,12 @@ class GetOauthClientsByIdWebhookResponse(TypedDict, total=False):
     enabled_events: list[str]
     active: bool
     available_events: list[str]
+    #: When the webhook was created (epoch ms).
+    created_at: int
+    #: When Atlas last attempted a delivery to it (epoch ms), or null if it never has. A read never returns the signing secret.
+    last_delivery_at: int | None
+    #: Only while a secret rotation overlap is open: when the previous secret stops signing (epoch ms).
+    previous_secret_expires_at: int
     #: The signing secret, returned once when the webhook is created.
     webhook_secret: str
     note: str
@@ -34307,6 +34695,49 @@ class _PutOauthClientsByIdWebhookBodyRequired(TypedDict):
 class PutOauthClientsByIdWebhookBody(_PutOauthClientsByIdWebhookBodyRequired, total=False):
     #: Defaults to all of them.
     enabled_events: list[Literal['user.updated', 'user.deleted', 'grant.revoked', 'user.deletion_scheduled', 'user.deletion_canceled', 'signing_key.staged', 'signing_key.activated']]
+
+
+class PostOauthClientsByIdWebhookRotateSecretBody(TypedDict, total=False):
+    overlap_seconds: int
+
+
+class _PostOauthClientsByIdWebhookRotateSecretResponseRequired(TypedDict):
+    object: Literal['webhook_secret']
+    #: The new signing secret, returned exactly once.
+    webhook_secret: str
+    overlap_seconds: int
+    #: When the previous secret stops signing (epoch ms), or null when it already has.
+    previous_secret_expires_at: int | None
+
+
+class PostOauthClientsByIdWebhookRotateSecretResponse(_PostOauthClientsByIdWebhookRotateSecretResponseRequired, total=False):
+    note: str
+
+
+class PostOauthClientsByIdWebhookTestBody(TypedDict, total=False):
+    #: The Atlas user id, or the sub this client receives for the user.
+    user_id: str
+
+
+class PostOauthClientsByIdWebhookTestResponse(TypedDict, total=False):
+    object: Literal['webhook_test_result']
+    ok: bool
+    delivery_id: str
+    event_id: str
+    event_type: Literal['webhook.test']
+    url: str
+    status: Literal['success', 'failed']
+    #: The HTTP status your endpoint answered with, or null when it never answered.
+    status_code: int | None
+    http_status: int | None
+    #: How long your endpoint took to answer.
+    duration_ms: int | None
+    latency_ms: int | None
+    response_snippet: str | None
+    error: str | None
+    error_kind: str | None
+    signature_header_sent: str | None
+    will_retry: bool
 
 
 class GetOauthDeviceRequestsResponse(TypedDict, total=False):
@@ -35075,6 +35506,51 @@ class PostOrganizationsByIdMembershipImportsResponse(_PostOrganizationsByIdMembe
     #: Rows by outcome: added, updated, skipped, invited.
     results: dict[str, int] | None
     completed_at: int | None
+
+
+class DeleteOrganizationsByIdMembershipsByExternalIdByUserExternalIdResponse(TypedDict):
+    object: Literal['pending_organization_membership']
+    organization_id: str
+    user_external_id: str
+    deleted: Literal[True]
+
+
+class _PutOrganizationsByIdMembershipsByExternalIdByUserExternalIdBodyRequired(TypedDict):
+    role: str
+
+
+class PutOrganizationsByIdMembershipsByExternalIdByUserExternalIdBody(_PutOrganizationsByIdMembershipsByExternalIdByUserExternalIdBodyRequired, total=False):
+    #: Who manages the role (manual, or a directory source of this organization).
+    role_source: str
+    public_metadata: dict[str, Any]
+    #: Backend only.
+    private_metadata: dict[str, Any]
+    #: Permission keys held on top of the role; they join org_permissions.
+    permissions: list[str]
+    allowed_sign_in_methods: list[str] | None
+    #: When the seat ends (ISO 8601 or epoch ms, in the future).
+    expires_at: str | int | None
+
+
+class _PutOrganizationsByIdMembershipsByExternalIdByUserExternalIdResponseRequired(TypedDict):
+    object: Literal['organization_membership', 'pending_organization_membership']
+    #: `active`: the user exists and holds the seat. `pending`: it waits for a user with this external_id.
+    status: Literal['active', 'pending']
+
+
+class PutOrganizationsByIdMembershipsByExternalIdByUserExternalIdResponse(_PutOrganizationsByIdMembershipsByExternalIdByUserExternalIdResponseRequired, total=False):
+    id: str
+    organization_id: str
+    user_id: str
+    role: str
+    role_source: str | None
+    #: The administrator scope (groups, teams, units), or null when organization-wide.
+    scope: dict[str, Any] | None
+    expires_at: int | None
+    #: Epoch ms.
+    created_at: int
+    user_external_id: str
+    unchanged: bool
 
 
 class _GetOrganizationsByIdMembershipsByUserIdResponseRequired(TypedDict):
@@ -36756,18 +37232,25 @@ class GetResourceRoleAssignmentsChangesResponse(TypedDict, total=False):
     next_cursor: str
 
 
-class GetResourceServersByIdRevokedTokensResponseDataItem(TypedDict):
+class _GetResourceServersByIdRevokedTokensResponseDataItemRequired(TypedDict):
+    #: `family`: every access token with this `fid`. `jti`: that one access token. `client`: every token of `client_id` issued at or before `revoked_at` (the
+    kind: Literal['family', 'jti', 'client']
     #: The refresh-token family (the `fid` claim). Null for a single access token.
     family_id: str | None
     #: The `jti` of a single revoked access token. Null for a family.
     jti: str | None
     user_id: str | None
-    #: The OAuth client row id.
+    #: The public client_id (client_…), the same value as the client_id claim and the `oauth_tokens.revoked` event.
     client_id: str | None
     #: refresh_token_reuse, client_revoked, admin_revoked, user_revoked, grant_revoked or logout.
     reason: str
     #: Epoch ms.
     revoked_at: int
+
+
+class GetResourceServersByIdRevokedTokensResponseDataItem(_GetResourceServersByIdRevokedTokensResponseDataItemRequired, total=False):
+    #: The internal OAuth client id (oac_…) the Backend API paths use.
+    oauth_client_id: str | None
 
 
 class GetResourceServersByIdRevokedTokensResponse(TypedDict):

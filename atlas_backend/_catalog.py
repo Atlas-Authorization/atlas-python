@@ -1973,6 +1973,26 @@ class Billing:
     def __init__(self, transport: _SyncTransport) -> None:
         self._t = transport
 
+    def sync_checkout(
+        self,
+        body: cm.PostBillingCheckoutSyncBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostBillingCheckoutSyncResponse:
+        """Read a Stripe Checkout Session back with your own key and record the purchase, for an
+        instance that syncs without a Stripe webhook. The session's reference must name this
+        instance; any other session is a 404. Idempotent. `status` is `synced`, or `pending`
+        when Stripe has not completed the session yet.
+        """
+        return self._t.request(
+            method="POST",
+            path="/v1/billing/checkout/sync",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
     def list_connect_accounts(
         self,
         *,
@@ -2389,6 +2409,27 @@ class Billing:
             idempotency_key=idempotency_key,
         )
 
+    def create_stripe_event(
+        self,
+        body: cm.PostBillingStripeEventsBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostBillingStripeEventsResponse:
+        """Forward a Stripe event from your own webhook endpoint, for an account that cannot add an
+        Atlas endpoint. Post `{ id: "evt_…" }` or the whole event; only the id is read. Atlas
+        fetches the event from Stripe with your own key and processes THAT object, never the
+        posted body, and ignores anything that is not one of this instance's subscriptions. Safe
+        to repeat. `outcome` is `processed` or `ignored`; both are 200.
+        """
+        return self._t.request(
+            method="POST",
+            path="/v1/billing/stripe/events",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
     def extend_trial_subscription(
         self,
         subscription_id: str,
@@ -2409,6 +2450,25 @@ class Billing:
             path=f"/v1/billing/subscriptions/{_enc(subscription_id)}/extend_trial",
             query=_qd({'dry_run': True if dry_run else None}),
             body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    def sync_subscription(
+        self,
+        subscription_id: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.Subscription:
+        """Re-read one subscription from Stripe now, with your own key, and apply what Stripe
+        reports (status, plan, period, cancellation). For an instance that syncs without a
+        Stripe webhook, or to refresh one subscription on demand. A subscription on another
+        account, or not Stripe, is refused.
+        """
+        return self._t.request(
+            method="POST",
+            path=f"/v1/billing/subscriptions/{_enc(subscription_id)}/sync",
+            query=_qd({'dry_run': True if dry_run else None}),
             idempotency_key=idempotency_key,
         )
 
@@ -7326,6 +7386,33 @@ class Instance:
             idempotency_key=idempotency_key,
         )
 
+    def create_hosted_method_filter(
+        self,
+        body: cm.PostInstanceHostedMethodFiltersBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostInstanceHostedMethodFiltersResponse:
+        """Limit a hosted sign-in or sign-up page to some sign-in methods. Send the methods
+        (`password`, `email_code`, `email_link`, `phone_code`, `passkey`, `username` counts as
+        `password`, a family such as `oauth` or `enterprise_sso`, or one provider such as
+        `oauth_google`). The answer carries `allowed_methods` and `allowed_methods_sig`: add
+        both to the page URL (`query` is them ready to append). The page then offers only those
+        methods, and every sign-in or sign-up attempt the page (or a client sending the `token`
+        in `X-Atlas-Allowed-Methods`) starts is bound to the list, and a session is refused with
+        403 SIGN_IN_METHOD_NOT_ALLOWED for any method outside it, whichever way the attempt
+        completes (passkey, a ticket exchanged by your app, a native code). A list that is
+        missing its signature or was edited is refused with 400. It narrows what the instance
+        and the OAuth client already allow; it never adds a method.
+        """
+        return self._t.request(
+            method="POST",
+            path="/v1/instance/hosted_method_filters",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
     def get_impersonation_policy(
         self,
     ) -> cm.GetInstanceImpersonationPolicyResponse:
@@ -7848,15 +7935,17 @@ class Instance:
         allowed scopes to request it. `requires_client_level` (`any`, `verified` or `certified`)
         sets the level a client needs (`requires_verified_client: true` means `verified`; the
         stricter wins); a `certified` client is an approved one the instance has certified
-        (PATCH /v1/oauth_clients/{id} `certified`). `owner_exempt: true` lets the developer who
-        owns a client request the scope with it on their own account whatever the client's
-        level. A name ending `:*` (`listings:*`) is a wildcard entry: it covers every
-        `listings:<anything>` for gating, consent text and released claims, and a client or
-        grant that holds `listings:*` holds each of them. By default the whole list is checked
-        and nothing is written if any entry is bad (422, one problem per field). `?mode=partial`
-        applies the valid entries and answers 200 with `rejected: [{ index, name, errors }]` (a
-        rejected entry leaves the scope of that name as it was). `?too_long=truncate` cuts over-
-        long labels and descriptions instead of refusing them and lists each cut in `warnings`.
+        (PATCH /v1/oauth_clients/{id} `certified`). `optional: true` lets the user untick the
+        scope on the consent screen (the token then carries only the scopes they kept).
+        `owner_exempt: true` lets the developer who owns a client request the scope with it on
+        their own account whatever the client's level. A name ending `:*` (`listings:*`) is a
+        wildcard entry: it covers every `listings:<anything>` for gating, consent text and
+        released claims, and a client or grant that holds `listings:*` holds each of them. By
+        default the whole list is checked and nothing is written if any entry is bad (422, one
+        problem per field). `?mode=partial` applies the valid entries and answers 200 with
+        `rejected: [{ index, name, errors }]` (a rejected entry leaves the scope of that name as
+        it was). `?too_long=truncate` cuts over-long labels and descriptions instead of refusing
+        them and lists each cut in `warnings`.
         """
         return self._t.request(
             method="PUT",
@@ -10164,11 +10253,59 @@ class OauthClients:
         scope, name and picture with profile). enabled_events may also name your own types
         declared with PUT /v1/instance/app_event_types; those reach the client only for users
         who granted the type's required scope. The signing secret is returned once, on create
-        (201). Audited.
+        (201). Every delivery carries a top-level `creator` ({ id }, the user as this client
+        sees them: exactly the `sub` of the tokens issued to it, pairwise or external_id
+        included; null when the event has no acting user). Audited.
         """
         return self._t.request(
             method="PUT",
             path=f"/v1/oauth_clients/{_enc(oauth_client_id)}/webhook",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    def rotate_secret_webhook(
+        self,
+        oauth_client_id: str,
+        body: cm.PostOauthClientsByIdWebhookRotateSecretBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostOauthClientsByIdWebhookRotateSecretResponse:
+        """Rotate the client webhook's signing secret. The new secret is returned exactly once. The
+        previous secret keeps signing for `overlap_seconds` (default 86400 = 24 hours, 0 to
+        604800 = 7 days; 0 stops it now): during the overlap every delivery's signature header
+        carries one entry per secret, the new one first, so a receiver holding either secret
+        verifies it. `previous_secret_expires_at` says when the old one stops (epoch ms), or
+        null. 404 when the client has no webhook. An operator token needs a recent MFA. Audited.
+        """
+        return self._t.request(
+            method="POST",
+            path=f"/v1/oauth_clients/{_enc(oauth_client_id)}/webhook/rotate_secret",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    def test_webhook(
+        self,
+        oauth_client_id: str,
+        body: cm.PostOauthClientsByIdWebhookTestBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PostOauthClientsByIdWebhookTestResponse:
+        """Send ONE signed `webhook.test` delivery to this client's webhook URL (and to nobody
+        else), in the same envelope as a real delivery, and return the attempt: the HTTP status
+        your endpoint answered with, how long it took and the error, if any. With `user_id` (the
+        Atlas user id, or the `sub` this client receives) the delivery's `creator` is that user
+        (404 for an unknown user; no grant is needed); otherwise `creator` is null. Not retried.
+        Audited.
+        """
+        return self._t.request(
+            method="POST",
+            path=f"/v1/oauth_clients/{_enc(oauth_client_id)}/webhook/test",
             query=_qd({'dry_run': True if dry_run else None}),
             body=body,
             idempotency_key=idempotency_key,
@@ -11312,6 +11449,50 @@ class Organizations:
         return self._t.request(
             method="POST",
             path=f"/v1/organizations/{_enc(organization_id)}/membership_imports",
+            query=_qd({'dry_run': True if dry_run else None}),
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    def delete_memberships_by_external_id(
+        self,
+        organization_id: str,
+        user_external_id: str,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.DeleteOrganizationsByIdMembershipsByExternalIdByUserExternalIdResponse:
+        """Cancel a seat that is still waiting for its person. 404 when none is waiting (a seat
+        that was already attached is removed by the user id).
+        """
+        return self._t.request(
+            method="DELETE",
+            path=f"/v1/organizations/{_enc(organization_id)}/memberships/by_external_id/{_enc(user_external_id)}",
+            query=_qd({'dry_run': True if dry_run else None}),
+            idempotency_key=idempotency_key,
+        )
+
+    def set_memberships_by_external_id(
+        self,
+        organization_id: str,
+        user_external_id: str,
+        body: cm.PutOrganizationsByIdMembershipsByExternalIdByUserExternalIdBody,
+        *,
+        dry_run: bool = False,
+        idempotency_key: str | None = None,
+    ) -> cm.PutOrganizationsByIdMembershipsByExternalIdByUserExternalIdResponse:
+        """Seat a person by the id your own system gives them (`external_id`), before they have
+        signed in. Same body as PUT .../memberships/{userId}. When a user with that external_id
+        exists this is that create-or-update (201 when it adds the member, 200 when it changes
+        it, `status: "active"`). When none exists the seat waits: 202 with `status: "pending"`,
+        and it is attached (with `organizationMembership.created`) when a user with that
+        external_id is created, imported or given the id. `user.created` then carries the user's
+        `organization_memberships`. `{id}` is the organization's Atlas id or its own
+        external_id. Repeating the call replaces the waiting seat.
+        """
+        return self._t.request(
+            method="PUT",
+            path=f"/v1/organizations/{_enc(organization_id)}/memberships/by_external_id/{_enc(user_external_id)}",
             query=_qd({'dry_run': True if dry_run else None}),
             body=body,
             idempotency_key=idempotency_key,
@@ -13760,11 +13941,13 @@ class ResourceServers:
         true })`). Each item is a refresh-token family that ended (`family_id`, the `fid` claim
         of every access token minted from it: a refresh token was reused, the client called
         /oauth2/revoke, or an admin, the user or a logout ended the grant) or one access token
-        revoked on its own (`jti`). Reject a token whose `fid` or `jti` is listed. Rows are kept
-        for 48 hours (`retention_seconds`), longer than any access token can live. Page with
-        `after` (the `next_cursor` of the previous page); `server_time` is when the answer was
-        computed: poll again with `since` a little before it. The `oauth_tokens.revoked` webhook
-        carries the same facts for a push.
+        revoked on its own (`jti`), or a whole client (`kind: "client"`: its `client_id`, with
+        `revoked_at` the cut-off: reject any token whose `azp` is that client and whose `iat` is
+        at or before it). Reject a token whose `fid` or `jti` is listed. Rows are kept for 48
+        hours (`retention_seconds`), longer than any access token can live. Page with `after`
+        (the `next_cursor` of the previous page); `server_time` is when the answer was computed:
+        poll again with `since` a little before it. The `oauth_tokens.revoked` webhook carries
+        the same facts for a push.
         """
         return self._t.request(
             method="GET",
